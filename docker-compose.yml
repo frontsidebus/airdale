@@ -1,0 +1,112 @@
+# MERLIN - AI Co-Pilot for MSFS 2024
+# Docker Compose configuration for local services.
+#
+# NOTE: The SimConnect bridge (C#) runs natively on the Windows host
+# because it requires direct access to the SimConnect SDK.
+# The orchestrator connects to it via WebSocket on localhost:8080.
+#
+# Usage:
+#   docker compose up -d              # start all services
+#   docker compose up -d chromadb     # start only ChromaDB
+#   docker compose logs -f whisper    # follow whisper logs
+
+services:
+  # ---------------------------------------------------------------------------
+  # Whisper - Local speech-to-text via HTTP API
+  # Provides an OpenAI-compatible /asr endpoint for transcription.
+  # ---------------------------------------------------------------------------
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    container_name: merlin-whisper
+    ports:
+      - "9000:9000"
+    environment:
+      - ASR_MODEL=${WHISPER_MODEL:-base}
+      - ASR_ENGINE=openai_whisper
+    volumes:
+      - whisper_cache:/root/.cache/whisper
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - merlin
+    # -------------------------------------------------------------------------
+    # GPU acceleration (NVIDIA). Uncomment the block below if you have an
+    # NVIDIA GPU and the nvidia-container-toolkit installed.
+    # See: https://docs.docker.com/compose/gpu-support/
+    # -------------------------------------------------------------------------
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # ---------------------------------------------------------------------------
+  # ChromaDB - Vector store for RAG (Retrieval-Augmented Generation)
+  # Stores aircraft manuals, checklists, and procedures for context retrieval.
+  # ---------------------------------------------------------------------------
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: merlin-chromadb
+    ports:
+      - "8000:8000"
+    environment:
+      - ANONYMIZED_TELEMETRY=false
+      - IS_PERSISTENT=TRUE
+    volumes:
+      - ./data/chroma_db:/chroma/chroma
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - merlin
+
+  # ---------------------------------------------------------------------------
+  # Orchestrator - MERLIN's brain
+  # Coordinates between Claude, SimConnect bridge, Whisper, and ChromaDB.
+  # ---------------------------------------------------------------------------
+  orchestrator:
+    build:
+      context: ./orchestrator
+      dockerfile: Dockerfile
+    container_name: merlin-orchestrator
+    ports:
+      - "8081:8081"
+    depends_on:
+      whisper:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - WHISPER_URL=http://whisper:9000
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8000
+      # The SimConnect bridge runs on the Windows host. In Docker Desktop for
+      # Windows, host.docker.internal resolves to the host machine.
+      - SIMCONNECT_BRIDGE_URL=ws://host.docker.internal:8080
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks:
+      - merlin
+
+volumes:
+  whisper_cache:
+    driver: local
+
+networks:
+  merlin:
+    name: merlin
+    driver: bridge

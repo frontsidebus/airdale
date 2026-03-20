@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# C# / .NET
+bin/
+obj/
+*.user
+*.suo
+*.vs/
+*.DotSettings.user
+packages/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Data
+*.db
+*.sqlite
+chroma_data/
+lance_data/
+vector_store/
+
+# Audio
+*.wav
+*.mp3
+*.ogg
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log

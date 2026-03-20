@@ -1,0 +1,388 @@
+# =============================================================================
+# MERLIN Checklist — Generic Single-Engine Piston
+# =============================================================================
+# Applicable to: Cessna 172, Cessna 152, DA40, PA-28, SR22, and similar
+# single-engine piston aircraft in Microsoft Flight Simulator 2024.
+#
+# Each item includes:
+#   - item:    The checklist action
+#   - setting: The expected position/value
+#   - remark:  Optional MERLIN commentary (dry test-pilot humor)
+# =============================================================================
+
+aircraft_class: single_engine_piston
+version: "1.0"
+author: MERLIN
+
+phases:
+
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: "Preflight Inspection"
+    items:
+      - item: "Weather briefing"
+        setting: "Obtained"
+        remark: "Check the weather, Captain. Even the Navy checks weather — usually after the catapult shot, but still."
+      - item: "NOTAMs"
+        setting: "Reviewed"
+        remark: "Nothing ruins a flight like a closed runway. Trust me."
+      - item: "Fuel quantity"
+        setting: "Sufficient for flight + reserves"
+        remark: "The only time you have too much fuel is when you're on fire."
+      - item: "Oil level"
+        setting: "Within limits"
+        remark: "If the engine's got oil on the outside, it probably doesn't have enough on the inside."
+      - item: "Flight controls"
+        setting: "Free and correct"
+        remark: "Wiggle the stick. If the ailerons move the wrong way, today is not your day."
+      - item: "Avionics master"
+        setting: "OFF"
+        remark: ~
+      - item: "Electrical equipment"
+        setting: "OFF"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  before_start:
+    name: "Before Engine Start"
+    items:
+      - item: "Preflight inspection"
+        setting: "Complete"
+        remark: ~
+      - item: "Seats, belts, harnesses"
+        setting: "Adjusted and locked"
+        remark: "Strap in, Captain. It's going to be a beautiful day — or at least an educational one."
+      - item: "Brakes"
+        setting: "Test and SET"
+        remark: ~
+      - item: "Fuel selector"
+        setting: "BOTH"
+        remark: "Both tanks, Captain. We're not playing favourites today."
+      - item: "Fuel shutoff valve"
+        setting: "ON (push full in)"
+        remark: ~
+      - item: "Avionics master"
+        setting: "OFF"
+        remark: "Radios stay off until after start. We don't want to fry the avionics — the replacement budget is imaginary."
+      - item: "Circuit breakers"
+        setting: "Check IN"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  engine_start:
+    name: "Engine Start"
+    items:
+      - item: "Mixture"
+        setting: "RICH (full forward)"
+        remark: "Full rich. We're generous with fuel on the ground."
+      - item: "Carburetor heat"
+        setting: "COLD"
+        remark: ~
+      - item: "Prime"
+        setting: "As required (2-6 strokes)"
+        remark: "A few pumps of the primer. Think of it as giving the engine a gentle wake-up call."
+      - item: "Throttle"
+        setting: "Open 1/4 inch"
+        remark: "Just a crack. We're starting an engine, not drag racing."
+      - item: "Master switch"
+        setting: "ON"
+        remark: ~
+      - item: "Beacon light"
+        setting: "ON"
+        remark: "Beacon on — lets the ramp crew know the propeller is about to become unfriendly."
+      - item: "Propeller area"
+        setting: "CLEAR"
+        remark: "Shout 'clear!' like you mean it. Even in the sim, it's good practice."
+      - item: "Ignition"
+        setting: "START"
+        remark: ~
+      - item: "Oil pressure"
+        setting: "Check GREEN within 30 seconds"
+        remark: "If you don't see oil pressure in thirty seconds, that engine is just an expensive fan."
+      - item: "Avionics master"
+        setting: "ON"
+        remark: ~
+      - item: "Radios"
+        setting: "Set as required"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  before_taxi:
+    name: "Before Taxi"
+    items:
+      - item: "Altimeter"
+        setting: "Set to field elevation / current QNH"
+        remark: "Get this right. An incorrect altimeter has ended more flights than bad weather."
+      - item: "Heading indicator"
+        setting: "Aligned with magnetic compass"
+        remark: ~
+      - item: "Flight instruments"
+        setting: "Check and set"
+        remark: ~
+      - item: "Navigation equipment"
+        setting: "Set for departure"
+        remark: ~
+      - item: "Taxi light"
+        setting: "ON"
+        remark: ~
+      - item: "Brakes"
+        setting: "Release, check for movement"
+        remark: "And away we go. Gently, Captain."
+      - item: "Flight controls"
+        setting: "Position for wind"
+        remark: "Wind correction on the ground. It matters more than you think."
+
+  # ---------------------------------------------------------------------------
+  before_takeoff:
+    name: "Before Takeoff (Run-Up)"
+    items:
+      - item: "Brakes"
+        setting: "SET"
+        remark: ~
+      - item: "Throttle"
+        setting: "1800 RPM"
+        remark: ~
+      - item: "Magneto check"
+        setting: "RPM drop ≤ 150 RPM each, ≤ 50 RPM differential"
+        remark: "Left, right, both. If you get more than 150 RPM drop, that magneto is calling in sick."
+      - item: "Carburetor heat"
+        setting: "Check ON (RPM drop), then OFF"
+        remark: ~
+      - item: "Engine gauges"
+        setting: "Check GREEN"
+        remark: ~
+      - item: "Throttle"
+        setting: "Idle — check smooth operation, then 1000 RPM"
+        remark: ~
+      - item: "Flight controls"
+        setting: "Free and correct"
+        remark: ~
+      - item: "Mixture"
+        setting: "RICH (or as required for field elevation)"
+        remark: ~
+      - item: "Fuel selector"
+        setting: "BOTH"
+        remark: ~
+      - item: "Flaps"
+        setting: "Set for takeoff (0° or 10°)"
+        remark: ~
+      - item: "Trim"
+        setting: "Set for takeoff"
+        remark: "Trim saves arms, Captain."
+      - item: "Transponder"
+        setting: "ALT"
+        remark: ~
+      - item: "Lights"
+        setting: "Landing, strobe, nav — all ON"
+        remark: "Light up like a Christmas tree. See and be seen."
+      - item: "Door and windows"
+        setting: "Closed and latched"
+        remark: "Door popping open on climb-out: zero fun, ten out of ten do not recommend."
+
+  # ---------------------------------------------------------------------------
+  takeoff:
+    name: "Takeoff"
+    items:
+      - item: "Throttle"
+        setting: "FULL open smoothly"
+        remark: "Full power, Captain. Commit to the takeoff."
+      - item: "Engine instruments"
+        setting: "Monitor — all in green"
+        remark: ~
+      - item: "Airspeed"
+        setting: "Alive — check increasing"
+        remark: "Airspeed alive. Beautiful."
+      - item: "Rotate"
+        setting: "At Vr (~55 KIAS typical)"
+        remark: "Rotate. Nice and smooth — we're not pulling G on a carrier today."
+      - item: "Positive rate"
+        setting: "Confirm climb on VSI"
+        remark: "Positive rate, Captain."
+      - item: "Brakes"
+        setting: "Apply momentarily to stop wheel spin"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  climb:
+    name: "Climb"
+    items:
+      - item: "Airspeed"
+        setting: "Vy (best rate) ~74 KIAS typical"
+        remark: "Vy for best rate. Unless you enjoy long climbs and awkward silence."
+      - item: "Throttle"
+        setting: "FULL (below 3000 ft AGL)"
+        remark: ~
+      - item: "Mixture"
+        setting: "RICH below 3000 ft, lean as required above"
+        remark: "Lean the mixture as you climb. The engine will thank you. Quietly."
+      - item: "Flaps"
+        setting: "UP (above safe altitude)"
+        remark: ~
+      - item: "Engine gauges"
+        setting: "Monitor — temps and pressures"
+        remark: ~
+      - item: "Landing light"
+        setting: "OFF above 10,000 ft (or as desired)"
+        remark: ~
+      - item: "Fuel selector"
+        setting: "BOTH"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  cruise:
+    name: "Cruise"
+    items:
+      - item: "Throttle"
+        setting: "Set cruise power (typically 2200-2400 RPM)"
+        remark: "Settle in, Captain. This is the part where the Navy would start telling war stories."
+      - item: "Mixture"
+        setting: "Lean for best economy or best power"
+        remark: "Lean until EGT peaks, then enrichen slightly. Or use the fuel flow gauge if you're feeling civilised."
+      - item: "Trim"
+        setting: "Adjust for level flight"
+        remark: "A well-trimmed aircraft is the sign of a competent pilot. No pressure."
+      - item: "Engine gauges"
+        setting: "Monitor periodically"
+        remark: ~
+      - item: "Fuel quantity"
+        setting: "Monitor, calculate remaining endurance"
+        remark: "Keep an eye on the fuel. The gauges in these things are about as accurate as a weather forecast."
+      - item: "Heading / navigation"
+        setting: "Verify on course"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  descent:
+    name: "Descent"
+    items:
+      - item: "ATIS / AWOS"
+        setting: "Obtain current weather at destination"
+        remark: "Get the weather, Captain. Know what the field is doing before it surprises you."
+      - item: "Altimeter"
+        setting: "Set to destination QNH"
+        remark: ~
+      - item: "Mixture"
+        setting: "Enrichen as you descend"
+        remark: "Push the mixture forward as you come down. The engine doesn't like running lean at lower altitudes."
+      - item: "Carburetor heat"
+        setting: "ON (apply before reducing power)"
+        remark: "Carb heat on before you pull the power back. Carb ice is sneaky."
+      - item: "Throttle"
+        setting: "Reduce for descent (~500 FPM)"
+        remark: ~
+      - item: "Fuel selector"
+        setting: "BOTH"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  approach:
+    name: "Approach"
+    items:
+      - item: "Landing light"
+        setting: "ON"
+        remark: ~
+      - item: "Airspeed"
+        setting: "Reduce to approach speed (~90 KIAS)"
+        remark: "Slow down, Captain. We're landing, not buzzing the tower."
+      - item: "Flaps"
+        setting: "First notch (10°)"
+        remark: ~
+      - item: "Traffic pattern"
+        setting: "Enter at pattern altitude (typically 1000 AGL)"
+        remark: "Standard left traffic unless the chart says otherwise."
+      - item: "Radio calls"
+        setting: "Make position reports"
+        remark: ~
+      - item: "Mixture"
+        setting: "RICH"
+        remark: "Full rich for the approach. We want all the power available if we need to go around."
+
+  # ---------------------------------------------------------------------------
+  before_landing:
+    name: "Before Landing (Final)"
+    items:
+      - item: "Airspeed"
+        setting: "Vref (~65 KIAS typical)"
+        remark: "Sixty-five knots on final. Stable approach, Captain."
+      - item: "Flaps"
+        setting: "FULL (30° or as required)"
+        remark: ~
+      - item: "Mixture"
+        setting: "RICH"
+        remark: ~
+      - item: "Carburetor heat"
+        setting: "As required"
+        remark: ~
+      - item: "Fuel selector"
+        setting: "BOTH"
+        remark: ~
+      - item: "Trim"
+        setting: "Adjust for final approach speed"
+        remark: ~
+      - item: "Landing clearance"
+        setting: "Obtained (or final call at uncontrolled field)"
+        remark: ~
+      - item: "Autopilot"
+        setting: "OFF"
+        remark: "Hand-fly the landing, Captain. This is the fun part."
+
+  # ---------------------------------------------------------------------------
+  after_landing:
+    name: "After Landing"
+    items:
+      - item: "Throttle"
+        setting: "IDLE"
+        remark: "Nice landing. Or at least, we're on the ground. That counts."
+      - item: "Carburetor heat"
+        setting: "OFF"
+        remark: ~
+      - item: "Flaps"
+        setting: "UP"
+        remark: ~
+      - item: "Transponder"
+        setting: "STANDBY or OFF"
+        remark: ~
+      - item: "Landing light"
+        setting: "OFF"
+        remark: ~
+      - item: "Taxi light"
+        setting: "ON"
+        remark: ~
+      - item: "Strobe lights"
+        setting: "OFF"
+        remark: ~
+      - item: "Trim"
+        setting: "Set for takeoff (in case of go-around habit)"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  shutdown:
+    name: "Engine Shutdown"
+    items:
+      - item: "Brakes"
+        setting: "SET"
+        remark: ~
+      - item: "Electrical equipment"
+        setting: "OFF"
+        remark: ~
+      - item: "Avionics master"
+        setting: "OFF"
+        remark: ~
+      - item: "Throttle"
+        setting: "IDLE"
+        remark: ~
+      - item: "Mixture"
+        setting: "IDLE CUT-OFF (full lean)"
+        remark: "Starve the engine. It's the gentlest way to shut it down — like putting it to sleep."
+      - item: "Ignition"
+        setting: "OFF (after engine stops)"
+        remark: ~
+      - item: "Master switch"
+        setting: "OFF"
+        remark: ~
+      - item: "Fuel selector"
+        setting: "OFF"
+        remark: ~
+      - item: "Control lock"
+        setting: "INSTALL"
+        remark: "Lock the controls. Secure the aircraft. Another flight in the logbook, Captain. Well done."

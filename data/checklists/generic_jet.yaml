@@ -1,0 +1,475 @@
+# =============================================================================
+# MERLIN Checklist — Generic Jet / Turbofan
+# =============================================================================
+# Applicable to: Boeing 747-8, 787; Airbus A320neo; Cessna Citation CJ4;
+# and similar jet aircraft in Microsoft Flight Simulator 2024.
+#
+# Each item includes:
+#   - item:    The checklist action
+#   - setting: The expected position/value
+#   - remark:  Optional MERLIN commentary (dry test-pilot humor)
+# =============================================================================
+
+aircraft_class: jet_turbofan
+version: "1.0"
+author: MERLIN
+
+phases:
+
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: "Preflight / Safety"
+    items:
+      - item: "Weather briefing"
+        setting: "Obtained (METAR, TAF, SIGMETs)"
+        remark: "Check the weather, Captain. Jets don't care about drizzle, but they have strong opinions about windshear."
+      - item: "NOTAMs"
+        setting: "Reviewed for departure, en-route, and arrival"
+        remark: ~
+      - item: "Performance calculations"
+        setting: "Completed (V-speeds, FLEX/TOGA thrust if applicable)"
+        remark: "V-speeds computed and set. Math is the foundation of survival up here."
+      - item: "Flight plan"
+        setting: "Filed and loaded into FMS"
+        remark: ~
+      - item: "Fuel quantity"
+        setting: "Verified — matches dispatch release"
+        remark: "Check the fuel. Then check it again. The only thing worse than not enough fuel is discovering it at FL370."
+      - item: "Doors"
+        setting: "All closed and indicated"
+        remark: ~
+      - item: "Emergency equipment"
+        setting: "Checked"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  before_start:
+    name: "Before Engine Start"
+    items:
+      - item: "Parking brake"
+        setting: "SET"
+        remark: ~
+      - item: "Seats, belts, harnesses"
+        setting: "Adjusted and locked"
+        remark: "Strap in tight, Captain. This machine doesn't forgive loose objects — or loose procedures."
+      - item: "Battery / APU"
+        setting: "APU running, APU GEN on bus"
+        remark: "APU online. Our own little power plant back there."
+      - item: "Fuel pumps"
+        setting: "ON as required"
+        remark: ~
+      - item: "Hydraulic pumps"
+        setting: "Check pressure — all systems"
+        remark: ~
+      - item: "Flight instruments"
+        setting: "Powered and checked"
+        remark: ~
+      - item: "FMS / CDU"
+        setting: "Route loaded, performance page complete"
+        remark: "FMS programmed. If the box agrees with your plan, you might be doing it right."
+      - item: "Trim"
+        setting: "Set for takeoff (per loadsheet)"
+        remark: ~
+      - item: "Flight controls"
+        setting: "Free and correct — full deflection check"
+        remark: "Full deflection each axis. In a jet, a stuck flight control is a very bad day."
+      - item: "Transponder"
+        setting: "Set squawk code, STANDBY"
+        remark: ~
+      - item: "Beacon"
+        setting: "ON"
+        remark: "Beacon on. Ground crew, stay clear — we're about to wake up the engines."
+      - item: "ATC clearance"
+        setting: "Received and read back"
+        remark: ~
+      - item: "Pushback"
+        setting: "Request when ready"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  engine_start:
+    name: "Engine Start"
+    items:
+      - item: "Engine area"
+        setting: "CLEAR"
+        remark: "Clear left, clear right. Jet intakes are not forgiving."
+      - item: "Engine start sequence"
+        setting: "Initiate (typically Engine 2 first, then Engine 1)"
+        remark: "Starting number two. The old Navy rule: start the one furthest from the terminal so you don't blast the jetway."
+      - item: "N2 rotation"
+        setting: "Confirm increasing"
+        remark: ~
+      - item: "Fuel lever / cutoff"
+        setting: "IDLE detent (introduce fuel)"
+        remark: ~
+      - item: "EGT / ITT"
+        setting: "Monitor — must stay below limits"
+        remark: "Watch the temps. A hot start in a jet is expensive in ways that make accountants weep."
+      - item: "N1, N2"
+        setting: "Stabilised at idle"
+        remark: ~
+      - item: "Oil pressure"
+        setting: "Check in range"
+        remark: ~
+      - item: "Generator"
+        setting: "ON — verify on bus"
+        remark: ~
+      - item: "Repeat for remaining engine(s)"
+        setting: "Same procedure"
+        remark: ~
+      - item: "APU"
+        setting: "OFF (after engines stable on generators)"
+        remark: "APU off. The engines are earning their keep now."
+      - item: "Anti-ice"
+        setting: "As required"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  before_taxi:
+    name: "Before Taxi"
+    items:
+      - item: "Flaps"
+        setting: "Set for takeoff (per performance calculation)"
+        remark: ~
+      - item: "Flight directors"
+        setting: "ON"
+        remark: ~
+      - item: "Autobrake"
+        setting: "RTO"
+        remark: "Rejected takeoff autobrake armed. Because stopping is just as important as going."
+      - item: "Speedbrake"
+        setting: "Check armed / retracted"
+        remark: ~
+      - item: "Altimeters"
+        setting: "Set and cross-checked"
+        remark: ~
+      - item: "Radios"
+        setting: "Tuned — ground control frequency"
+        remark: ~
+      - item: "Taxi clearance"
+        setting: "Obtained"
+        remark: ~
+      - item: "Taxi light / nose light"
+        setting: "ON"
+        remark: ~
+      - item: "Parking brake"
+        setting: "RELEASE"
+        remark: ~
+      - item: "Brakes"
+        setting: "Check during initial taxi roll"
+        remark: "Tap the brakes early. Better to find out they're weak now than at 140 knots."
+      - item: "Instruments"
+        setting: "Cross-check heading, attitude during taxi"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  before_takeoff:
+    name: "Before Takeoff"
+    items:
+      - item: "Takeoff briefing"
+        setting: "Complete"
+        remark: "Brief the takeoff: V-speeds, departure procedure, engine failure plan. Every time, Captain."
+      - item: "V-speeds"
+        setting: "V1, Vr, V2 — confirmed and set"
+        remark: ~
+      - item: "Flaps"
+        setting: "Verify takeoff position"
+        remark: ~
+      - item: "Trim"
+        setting: "Verify takeoff setting"
+        remark: ~
+      - item: "Flight controls"
+        setting: "Free and correct"
+        remark: ~
+      - item: "Engines"
+        setting: "All parameters normal"
+        remark: ~
+      - item: "Transponder"
+        setting: "TA/RA"
+        remark: ~
+      - item: "Lights"
+        setting: "Strobes, landing lights, runway turnoff lights — ON"
+        remark: "All lights on. We want to be the brightest thing on this runway."
+      - item: "Weather radar"
+        setting: "ON (if equipped)"
+        remark: ~
+      - item: "Packs / bleeds"
+        setting: "Set for takeoff (per SOP)"
+        remark: ~
+      - item: "Takeoff clearance"
+        setting: "Received"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  takeoff:
+    name: "Takeoff"
+    items:
+      - item: "Brakes"
+        setting: "RELEASE, align on centreline"
+        remark: "Centreline, Captain. It's there for a reason."
+      - item: "Thrust"
+        setting: "Advance to TOGA / FLEX (per calculation)"
+        remark: "Set takeoff thrust. Here we go."
+      - item: "Engine instruments"
+        setting: "Verify all in green — symmetric thrust"
+        remark: ~
+      - item: "80 knots"
+        setting: "Cross-check — 'Eighty knots'"
+        remark: "Eighty knots. Engines look good."
+      - item: "V1"
+        setting: "Committed — 'V1'"
+        remark: "V1. We're going, Captain."
+      - item: "Vr"
+        setting: "Rotate — 'Rotate'"
+        remark: "Rotate."
+      - item: "V2"
+        setting: "Maintain V2 minimum on initial climb"
+        remark: ~
+      - item: "Positive rate"
+        setting: "Confirm — 'Positive rate'"
+        remark: "Positive rate."
+      - item: "Gear"
+        setting: "UP"
+        remark: "Gear up."
+      - item: "Autopilot"
+        setting: "Engage when established in climb (per SOP)"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  climb:
+    name: "Climb"
+    items:
+      - item: "Thrust"
+        setting: "Set climb thrust"
+        remark: ~
+      - item: "Airspeed"
+        setting: "Accelerate to climb speed (typically 250 KIAS below FL100)"
+        remark: "Two-fifty below ten thousand. It's the law — even in the sim."
+      - item: "Flaps"
+        setting: "Retract on schedule"
+        remark: ~
+      - item: "Landing gear"
+        setting: "Confirm UP and locked"
+        remark: ~
+      - item: "Altimeter"
+        setting: "Set STD (29.92 / 1013) passing transition altitude"
+        remark: "Standard pressure set passing the transition altitude."
+      - item: "Acceleration altitude"
+        setting: "Comply with SID / noise abatement"
+        remark: ~
+      - item: "Lights"
+        setting: "Landing lights OFF above 10,000 ft"
+        remark: ~
+      - item: "Seatbelt sign"
+        setting: "As required"
+        remark: ~
+      - item: "Pressurisation"
+        setting: "Check — cabin rate normal"
+        remark: "Cabin climbing with us. Pressurisation looks good."
+
+  # ---------------------------------------------------------------------------
+  cruise:
+    name: "Cruise"
+    items:
+      - item: "Thrust"
+        setting: "Set cruise thrust / economy mode"
+        remark: "Settle in, Captain. This is the part of the flight where I tell you about the time I accidentally buzzed the Admiral's yacht. Allegedly."
+      - item: "Altitude"
+        setting: "Level at assigned FL"
+        remark: ~
+      - item: "Fuel"
+        setting: "Cross-check fuel burn vs. plan"
+        remark: "Fuel check. We're burning what we planned. The accountants will be thrilled."
+      - item: "Engine instruments"
+        setting: "Periodic scan"
+        remark: ~
+      - item: "Pressurisation"
+        setting: "Monitor cabin altitude"
+        remark: ~
+      - item: "Navigation"
+        setting: "Verify FMS tracking"
+        remark: "FMS tracking the route. If it starts freelancing, we have a chat."
+      - item: "Weather radar"
+        setting: "Monitor ahead"
+        remark: "Keep an eye on the weather ahead. Thunderstorms: zero stars, would not recommend."
+      - item: "Step climb"
+        setting: "Request higher altitude as fuel burns off"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  descent:
+    name: "Descent Preparation"
+    items:
+      - item: "ATIS / arrival weather"
+        setting: "Obtain for destination"
+        remark: "Get the ATIS, Captain. Know what's waiting for us down there."
+      - item: "Approach briefing"
+        setting: "Complete — approach type, minima, missed approach"
+        remark: "Brief the approach. Runway, approach type, DA or MDA, missed approach procedure. Every. Time."
+      - item: "FMS / CDU"
+        setting: "STAR and approach loaded and verified"
+        remark: ~
+      - item: "Descent speed"
+        setting: "Set in FMS"
+        remark: ~
+      - item: "Altimeter"
+        setting: "Set local QNH passing transition level"
+        remark: "QNH set. Welcome back to the real world of local pressure."
+      - item: "Autobrake"
+        setting: "Set as required for landing"
+        remark: ~
+      - item: "Landing elevation"
+        setting: "Set in pressurisation panel"
+        remark: ~
+      - item: "Anti-ice"
+        setting: "As required"
+        remark: ~
+      - item: "Seatbelt sign"
+        setting: "ON"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  approach:
+    name: "Approach"
+    items:
+      - item: "Landing lights"
+        setting: "ON below 10,000 ft"
+        remark: ~
+      - item: "Airspeed"
+        setting: "Reduce — comply with ATC / STAR speed constraints"
+        remark: "Slow down. We're a jet, not a missile — slight distinction."
+      - item: "Flaps"
+        setting: "Extend on schedule"
+        remark: ~
+      - item: "Landing gear"
+        setting: "DOWN — three green"
+        remark: "Three green. Music to my ears."
+      - item: "Flaps"
+        setting: "Landing configuration"
+        remark: ~
+      - item: "Speedbrake"
+        setting: "ARM"
+        remark: ~
+      - item: "Autopilot / autothrottle"
+        setting: "As required per approach type (keep engaged for ILS CAT II/III)"
+        remark: ~
+      - item: "Localiser / glideslope"
+        setting: "Captured and tracking"
+        remark: "On the localiser, on the glide. Looking good, Captain."
+      - item: "Go-around altitude"
+        setting: "Set in MCP / FCU"
+        remark: ~
+
+  # ---------------------------------------------------------------------------
+  before_landing:
+    name: "Before Landing (Final)"
+    items:
+      - item: "Landing gear"
+        setting: "DOWN — three green confirmed"
+        remark: "Three green, confirmed. I checked twice because I like my landing gear conversations boring."
+      - item: "Flaps"
+        setting: "Full — landing configuration"
+        remark: ~
+      - item: "Airspeed"
+        setting: "Vref + corrections (wind additive)"
+        remark: "Vref plus your wind additive. Stable approach, Captain."
+      - item: "Autobrake"
+        setting: "Armed — verify"
+        remark: ~
+      - item: "Speedbrake"
+        setting: "Armed — verify"
+        remark: ~
+      - item: "Stable approach"
+        setting: "Verify: on speed, on path, configured — by 1000 ft AGL"
+        remark: "Stable by a thousand feet. If it doesn't look right, go around. There's no shame in it — only professionalism."
+      - item: "Landing clearance"
+        setting: "Obtained"
+        remark: ~
+      - item: "1000 ft callout"
+        setting: "Cross-check: stable, configured"
+        remark: "One thousand feet. Stable approach."
+      - item: "500 ft callout"
+        setting: "Final stable check"
+        remark: "Five hundred."
+      - item: "Minimums"
+        setting: "Runway in sight — 'Landing' or 'Go around'"
+        remark: "Minimums. Runway in sight."
+
+  # ---------------------------------------------------------------------------
+  after_landing:
+    name: "After Landing"
+    items:
+      - item: "Spoilers / speedbrake"
+        setting: "Verify deployed"
+        remark: ~
+      - item: "Reverse thrust"
+        setting: "As required, cancel by 60 knots"
+        remark: ~
+      - item: "Brakes"
+        setting: "As required — clear of high-speed exit"
+        remark: ~
+      - item: "Flaps"
+        setting: "UP (or taxi setting)"
+        remark: ~
+      - item: "Speedbrake"
+        setting: "RETRACT"
+        remark: ~
+      - item: "Transponder"
+        setting: "STANDBY"
+        remark: ~
+      - item: "Strobes"
+        setting: "OFF"
+        remark: ~
+      - item: "Landing lights"
+        setting: "OFF"
+        remark: ~
+      - item: "Taxi light"
+        setting: "ON"
+        remark: ~
+      - item: "APU"
+        setting: "START (for gate arrival)"
+        remark: ~
+      - item: "Radar"
+        setting: "OFF"
+        remark: ~
+      - item: "ATC"
+        setting: "Contact ground for taxi to gate"
+        remark: "Another one on the ground, Captain. Well done."
+
+  # ---------------------------------------------------------------------------
+  shutdown:
+    name: "Engine Shutdown / Parking"
+    items:
+      - item: "Parking brake"
+        setting: "SET"
+        remark: ~
+      - item: "Electrical"
+        setting: "Transfer to APU / ground power"
+        remark: ~
+      - item: "Thrust levers"
+        setting: "IDLE"
+        remark: ~
+      - item: "Fuel levers / cutoff"
+        setting: "CUTOFF"
+        remark: "Engines spooling down. Another safe arrival."
+      - item: "Seatbelt sign"
+        setting: "OFF"
+        remark: ~
+      - item: "Anti-ice"
+        setting: "OFF"
+        remark: ~
+      - item: "Hydraulic pumps"
+        setting: "OFF"
+        remark: ~
+      - item: "Fuel pumps"
+        setting: "OFF"
+        remark: ~
+      - item: "Beacon"
+        setting: "OFF"
+        remark: ~
+      - item: "APU"
+        setting: "Shutdown when ground power connected (or leave running)"
+        remark: ~
+      - item: "Parking brake"
+        setting: "Verify SET — chocks in place"
+        remark: "Chocks in, brakes set, engines cold. That's a wrap, Captain. Same time tomorrow?"

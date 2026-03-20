@@ -1,0 +1,31 @@
+# MERLIN - Development overrides
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Or set COMPOSE_FILE in your shell:
+#   export COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml
+#   docker compose up
+
+services:
+  whisper:
+    environment:
+      # Use the tiny model for faster startup during development
+      - ASR_MODEL=tiny
+
+  chromadb:
+    environment:
+      - LOG_LEVEL=debug
+
+  orchestrator:
+    build:
+      context: ./orchestrator
+      dockerfile: Dockerfile
+    # Mount source code for hot-reload during development
+    volumes:
+      - ./orchestrator/orchestrator:/app/orchestrator:ro
+    environment:
+      - LOG_LEVEL=DEBUG
+      - PYTHONDONTWRITEBYTECODE=1
+      # Enables auto-reload if the entrypoint supports it
+      - MERLIN_DEV_MODE=true
