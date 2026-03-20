@@ -18,9 +18,14 @@
         - Steam:         C:\MSFS2024SDK\SimConnect SDK\lib\managed\Microsoft.FlightSimulator.SimConnect.dll
     -->
     <Reference Include="Microsoft.FlightSimulator.SimConnect">
-      <HintPath>C:\MSFS SDK\SimConnect SDK\lib\managed\Microsoft.FlightSimulator.SimConnect.dll</HintPath>
+      <HintPath>C:\MSFS 2024 SDK\SimConnect SDK\lib\managed\Microsoft.FlightSimulator.SimConnect.dll</HintPath>
       <Private>true</Private>
     </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="SimConnectBridge.Tests\**" />
+    <None Remove="SimConnectBridge.Tests\**" />
   </ItemGroup>
 
   <ItemGroup>
