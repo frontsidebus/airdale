@@ -28,8 +28,14 @@ packages/
 
 # Environment
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+
+# Secrets / Certificates
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Data
 *.db

@@ -158,7 +158,7 @@ class VoiceInput:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 "https://api.openai.com/v1/audio/transcriptions",
-                headers={"Authorization": "Bearer ${OPENAI_API_KEY}"},
+                headers={"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY', '')}"},
                 files={"file": ("audio.wav", wav_bytes, "audio/wav")},
                 data={"model": "whisper-1"},
             )
