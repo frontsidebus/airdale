@@ -248,9 +248,9 @@ async def text_to_speech(request: TTSRequest):
                     "text": _sanitize_for_tts(request.text),
                     "model_id": settings.elevenlabs_model_id,
                     "voice_settings": {
-                        "stability": 0.5,
-                        "similarity_boost": 0.75,
-                        "style": 0.3,
+                        "stability": 0.75,
+                        "similarity_boost": 0.80,
+                        "style": 0.15,
                     },
                 },
             )
@@ -511,7 +511,17 @@ async def _stream_response(
 
     try:
         assert claude_client is not None
-        async for chunk in claude_client.chat(user_text):
+        # Pass current sim state so Claude has telemetry context
+        current_sim_state = None
+        if _sim_connected and sim_client is not None:
+            current_sim_state = sim_client.state
+            if phase_detector:
+                detected = phase_detector.update(current_sim_state)
+                current_sim_state.flight_phase = detected
+
+        async for chunk in claude_client.chat(
+            user_text, sim_state=current_sim_state
+        ):
             if interrupt.is_set():
                 logger.info("Response interrupted mid-stream")
                 break
@@ -723,9 +733,9 @@ async def _send_tts_chunk(ws: WebSocket, text: str) -> None:
                 "text": clean_text,
                 "model_id": settings.elevenlabs_model_id,
                 "voice_settings": {
-                    "stability": 0.5,
-                    "similarity_boost": 0.75,
-                    "style": 0.3,
+                    "stability": 0.75,
+                    "similarity_boost": 0.80,
+                    "style": 0.15,
                 },
             },
         )

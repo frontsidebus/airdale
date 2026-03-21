@@ -556,10 +556,9 @@
   function bargeIn() {
     if (!state.isPlayingAudio && state.audioQueue.length === 0) return;
 
-    // Stop current audio
+    // Stop current Web Audio source
     if (state.currentAudio) {
-      state.currentAudio.pause();
-      state.currentAudio.src = '';
+      try { state.currentAudio.stop(); } catch (_) { /* may already be stopped */ }
       state.currentAudio = null;
     }
 
@@ -1018,8 +1017,68 @@
   });
 
   // ═══════════════════════════════════════════════════════
-  //  AUDIO PLAYBACK
+  //  AUDIO PLAYBACK (with volume normalization)
   // ═══════════════════════════════════════════════════════
+
+  // Shared AudioContext for decoding and normalized playback.
+  // Audio chain: source → clipGain (normalization) → compressor → masterGain (volume slider) → dest
+  let _playbackCtx = null;
+  let _playbackGain = null;
+  let _compressor = null;
+  const TARGET_RMS = 0.15; // Target RMS level for normalization
+  const SILENCE_THRESHOLD = 0.01; // Samples below this are silence
+
+  function getPlaybackContext() {
+    if (!_playbackCtx || _playbackCtx.state === 'closed') {
+      _playbackCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+      // Dynamics compressor to even out volume spikes within each clip
+      _compressor = _playbackCtx.createDynamicsCompressor();
+      _compressor.threshold.value = -20;  // dB — compress above this
+      _compressor.knee.value = 12;        // dB — soft knee for natural sound
+      _compressor.ratio.value = 6;        // 6:1 compression — aggressive for speech
+      _compressor.attack.value = 0.003;   // 3ms — fast attack catches transients
+      _compressor.release.value = 0.15;   // 150ms — smooth release
+
+      // Master volume controlled by slider
+      _playbackGain = _playbackCtx.createGain();
+      _playbackGain.gain.value = state.ttsVolume;
+
+      _compressor.connect(_playbackGain);
+      _playbackGain.connect(_playbackCtx.destination);
+    }
+    if (_playbackCtx.state === 'suspended') {
+      _playbackCtx.resume();
+    }
+    return _playbackCtx;
+  }
+
+  function measureActiveRMS(audioBuffer) {
+    // Measure RMS of only the non-silent portions of the audio.
+    // This avoids silence padding in MP3s from skewing the measurement.
+    let sumSq = 0;
+    let count = 0;
+    for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
+      const data = audioBuffer.getChannelData(ch);
+      for (let i = 0; i < data.length; i++) {
+        const abs = Math.abs(data[i]);
+        if (abs > SILENCE_THRESHOLD) {
+          sumSq += data[i] * data[i];
+          count++;
+        }
+      }
+    }
+    // If almost entirely silence, use full-buffer RMS as fallback
+    if (count < audioBuffer.length * 0.1) {
+      const data = audioBuffer.getChannelData(0);
+      sumSq = 0;
+      count = data.length;
+      for (let i = 0; i < data.length; i++) {
+        sumSq += data[i] * data[i];
+      }
+    }
+    return Math.sqrt(sumSq / (count || 1));
+  }
 
   function queueAudioBlob(blob) {
     state.audioQueue.push(blob);
@@ -1051,36 +1110,41 @@
     setVoiceMode('speaking');
 
     const blob = state.audioQueue.shift();
-    const url = URL.createObjectURL(blob);
-
-    // Use a fresh Audio element per clip to chain smoothly
-    const audio = new Audio(url);
-    audio.volume = state.ttsVolume;
-    state.currentAudio = audio;
-
-    // Pre-buffer: start loading immediately
-    audio.preload = 'auto';
-
-    let advanced = false;
-    function advance() {
-      if (advanced) return;
-      advanced = true;
-      URL.revokeObjectURL(url);
-      // Chain to next clip immediately for gapless playback
-      playNextAudio();
-    }
-
-    audio.addEventListener('ended', advance, { once: true });
-    audio.addEventListener('error', () => {
-      console.warn('Audio element error');
-      advance();
-    }, { once: true });
 
     try {
-      await audio.play();
+      const ctx = getPlaybackContext();
+      const arrayBuf = await blob.arrayBuffer();
+      const audioBuffer = await ctx.decodeAudioData(arrayBuf);
+
+      // Measure RMS of active (non-silent) audio and compute gain
+      const rms = measureActiveRMS(audioBuffer);
+      const gain = rms > 0.005 ? TARGET_RMS / rms : 1.0;
+      // Tight clamp: 0.7x-2.5x — keeps volume within a narrow band
+      const clampedGain = Math.min(Math.max(gain, 0.7), 2.5);
+
+      // Update the master volume from slider
+      _playbackGain.gain.value = state.ttsVolume;
+
+      // Per-clip gain for normalization → feeds into compressor → master gain
+      const clipGain = ctx.createGain();
+      clipGain.gain.value = clampedGain;
+      clipGain.connect(_compressor);
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(clipGain);
+
+      state.currentAudio = source;
+
+      source.addEventListener('ended', () => {
+        clipGain.disconnect();
+        playNextAudio();
+      }, { once: true });
+
+      source.start(0);
     } catch (err) {
-      console.warn('Audio playback error:', err);
-      advance();
+      console.warn('Audio decode/playback error:', err);
+      playNextAudio();
     }
   }
 
@@ -1089,9 +1153,9 @@
   if (dom.ttsVolume) {
     dom.ttsVolume.addEventListener('input', (e) => {
       state.ttsVolume = parseFloat(e.target.value);
-      // Apply to currently playing audio immediately
-      if (state.currentAudio) {
-        state.currentAudio.volume = state.ttsVolume;
+      // Apply to master gain node immediately
+      if (_playbackGain) {
+        _playbackGain.gain.value = state.ttsVolume;
       }
     });
   }
