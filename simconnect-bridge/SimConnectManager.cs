@@ -22,11 +22,13 @@ public sealed class SimConnectManager : IDisposable
 
     private Timer? _highFreqTimer;
     private Timer? _lowFreqTimer;
-    private Timer? _messageTimer;
+    private Thread? _messagePumpThread;
+    private EventWaitHandle? _simConnectEvent;
     private bool _connected;
     private bool _disposed;
     private bool _autoReconnect = true;
     private CancellationTokenSource? _reconnectCts;
+    private volatile bool _pumpRunning;
 
     /// <summary>
     /// The current simulation state, updated on each data receive callback.
@@ -65,7 +67,12 @@ public sealed class SimConnectManager : IDisposable
     {
         try
         {
-            _simConnect = new SimConnect(_appName, IntPtr.Zero, 0, null, 0);
+            // Use an event handle for the message pump instead of a window handle.
+            // This is required for console apps (no Win32 message loop). SimConnect
+            // signals this event when data is available, and our pump thread calls
+            // ReceiveMessage() in response.
+            _simConnectEvent = new EventWaitHandle(false, EventResetMode.AutoReset);
+            _simConnect = new SimConnect(_appName, IntPtr.Zero, 0, _simConnectEvent, 0);
 
             _simConnect.OnRecvOpen += OnRecvOpen;
             _simConnect.OnRecvQuit += OnRecvQuit;
@@ -74,12 +81,16 @@ public sealed class SimConnectManager : IDisposable
 
             RegisterDataDefinitions();
 
-            // Start a timer to pump SimConnect messages (required for out-of-process)
-            _messageTimer = new Timer(
-                _ => ReceiveMessages(),
-                null,
-                TimeSpan.Zero,
-                TimeSpan.FromMilliseconds(10));
+            // Start a dedicated thread that waits on the event handle and pumps
+            // messages. This replaces the timer-based approach which raced with
+            // the SimConnect event model and caused 0x80004005 errors.
+            _pumpRunning = true;
+            _messagePumpThread = new Thread(MessagePumpLoop)
+            {
+                Name = "SimConnect-MessagePump",
+                IsBackground = true,
+            };
+            _messagePumpThread.Start();
 
             _connected = true;
             CurrentState.Connected = true;
@@ -322,16 +333,53 @@ public sealed class SimConnectManager : IDisposable
 
     private void StartPolling()
     {
-        int highFreqMs = _highFrequencyHz > 0 ? 1000 / _highFrequencyHz : 33;
-        int lowFreqMs = _lowFrequencyHz > 0 ? 1000 / _lowFrequencyHz : 1000;
+        // Use subscription-based data delivery instead of timer-based polling.
+        // This tells SimConnect to push data automatically, which properly
+        // signals the event handle for the message pump thread.
+        try
+        {
+            // High-frequency: position/attitude/speeds — every sim frame
+            _simConnect?.RequestDataOnSimObject(
+                DataRequestId.HighFrequency,
+                DataDefinitionId.HighFrequency,
+                SimConnect.SIMCONNECT_OBJECT_ID_USER,
+                SIMCONNECT_PERIOD.SIM_FRAME,
+                SIMCONNECT_DATA_REQUEST_FLAG.CHANGED,
+                0, 0, 0);
 
-        _highFreqTimer = new Timer(_ => RequestHighFrequencyData(), null,
-            TimeSpan.Zero, TimeSpan.FromMilliseconds(highFreqMs));
+            // Low-frequency: autopilot/radios/fuel/surfaces/environment — every second
+            _simConnect?.RequestDataOnSimObject(
+                DataRequestId.LowFrequency,
+                DataDefinitionId.LowFrequency,
+                SimConnect.SIMCONNECT_OBJECT_ID_USER,
+                SIMCONNECT_PERIOD.SECOND,
+                SIMCONNECT_DATA_REQUEST_FLAG.CHANGED,
+                0, 0, 0);
 
-        _lowFreqTimer = new Timer(_ => RequestLowFrequencyData(), null,
-            TimeSpan.Zero, TimeSpan.FromMilliseconds(lowFreqMs));
+            // Engine data — every second
+            _simConnect?.RequestDataOnSimObject(
+                DataRequestId.EngineData,
+                DataDefinitionId.EngineData,
+                SimConnect.SIMCONNECT_OBJECT_ID_USER,
+                SIMCONNECT_PERIOD.SECOND,
+                SIMCONNECT_DATA_REQUEST_FLAG.CHANGED,
+                0, 0, 0);
 
-        Log("INFO", $"Polling started: high-freq={_highFrequencyHz}Hz, low-freq={_lowFrequencyHz}Hz");
+            // Aircraft title — once (doesn't change mid-flight)
+            _simConnect?.RequestDataOnSimObject(
+                DataRequestId.AircraftTitle,
+                DataDefinitionId.AircraftTitle,
+                SimConnect.SIMCONNECT_OBJECT_ID_USER,
+                SIMCONNECT_PERIOD.ONCE,
+                SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT,
+                0, 0, 0);
+
+            Log("INFO", "Data subscriptions registered (HF=SIM_FRAME, LF=SECOND)");
+        }
+        catch (COMException ex)
+        {
+            Log("WARN", $"Failed to register data subscriptions: 0x{ex.HResult:X8}");
+        }
     }
 
     private void StopTimers()
@@ -340,81 +388,69 @@ public sealed class SimConnectManager : IDisposable
         _highFreqTimer = null;
         _lowFreqTimer?.Dispose();
         _lowFreqTimer = null;
-        _messageTimer?.Dispose();
-        _messageTimer = null;
-    }
 
-    private void RequestHighFrequencyData()
-    {
-        try
-        {
-            _simConnect?.RequestDataOnSimObject(
-                DataRequestId.HighFrequency,
-                DataDefinitionId.HighFrequency,
-                SimConnect.SIMCONNECT_OBJECT_ID_USER,
-                SIMCONNECT_PERIOD.ONCE,
-                SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT,
-                0, 0, 0);
-        }
-        catch (COMException ex)
-        {
-            Log("WARN", $"HF request failed: 0x{ex.HResult:X8}");
-        }
-    }
-
-    private void RequestLowFrequencyData()
-    {
-        SafeRequest(DataRequestId.LowFrequency, DataDefinitionId.LowFrequency, "LF");
-        SafeRequest(DataRequestId.EngineData, DataDefinitionId.EngineData, "Engine");
-        SafeRequest(DataRequestId.AircraftTitle, DataDefinitionId.AircraftTitle, "Title");
-    }
-
-    private void SafeRequest(DataRequestId reqId, DataDefinitionId defId, string label)
-    {
-        try
-        {
-            _simConnect?.RequestDataOnSimObject(
-                reqId, defId,
-                SimConnect.SIMCONNECT_OBJECT_ID_USER,
-                SIMCONNECT_PERIOD.ONCE,
-                SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT,
-                0, 0, 0);
-        }
-        catch (COMException ex)
-        {
-            Log("WARN", $"{label} request failed: 0x{ex.HResult:X8}");
-        }
+        // Stop the event-driven message pump
+        _pumpRunning = false;
+        _simConnectEvent?.Set(); // unblock the WaitOne
+        _messagePumpThread?.Join(2000);
+        _messagePumpThread = null;
+        _simConnectEvent?.Dispose();
+        _simConnectEvent = null;
     }
 
     // -----------------------------------------------------------------------
-    //  Message pump (required for out-of-process SimConnect)
+    //  Message pump (event-driven, runs on dedicated thread)
     // -----------------------------------------------------------------------
 
     private int _consecutiveErrors;
 
-    private void ReceiveMessages()
+    /// <summary>
+    /// Event-driven message pump loop. Blocks on the SimConnect event handle
+    /// and calls ReceiveMessage() when data is available. This replaces the
+    /// old timer-based approach which caused 0x80004005 errors because it
+    /// polled without synchronization.
+    /// </summary>
+    private void MessagePumpLoop()
     {
-        try
+        Log("DEBUG", "Message pump thread started");
+        while (_pumpRunning && _simConnectEvent != null)
         {
-            _simConnect?.ReceiveMessage();
-            _consecutiveErrors = 0; // Reset on success
-        }
-        catch (COMException ex)
-        {
-            _consecutiveErrors++;
-            if (_consecutiveErrors <= 3)
+            try
             {
-                Log("WARN", $"COM error in message pump: 0x{ex.HResult:X8} (attempt {_consecutiveErrors})");
+                // Block until SimConnect signals data is ready (or timeout)
+                bool signaled = _simConnectEvent.WaitOne(100);
+                if (!_pumpRunning) break;
+                if (!signaled) continue;
+
+                _simConnect?.ReceiveMessage();
+                _consecutiveErrors = 0;
             }
-            else if (_consecutiveErrors > 50)
+            catch (COMException ex)
             {
-                // Sustained failures means genuine disconnection
-                Log("ERROR",
-                    $"Sustained COM errors ({_consecutiveErrors}), treating as disconnect. " +
-                    $"HResult=0x{ex.HResult:X8}");
-                HandleDisconnect();
+                _consecutiveErrors++;
+                if (_consecutiveErrors <= 3)
+                {
+                    Log("WARN", $"COM error in message pump: 0x{ex.HResult:X8} (attempt {_consecutiveErrors})");
+                }
+                else if (_consecutiveErrors > 200)
+                {
+                    // 200 errors at ~100ms each = ~20 seconds of sustained failure.
+                    // This is a real disconnection, not just a slow sim load.
+                    Log("ERROR",
+                        $"Sustained COM errors ({_consecutiveErrors}), treating as disconnect. " +
+                        $"HResult=0x{ex.HResult:X8}");
+                    HandleDisconnect();
+                    break;
+                }
+            }
+            catch (Exception ex) when (!_pumpRunning)
+            {
+                // Expected during shutdown
+                Log("DEBUG", $"Pump exiting: {ex.Message}");
+                break;
             }
         }
+        Log("DEBUG", "Message pump thread stopped");
     }
 
     // -----------------------------------------------------------------------
@@ -424,7 +460,16 @@ public sealed class SimConnectManager : IDisposable
     private void OnRecvOpen(SimConnect sender, SIMCONNECT_RECV_OPEN data)
     {
         Log("INFO", $"Recv Open: {data.szApplicationName}");
-        StartPolling();
+        // Delay polling start — MSFS needs a moment after the connection opens
+        // before it can service data requests. Requesting too early causes
+        // sustained 0x80004005 (E_FAIL) errors.
+        Log("INFO", "Waiting 3s for sim to be ready before polling...");
+        _consecutiveErrors = 0;
+        var delayTimer = new Timer(_ =>
+        {
+            Log("INFO", "Starting data polling");
+            StartPolling();
+        }, null, 3000, Timeout.Infinite);
     }
 
     private void OnRecvQuit(SimConnect sender, SIMCONNECT_RECV data)

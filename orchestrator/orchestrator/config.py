@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     )
 
     # --- ElevenLabs TTS ------------------------------------------------------
+    elevenlabs_model_id: str = Field(
+        default="eleven_multilingual_v2",
+        description="ElevenLabs model ID for TTS synthesis",
+    )
     elevenlabs_voice_id: str = Field(
         default="",
         description="ElevenLabs voice ID for TTS output",

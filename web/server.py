@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -244,8 +245,8 @@ async def text_to_speech(request: TTSRequest):
                     "Accept": "audio/mpeg",
                 },
                 json={
-                    "text": request.text,
-                    "model_id": "eleven_turbo_v2_5",
+                    "text": _sanitize_for_tts(request.text),
+                    "model_id": settings.elevenlabs_model_id,
                     "voice_settings": {
                         "stability": 0.5,
                         "similarity_boost": 0.75,
@@ -528,6 +529,7 @@ async def _stream_response(
         # Flush remaining text to TTS (if not interrupted)
         if tts_enabled and sentence_buffer.strip() and not interrupt.is_set():
             await tts_queue.put(sentence_buffer.strip())
+            sentence_buffer = ""
 
     except asyncio.CancelledError:
         logger.info("Response task cancelled")
@@ -536,11 +538,14 @@ async def _stream_response(
         logger.exception("Claude chat error")
         await ws.send_json({"type": "error", "content": f"Chat error: {exc}"})
     finally:
-        # Always clean up TTS task
+        # Flush any remaining text before sending poison pill
+        if tts_task and sentence_buffer.strip() and not interrupt.is_set():
+            await tts_queue.put(sentence_buffer.strip())
+        # Signal TTS sender to finish
         if tts_task:
             await tts_queue.put(None)
             try:
-                await asyncio.wait_for(tts_task, timeout=2.0)
+                await asyncio.wait_for(tts_task, timeout=10.0)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 tts_task.cancel()
 
@@ -556,14 +561,135 @@ async def _stream_response(
 # Helpers
 # ---------------------------------------------------------------------------
 
+_MULTI_SPACE_RE = re.compile(r"[ \t]{2,}")
+
+
+def _sanitize_for_tts(text: str) -> str:
+    """Strip markdown, special characters, and convert shorthand for clean TTS.
+
+    Converts LLM output into plain speakable text so ElevenLabs doesn't
+    try to pronounce asterisks, bullets, dashes, or formatting tokens.
+    """
+    # --- Markdown removal (order matters) ---
+
+    # Code blocks (``` ... ```) → just the content
+    text = re.sub(r"```[^\n]*\n(.*?)```", r"\1", text, flags=re.DOTALL)
+
+    # Inline code `text` → just text
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+
+    # Markdown links [text](url) → just the link text
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+
+    # Bold+italic ***text*** or ___text___
+    text = re.sub(r"\*{3}(.+?)\*{3}", r"\1", text)
+    text = re.sub(r"_{3}(.+?)_{3}", r"\1", text)
+
+    # Bold **text** or __text__
+    text = re.sub(r"\*{2}(.+?)\*{2}", r"\1", text)
+    text = re.sub(r"_{2}(.+?)_{2}", r"\1", text)
+
+    # Italic *text* or _text_ (but not mid-word underscores like pre_flight)
+    text = re.sub(r"(?<!\w)\*(.+?)\*(?!\w)", r"\1", text)
+    text = re.sub(r"(?<!\w)_(.+?)_(?!\w)", r"\1", text)
+
+    # Strikethrough ~~text~~
+    text = re.sub(r"~~(.+?)~~", r"\1", text)
+
+    # Headings: ### text → text
+    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+
+    # Blockquotes: > text → text
+    text = re.sub(r"^>\s*", "", text, flags=re.MULTILINE)
+
+    # Horizontal rules (---, ***, ___) → pause
+    text = re.sub(r"^[-*_]{3,}\s*$", ".", text, flags=re.MULTILINE)
+
+    # Bullet points (-, *, •) at line start → natural pause
+    text = re.sub(r"^\s*[-*•]\s+", ". ", text, flags=re.MULTILINE)
+
+    # Numbered lists: 1. or 1) → natural pause
+    text = re.sub(r"^\s*\d+[.)]\s+", ". ", text, flags=re.MULTILINE)
+
+    # --- Special character replacement ---
+
+    # Any remaining stray asterisks (not caught by patterns above)
+    text = text.replace("*", "")
+
+    # Dashes and hyphens
+    text = text.replace("—", ", ")   # em dash
+    text = text.replace("–", " to ")  # en dash
+    # Leave regular hyphens in compound words (pre-flight, cross-check)
+
+    # Other symbols
+    text = text.replace("…", "...")
+    text = text.replace("°", " degrees")
+    text = text.replace("±", " plus or minus ")
+    text = text.replace("&", " and ")
+    text = text.replace("|", ", ")
+    text = text.replace("~", "approximately ")
+
+    # Slash: preserve in frequencies like 121.7/118.3, expand otherwise
+    text = re.sub(r"(\d)\s*/\s*(\d)", r"\1 slash \2", text)
+    text = re.sub(r"(?<!\d)/(?!\d)", " ", text)
+
+    # --- Aviation abbreviation expansion ---
+
+    text = re.sub(r"\bft\b", "feet", text)
+    text = re.sub(r"\bkts?\b", "knots", text)
+    text = re.sub(r"\bfpm\b", "feet per minute", text)
+    text = re.sub(r"\bnm\b", "nautical miles", text)
+    text = re.sub(r"\bFL(\d+)\b", r"flight level \1", text)
+    text = re.sub(
+        r"\bRWY\s*(\d+[LRC]?)\b", r"runway \1", text, flags=re.IGNORECASE
+    )
+    text = re.sub(r"\bHDG\b", "heading", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bALT\b", "altitude", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bIAS\b", "indicated airspeed", text)
+    text = re.sub(r"\bVS\b", "vertical speed", text)
+    text = re.sub(r"\bAP\b", "autopilot", text)
+    text = re.sub(r"\binHg\b", "inches of mercury", text)
+
+    # --- Whitespace cleanup ---
+
+    text = _MULTI_SPACE_RE.sub(" ", text)
+    # Collapse multiple newlines into a sentence break
+    text = re.sub(r"\n+", ". ", text)
+    # Clean up repeated periods/commas from list conversions
+    text = re.sub(r"[.,]{2,}", ".", text)
+    text = re.sub(r"\.\s*,", ".", text)
+
+    return text.strip()
+
+
 def _split_at_sentence(text: str) -> tuple[str, str]:
-    """Split text at the last sentence boundary. Returns (complete, remaining)."""
+    """Split text at a natural speech boundary. Returns (complete, remaining).
+
+    Looks for sentence-ending punctuation first. If the buffer is getting long
+    (>120 chars) without a sentence break, falls back to splitting at commas,
+    semicolons, or colons to keep TTS chunks flowing.
+    """
+    # First try: sentence-ending punctuation (.!?) followed by space or end
     for i in range(len(text) - 1, -1, -1):
-        if text[i] in ".!?\n" and (
-            i + 1 >= len(text) or text[i + 1] == " " or text[i + 1] == "\n"
+        if text[i] in ".!?" and (
+            i + 1 >= len(text) or text[i + 1] in " \n"
         ):
             return text[: i + 1].strip(), text[i + 1 :].lstrip()
-    return "", text  # No sentence boundary found yet
+
+    # Fallback for long buffers: split at clause boundaries (, ; :)
+    if len(text) > 120:
+        for i in range(len(text) - 1, -1, -1):
+            if text[i] in ",;:" and i + 1 < len(text) and text[i + 1] == " ":
+                return text[: i + 1].strip(), text[i + 1 :].lstrip()
+
+    # Force-split very long buffers with no punctuation at all
+    if len(text) > 200:
+        # Split at last space
+        last_space = text.rfind(" ", 0, 180)
+        if last_space > 0:
+            return text[:last_space].strip(), text[last_space:].lstrip()
+
+    return "", text  # No boundary found yet — keep buffering
 
 
 # Shared httpx client for TTS (avoid creating per-request)
@@ -579,6 +705,11 @@ async def _get_tts_client() -> httpx.AsyncClient:
 
 async def _send_tts_chunk(ws: WebSocket, text: str) -> None:
     """Synthesize a sentence and send the audio back over WebSocket."""
+    # Clean markdown/special chars so TTS doesn't read formatting tokens
+    clean_text = _sanitize_for_tts(text)
+    if not clean_text:
+        return
+
     try:
         client = await _get_tts_client()
         resp = await client.post(
@@ -589,8 +720,8 @@ async def _send_tts_chunk(ws: WebSocket, text: str) -> None:
                 "Accept": "audio/mpeg",
             },
             json={
-                "text": text,
-                "model_id": "eleven_turbo_v2_5",
+                "text": clean_text,
+                "model_id": settings.elevenlabs_model_id,
                 "voice_settings": {
                     "stability": 0.5,
                     "similarity_boost": 0.75,
@@ -622,12 +753,18 @@ async def _transcribe_with_confidence(
                     "encode": "true",
                     "task": "transcribe",
                     "language": "en",
-                    "output": "verbose_json",
+                    "output": "json",
                     "initial_prompt": AVIATION_PROMPT,
                 },
             )
             resp.raise_for_status()
-            data = resp.json()
+            # Whisper may return plain text instead of JSON for some inputs
+            try:
+                data = resp.json()
+            except Exception:
+                text = resp.text.strip()
+                logger.warning("Whisper returned plain text instead of JSON: %s", text[:80])
+                return text, 0.5
             text = data.get("text", "").strip()
 
             # Calculate confidence from segment avg_logprob

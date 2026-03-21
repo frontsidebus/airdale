@@ -258,7 +258,64 @@
     dom.telemetryContent.appendChild(frag);
   }
 
-  function updateTelemetryValues(data) {
+  function flattenTelemetry(msg) {
+    // The server sends: { type: "telemetry", connected: bool, data: { ... } }
+    // where data contains the raw bridge JSON with nested objects.
+    // Flatten it into the display keys expected by TELEM_SECTIONS.
+    const d = msg.data || msg;
+    if (!d || typeof d !== 'object') return null;
+
+    const pos = d.position || {};
+    const spd = d.speeds || {};
+    const att = d.attitude || {};
+    const eng = d.engines || {};
+    const ap  = d.autopilot || {};
+    const env = d.environment || {};
+    const fuel = d.fuel || {};
+    const surf = d.surfaces || {};
+
+    // Get first engine data
+    const e1 = (eng.engines && eng.engines[0]) || {};
+
+    const flat = {};
+    flat.aircraft_type = d.aircraft || '---';
+    flat.flight_phase  = d.flight_phase || '---';
+
+    flat.latitude  = pos.latitude  != null ? pos.latitude.toFixed(4) + '°' : '---';
+    flat.longitude = pos.longitude != null ? pos.longitude.toFixed(4) + '°' : '---';
+    flat.altitude  = pos.altitude_msl != null ? Math.round(pos.altitude_msl) + ' ft' : '---';
+    flat.agl       = pos.altitude_agl != null ? Math.round(pos.altitude_agl) + ' ft' : '---';
+
+    flat.ias     = spd.indicated_airspeed != null ? Math.round(spd.indicated_airspeed) + ' kt' : '---';
+    flat.tas     = spd.true_airspeed != null ? Math.round(spd.true_airspeed) + ' kt' : '---';
+    flat.gs      = spd.ground_speed != null ? Math.round(spd.ground_speed) + ' kt' : '---';
+    flat.vs      = spd.vertical_speed != null ? Math.round(spd.vertical_speed) + ' fpm' : '---';
+    flat.heading = att.heading_magnetic != null ? Math.round(att.heading_magnetic) + '°' : '---';
+
+    flat.rpm       = e1.rpm != null ? Math.round(e1.rpm) : '---';
+    flat.manifold  = e1.manifold_pressure != null ? e1.manifold_pressure.toFixed(1) + ' inHg' : '---';
+    flat.fuel_flow = e1.fuel_flow_gph != null ? e1.fuel_flow_gph.toFixed(1) + ' gph' : '---';
+    flat.oil_temp  = e1.oil_temp != null ? Math.round(e1.oil_temp) + '°' : '---';
+
+    flat.ap_status = ap.master ? 'ENGAGED' : 'OFF';
+    flat.ap_hdg    = ap.heading != null ? Math.round(ap.heading) + '°' : '---';
+    flat.ap_alt    = ap.altitude != null ? Math.round(ap.altitude) + ' ft' : '---';
+    flat.ap_vs     = ap.vertical_speed != null ? Math.round(ap.vertical_speed) + ' fpm' : '---';
+
+    flat.wind        = env.wind_speed_kts != null ? Math.round(env.wind_direction) + '°/' + Math.round(env.wind_speed_kts) + 'kt' : '---';
+    flat.visibility  = env.visibility_sm != null ? env.visibility_sm.toFixed(1) + ' sm' : '---';
+    flat.temperature = env.temperature_c != null ? Math.round(env.temperature_c) + '°C' : '---';
+    flat.qnh         = env.barometer_inhg != null ? env.barometer_inhg.toFixed(2) + ' inHg' : '---';
+
+    flat.fuel_total = fuel.total_gallons != null ? fuel.total_gallons.toFixed(1) + ' gal' : '---';
+
+    return flat;
+  }
+
+  function updateTelemetryValues(msg) {
+    const data = flattenTelemetry(msg);
+    if (!data) return;
+
     // Use rAF to coalesce rapid telemetry updates and avoid layout thrash
     state.pendingTelemetryData = { ...state.pendingTelemetryData, ...data };
     if (!state.telemetryRafPending) {
