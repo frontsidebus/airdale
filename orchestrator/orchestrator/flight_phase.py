@@ -70,31 +70,34 @@ class FlightPhaseDetector:
 
         # On the ground
         if on_ground:
+            # After landing, stay LANDED until speed drops to taxi
+            if self._current_phase in (FlightPhase.LANDING, FlightPhase.LANDED):
+                if gs < t.taxi_ground_speed and not has_power:
+                    return FlightPhase.PREFLIGHT
+                return FlightPhase.LANDED
             if gs < t.taxi_ground_speed:
                 if not has_power and self._current_phase == FlightPhase.PREFLIGHT:
                     return FlightPhase.PREFLIGHT
-                if self._current_phase in (FlightPhase.LANDING, FlightPhase.LANDED):
-                    return FlightPhase.LANDED
                 return FlightPhase.PREFLIGHT if not has_power else FlightPhase.TAXI
             if gs >= t.takeoff_speed:
                 return FlightPhase.TAKEOFF
             return FlightPhase.TAXI
 
-        # Airborne
+        # Airborne — check climb first (handles go-arounds from approach)
+        if vs >= t.climb_vs:
+            return FlightPhase.CLIMB
+
         if agl < t.landing_agl and gear and vs < 0:
             return FlightPhase.LANDING
 
         if agl < t.approach_agl and gear:
-            if vs < t.descent_vs:
+            if vs <= t.descent_vs:
                 return FlightPhase.APPROACH
             if flaps > 0:
                 return FlightPhase.APPROACH
             return FlightPhase.DESCENT
 
-        if vs > t.climb_vs:
-            return FlightPhase.CLIMB
-
-        if vs < t.descent_vs:
+        if vs <= t.descent_vs:
             return FlightPhase.DESCENT
 
         if abs(vs) <= t.cruise_vs_band:

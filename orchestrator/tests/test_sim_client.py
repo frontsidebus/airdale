@@ -185,10 +185,10 @@ class TestSimConnectClient:
         message = json.dumps(sample_bridge_broadcast)
         mock_ws = AsyncMock()
 
-        async def fake_aiter(self):
+        async def fake_aiter():
             yield message
 
-        mock_ws.__aiter__ = fake_aiter.__get__(mock_ws)
+        mock_ws.__aiter__ = lambda self: fake_aiter()
         client._ws = mock_ws
 
         await client._listen_loop()
@@ -203,11 +203,11 @@ class TestSimConnectClient:
         callback = AsyncMock()
         client.subscribe(callback)
 
-        async def fake_aiter(self):
+        async def fake_aiter():
             yield "not valid json {{{{"
 
         mock_ws = AsyncMock()
-        mock_ws.__aiter__ = fake_aiter.__get__(mock_ws)
+        mock_ws.__aiter__ = lambda self: fake_aiter()
         client._ws = mock_ws
 
         await client._listen_loop()
@@ -220,11 +220,11 @@ class TestSimConnectClient:
         callback = AsyncMock()
         client.subscribe(callback)
 
-        async def fake_aiter(self):
+        async def fake_aiter():
             yield json.dumps({"type": "state_response", "message": "OK"})
 
         mock_ws = AsyncMock()
-        mock_ws.__aiter__ = fake_aiter.__get__(mock_ws)
+        mock_ws.__aiter__ = lambda self: fake_aiter()
         client._ws = mock_ws
 
         await client._listen_loop()
@@ -240,11 +240,11 @@ class TestSimConnectClient:
 
         message = json.dumps(sample_bridge_broadcast)
 
-        async def fake_aiter(self):
+        async def fake_aiter():
             yield message
 
         mock_ws = AsyncMock()
-        mock_ws.__aiter__ = fake_aiter.__get__(mock_ws)
+        mock_ws.__aiter__ = lambda self: fake_aiter()
         client._ws = mock_ws
 
         await client._listen_loop()
@@ -260,11 +260,11 @@ class TestSimConnectClient:
 
         message = json.dumps(sample_bridge_broadcast)
 
-        async def fake_aiter(self):
+        async def fake_aiter():
             yield message
 
         mock_ws = AsyncMock()
-        mock_ws.__aiter__ = fake_aiter.__get__(mock_ws)
+        mock_ws.__aiter__ = lambda self: fake_aiter()
         client._ws = mock_ws
 
         await client._listen_loop()

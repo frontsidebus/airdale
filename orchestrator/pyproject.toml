@@ -37,6 +37,9 @@ test = [
 [project.scripts]
 merlin = "orchestrator.main:run"
 
+[tool.hatch.build.targets.wheel]
+packages = ["orchestrator"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import sys
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,17 +22,11 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-# ---------------------------------------------------------------------------
-# Path setup — make the orchestrator package importable
-# ---------------------------------------------------------------------------
-_PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_PROJECT_ROOT))
-
-from orchestrator.orchestrator.claude_client import ClaudeClient  # noqa: E402
-from orchestrator.orchestrator.config import load_settings  # noqa: E402
-from orchestrator.orchestrator.context_store import ContextStore  # noqa: E402
-from orchestrator.orchestrator.flight_phase import FlightPhaseDetector  # noqa: E402
-from orchestrator.orchestrator.sim_client import SimConnectClient, SimState  # noqa: E402
+from orchestrator.claude_client import ClaudeClient  # noqa: E402
+from orchestrator.config import load_settings  # noqa: E402
+from orchestrator.context_store import ContextStore  # noqa: E402
+from orchestrator.flight_phase import FlightPhaseDetector  # noqa: E402
+from orchestrator.sim_client import SimConnectClient, SimState  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Logging

@@ -63,11 +63,7 @@ services:
       - ./data/chroma_db:/chroma/chroma
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+      disable: true
     networks:
       - merlin
 
@@ -86,13 +82,12 @@ services:
       whisper:
         condition: service_healthy
       chromadb:
-        condition: service_healthy
+        condition: service_started
     env_file:
       - .env
     environment:
       - WHISPER_URL=http://whisper:9000
-      - CHROMADB_HOST=chromadb
-      - CHROMADB_PORT=8000
+      - CHROMADB_URL=http://chromadb:8000
       # The SimConnect bridge runs on the Windows host. In Docker Desktop for
       # Windows, host.docker.internal resolves to the host machine.
       - SIMCONNECT_BRIDGE_URL=ws://host.docker.internal:8080

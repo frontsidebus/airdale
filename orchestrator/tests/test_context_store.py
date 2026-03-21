@@ -85,12 +85,13 @@ class TestDocumentIngestion:
 
     @pytest.mark.asyncio
     async def test_ingest_creates_chunks_and_upserts(self, mock_chromadb_collection: MagicMock) -> None:
-        with patch("orchestrator.context_store.chromadb.PersistentClient") as mock_client_cls:
+        with patch("orchestrator.context_store.chromadb.HttpClient") as mock_client_cls:
             mock_client = MagicMock()
+            mock_client.heartbeat.return_value = 1
             mock_client.get_or_create_collection.return_value = mock_chromadb_collection
             mock_client_cls.return_value = mock_client
 
-            store = ContextStore(persist_path="/tmp/test_db")
+            store = ContextStore(chromadb_url="http://localhost:8000")
 
             with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
                 f.write("A" * 250)
@@ -105,12 +106,13 @@ class TestDocumentIngestion:
 
     @pytest.mark.asyncio
     async def test_ingest_with_metadata(self, mock_chromadb_collection: MagicMock) -> None:
-        with patch("orchestrator.context_store.chromadb.PersistentClient") as mock_client_cls:
+        with patch("orchestrator.context_store.chromadb.HttpClient") as mock_client_cls:
             mock_client = MagicMock()
+            mock_client.heartbeat.return_value = 1
             mock_client.get_or_create_collection.return_value = mock_chromadb_collection
             mock_client_cls.return_value = mock_client
 
-            store = ContextStore(persist_path="/tmp/test_db")
+            store = ContextStore(chromadb_url="http://localhost:8000")
 
             with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
                 f.write("Test content here")
@@ -128,12 +130,13 @@ class TestDocumentIngestion:
 
     @pytest.mark.asyncio
     async def test_ingest_empty_file_returns_zero(self, mock_chromadb_collection: MagicMock) -> None:
-        with patch("orchestrator.context_store.chromadb.PersistentClient") as mock_client_cls:
+        with patch("orchestrator.context_store.chromadb.HttpClient") as mock_client_cls:
             mock_client = MagicMock()
+            mock_client.heartbeat.return_value = 1
             mock_client.get_or_create_collection.return_value = mock_chromadb_collection
             mock_client_cls.return_value = mock_client
 
-            store = ContextStore(persist_path="/tmp/test_db")
+            store = ContextStore(chromadb_url="http://localhost:8000")
 
             with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
                 f.write("")
@@ -154,12 +157,13 @@ class TestQuery:
 
     @pytest.mark.asyncio
     async def test_query_returns_formatted_results(self, mock_chromadb_collection: MagicMock) -> None:
-        with patch("orchestrator.context_store.chromadb.PersistentClient") as mock_client_cls:
+        with patch("orchestrator.context_store.chromadb.HttpClient") as mock_client_cls:
             mock_client = MagicMock()
+            mock_client.heartbeat.return_value = 1
             mock_client.get_or_create_collection.return_value = mock_chromadb_collection
             mock_client_cls.return_value = mock_client
 
-            store = ContextStore(persist_path="/tmp/test_db")
+            store = ContextStore(chromadb_url="http://localhost:8000")
             results = await store.query("takeoff procedure")
 
         assert len(results) == 2
@@ -169,12 +173,13 @@ class TestQuery:
 
     @pytest.mark.asyncio
     async def test_query_with_filters(self, mock_chromadb_collection: MagicMock) -> None:
-        with patch("orchestrator.context_store.chromadb.PersistentClient") as mock_client_cls:
+        with patch("orchestrator.context_store.chromadb.HttpClient") as mock_client_cls:
             mock_client = MagicMock()
+            mock_client.heartbeat.return_value = 1
             mock_client.get_or_create_collection.return_value = mock_chromadb_collection
             mock_client_cls.return_value = mock_client
 
-            store = ContextStore(persist_path="/tmp/test_db")
+            store = ContextStore(chromadb_url="http://localhost:8000")
             await store.query("stall speed", filters={"aircraft_type": "Cessna 172"})
 
         call_kwargs = mock_chromadb_collection.query.call_args[1]
@@ -182,12 +187,13 @@ class TestQuery:
 
     @pytest.mark.asyncio
     async def test_query_no_filters(self, mock_chromadb_collection: MagicMock) -> None:
-        with patch("orchestrator.context_store.chromadb.PersistentClient") as mock_client_cls:
+        with patch("orchestrator.context_store.chromadb.HttpClient") as mock_client_cls:
             mock_client = MagicMock()
+            mock_client.heartbeat.return_value = 1
             mock_client.get_or_create_collection.return_value = mock_chromadb_collection
             mock_client_cls.return_value = mock_client
 
-            store = ContextStore(persist_path="/tmp/test_db")
+            store = ContextStore(chromadb_url="http://localhost:8000")
             await store.query("general knowledge")
 
         call_kwargs = mock_chromadb_collection.query.call_args[1]
@@ -198,12 +204,13 @@ class TestQuery:
         mock_coll = MagicMock()
         mock_coll.query.return_value = {"documents": [[]], "metadatas": [[]], "distances": [[]]}
 
-        with patch("orchestrator.context_store.chromadb.PersistentClient") as mock_client_cls:
+        with patch("orchestrator.context_store.chromadb.HttpClient") as mock_client_cls:
             mock_client = MagicMock()
+            mock_client.heartbeat.return_value = 1
             mock_client.get_or_create_collection.return_value = mock_coll
             mock_client_cls.return_value = mock_client
 
-            store = ContextStore(persist_path="/tmp/test_db")
+            store = ContextStore(chromadb_url="http://localhost:8000")
             results = await store.query("nothing here")
 
         assert results == []
@@ -219,12 +226,13 @@ class TestGetRelevantContext:
 
     @pytest.mark.asyncio
     async def test_queries_with_phase_topics(self, mock_chromadb_collection: MagicMock) -> None:
-        with patch("orchestrator.context_store.chromadb.PersistentClient") as mock_client_cls:
+        with patch("orchestrator.context_store.chromadb.HttpClient") as mock_client_cls:
             mock_client = MagicMock()
+            mock_client.heartbeat.return_value = 1
             mock_client.get_or_create_collection.return_value = mock_chromadb_collection
             mock_client_cls.return_value = mock_client
 
-            store = ContextStore(persist_path="/tmp/test_db")
+            store = ContextStore(chromadb_url="http://localhost:8000")
             state = SimState(
                 aircraft="Cessna 172",
                 flight_phase=FlightPhase.TAKEOFF,
@@ -245,12 +253,13 @@ class TestGetRelevantContext:
             "distances": [[0.1]],
         }
 
-        with patch("orchestrator.context_store.chromadb.PersistentClient") as mock_client_cls:
+        with patch("orchestrator.context_store.chromadb.HttpClient") as mock_client_cls:
             mock_client = MagicMock()
+            mock_client.heartbeat.return_value = 1
             mock_client.get_or_create_collection.return_value = mock_coll
             mock_client_cls.return_value = mock_client
 
-            store = ContextStore(persist_path="/tmp/test_db")
+            store = ContextStore(chromadb_url="http://localhost:8000")
             state = SimState(aircraft="Cessna 172", flight_phase=FlightPhase.CRUISE)
             results = await store.get_relevant_context(state)
 
@@ -278,12 +287,13 @@ class TestGetRelevantContext:
         mock_coll = MagicMock()
         mock_coll.query = MagicMock(side_effect=mock_query)
 
-        with patch("orchestrator.context_store.chromadb.PersistentClient") as mock_client_cls:
+        with patch("orchestrator.context_store.chromadb.HttpClient") as mock_client_cls:
             mock_client = MagicMock()
+            mock_client.heartbeat.return_value = 1
             mock_client.get_or_create_collection.return_value = mock_coll
             mock_client_cls.return_value = mock_client
 
-            store = ContextStore(persist_path="/tmp/test_db")
+            store = ContextStore(chromadb_url="http://localhost:8000")
             state = SimState(aircraft="Cessna 172", flight_phase=FlightPhase.CRUISE)
             results = await store.get_relevant_context(state)
 
@@ -315,10 +325,11 @@ class TestDocumentCount:
     """Test the document_count property."""
 
     def test_document_count(self, mock_chromadb_collection: MagicMock) -> None:
-        with patch("orchestrator.context_store.chromadb.PersistentClient") as mock_client_cls:
+        with patch("orchestrator.context_store.chromadb.HttpClient") as mock_client_cls:
             mock_client = MagicMock()
+            mock_client.heartbeat.return_value = 1
             mock_client.get_or_create_collection.return_value = mock_chromadb_collection
             mock_client_cls.return_value = mock_client
 
-            store = ContextStore(persist_path="/tmp/test_db")
+            store = ContextStore(chromadb_url="http://localhost:8000")
             assert store.document_count == 10

@@ -32,17 +32,23 @@ from orchestrator.sim_client import (
 @pytest.fixture
 def mock_env_vars(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     """Set minimal environment variables for Settings to load without a .env file."""
+    # Prevent Settings from loading the real .env file during tests
+    monkeypatch.setattr("orchestrator.config.Settings.model_config", {
+        "env_file": "",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    })
     env = {
         "ANTHROPIC_API_KEY": "sk-ant-test-key-000",
         "ELEVENLABS_API_KEY": "el-test-key",
+        "ELEVENLABS_VOICE_ID": "test-voice-id",
         "SIMCONNECT_BRIDGE_URL": "ws://localhost:9999",
         "WHISPER_MODEL": "tiny",
-        "WHISPER_URL": "http://localhost:9000",
-        "VOICE_ID": "test-voice-id",
+        "WHISPER_URL": "http://localhost:9090",
         "SCREEN_CAPTURE_ENABLED": "false",
         "SCREEN_CAPTURE_FPS": "2",
         "CLAUDE_MODEL": "claude-sonnet-4-20250514",
-        "CHROMADB_PATH": "/tmp/test_chromadb",
+        "CHROMADB_URL": "http://chromadb-test:9999",
     }
     for k, v in env.items():
         monkeypatch.setenv(k, v)

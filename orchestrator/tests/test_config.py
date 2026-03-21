@@ -20,12 +20,12 @@ class TestSettingsDefaults:
     def test_default_whisper_model(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("WHISPER_MODEL", raising=False)
         s = Settings(anthropic_api_key="sk-test")
-        assert s.whisper_model == "base"
+        assert s.whisper_model == "base.en"
 
     def test_default_whisper_url(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("WHISPER_URL", raising=False)
         s = Settings(anthropic_api_key="sk-test")
-        assert s.whisper_url == "http://localhost:9000"
+        assert s.whisper_url == "http://localhost:9090"
 
     def test_default_screen_capture_disabled(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("SCREEN_CAPTURE_ENABLED", raising=False)
@@ -42,10 +42,10 @@ class TestSettingsDefaults:
         s = Settings(anthropic_api_key="sk-test")
         assert s.claude_model == "claude-sonnet-4-20250514"
 
-    def test_default_chromadb_path(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("CHROMADB_PATH", raising=False)
+    def test_default_chromadb_url(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CHROMADB_URL", raising=False)
         s = Settings(anthropic_api_key="sk-test")
-        assert s.chromadb_path == "./data/chromadb"
+        assert s.chromadb_url == "http://localhost:8000"
 
     def test_default_elevenlabs_key_empty(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
@@ -53,7 +53,7 @@ class TestSettingsDefaults:
         assert s.elevenlabs_api_key == ""
 
     def test_default_voice_id_empty(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("VOICE_ID", raising=False)
+        monkeypatch.delenv("ELEVENLABS_VOICE_ID", raising=False)
         s = Settings(anthropic_api_key="sk-test")
         assert s.voice_id == ""
 
@@ -77,9 +77,9 @@ class TestSettingsEnvOverrides:
         s = Settings()
         assert s.claude_model == "claude-sonnet-4-20250514"
 
-    def test_env_overrides_chromadb_path(self, mock_env_vars: dict[str, str]) -> None:
+    def test_env_overrides_chromadb_url(self, mock_env_vars: dict[str, str]) -> None:
         s = Settings()
-        assert s.chromadb_path == "/tmp/test_chromadb"
+        assert s.chromadb_url == "http://chromadb-test:9999"
 
     def test_env_overrides_api_key(self, mock_env_vars: dict[str, str]) -> None:
         s = Settings()
@@ -90,6 +90,12 @@ class TestSettingsValidation:
     """Test that validation catches problems with required fields."""
 
     def test_missing_anthropic_key_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Prevent loading real .env file
+        monkeypatch.setattr("orchestrator.config.Settings.model_config", {
+            "env_file": "",
+            "env_file_encoding": "utf-8",
+            "extra": "ignore",
+        })
         # Clear all potentially set env vars
         for key in ("ANTHROPIC_API_KEY",):
             monkeypatch.delenv(key, raising=False)

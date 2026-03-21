@@ -720,23 +720,33 @@
 
     const blob = state.audioQueue.shift();
     const url = URL.createObjectURL(blob);
-    dom.ttsAudio.src = url;
-    try {
-      await dom.ttsAudio.play();
-    } catch (err) {
-      console.warn('Audio playback error:', err);
-      playNextAudio();
-    }
-    dom.ttsAudio.addEventListener('ended', () => {
+
+    // Use a fresh Audio element per clip to avoid stale event listeners
+    const audio = new Audio(url);
+    dom.ttsAudio.pause();
+    dom.ttsAudio = audio;
+
+    let advanced = false;
+    function advance() {
+      if (advanced) return;
+      advanced = true;
       URL.revokeObjectURL(url);
       playNextAudio();
-    }, { once: true });
-  }
+    }
 
-  dom.ttsAudio.addEventListener('error', () => {
-    console.warn('Audio element error');
-    playNextAudio();
-  });
+    audio.addEventListener('ended', advance, { once: true });
+    audio.addEventListener('error', () => {
+      console.warn('Audio element error');
+      advance();
+    }, { once: true });
+
+    try {
+      await audio.play();
+    } catch (err) {
+      console.warn('Audio playback error:', err);
+      advance();
+    }
+  }
 
   // ═══════════════════════════════════════════════════════
   //  STATUS POLLING

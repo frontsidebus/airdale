@@ -13,8 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy only the project metadata first (layer caching for dependencies)
+# Copy project metadata and source (hatchling needs the package to build)
 COPY pyproject.toml .
+COPY orchestrator/ ./orchestrator/
 
 # Install dependencies into a virtual environment so we can copy them cleanly
 RUN python -m venv /opt/venv
