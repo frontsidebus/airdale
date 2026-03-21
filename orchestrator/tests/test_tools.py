@@ -13,7 +13,8 @@ import respx
 from orchestrator.sim_client import (
     Attitude,
     AutopilotState,
-    EngineParams,
+    EngineData,
+    Engines,
     Environment,
     FlightPhase,
     FuelState,
@@ -53,13 +54,13 @@ class TestGetSimState:
         assert result["on_ground"] is False
         assert result["position"]["altitude_msl"] == 6500
         assert result["position"]["altitude_agl"] == 6400
-        assert result["speeds"]["indicated"] == 120
-        assert result["autopilot"]["engaged"] is True
+        assert result["speeds"]["indicated_airspeed"] == 120
+        assert result["autopilot"]["master"] is True
 
     @pytest.mark.asyncio
     async def test_position_rounding(self) -> None:
         state = SimState(
-            position=Position(latitude=28.429412345, longitude=-81.30912345, altitude=6543.7, altitude_agl=6443.2),
+            position=Position(latitude=28.429412345, longitude=-81.30912345, altitude_msl=6543.7, altitude_agl=6443.2),
         )
         mock_client = MagicMock(spec=SimConnectClient)
         mock_client.get_state = AsyncMock(return_value=state)
@@ -70,18 +71,21 @@ class TestGetSimState:
     @pytest.mark.asyncio
     async def test_engine_params_formatting(self) -> None:
         state = SimState(
-            engine=EngineParams(rpm=[2412.6], fuel_flow=[9.37], oil_temp=[192.4], oil_pressure=[61.8]),
+            engines=Engines(engine_count=1, engines=[
+                EngineData(rpm=2412.6, fuel_flow_gph=9.37, oil_temp=192.4, oil_pressure=61.8),
+            ]),
         )
         mock_client = MagicMock(spec=SimConnectClient)
         mock_client.get_state = AsyncMock(return_value=state)
         result = await get_sim_state(mock_client)
-        assert result["engine"]["rpm"] == [2413]
-        assert result["engine"]["fuel_flow"] == [9.4]
-        assert result["engine"]["oil_temp"] == [192]
+        eng = result["engines"]["engines"][0]
+        assert eng["rpm"] == 2413
+        assert eng["fuel_flow_gph"] == pytest.approx(9.4, abs=0.1)
+        assert eng["oil_temp"] == 192
 
     @pytest.mark.asyncio
     async def test_fuel_formatting(self) -> None:
-        state = SimState(fuel=FuelState(total=42.37, total_weight=252.22))
+        state = SimState(fuel=FuelState(total_gallons=42.37, total_weight_lbs=252.22))
         mock_client = MagicMock(spec=SimConnectClient)
         mock_client.get_state = AsyncMock(return_value=state)
         result = await get_sim_state(mock_client)
@@ -91,7 +95,7 @@ class TestGetSimState:
     @pytest.mark.asyncio
     async def test_environment_wind_string(self) -> None:
         state = SimState(
-            environment=Environment(wind_direction=270.4, wind_speed=12.3),
+            environment=Environment(wind_direction=270.4, wind_speed_kts=12.3),
         )
         mock_client = MagicMock(spec=SimConnectClient)
         mock_client.get_state = AsyncMock(return_value=state)
@@ -103,9 +107,9 @@ class TestGetSimState:
         mock_client = MagicMock(spec=SimConnectClient)
         mock_client.get_state = AsyncMock(return_value=sim_state_approach)
         result = await get_sim_state(mock_client)
-        assert result["surfaces"]["gear_down"] is True
-        assert result["surfaces"]["flaps"] == 2
-        assert result["surfaces"]["spoilers"] is False
+        assert result["surfaces"]["gear_handle"] is True
+        assert result["surfaces"]["flaps_percent"] == 50
+        assert result["surfaces"]["spoilers_percent"] == 0
 
 
 # ---------------------------------------------------------------------------

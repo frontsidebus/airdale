@@ -88,53 +88,72 @@ DEFAULT_CHECKLISTS: dict[FlightPhase, list[str]] = {
 
 async def get_sim_state(sim_client: SimConnectClient) -> dict[str, Any]:
     """Return formatted current telemetry."""
-    state = await sim_client.get_state()
+    try:
+        state = await sim_client.get_state()
+    except ConnectionError:
+        return {"error": "Not connected to simulator"}
+
+    # Build active engine data from the new per-engine model
+    active = state.engines.active_engines
+    engine_data: dict[str, Any] = {
+        "engine_count": state.engines.engine_count,
+        "engines": [
+            {
+                "rpm": round(e.rpm),
+                "manifold_pressure": round(e.manifold_pressure, 1),
+                "fuel_flow_gph": round(e.fuel_flow_gph, 1),
+                "egt": round(e.egt),
+                "oil_temp": round(e.oil_temp),
+                "oil_pressure": round(e.oil_pressure),
+            }
+            for e in active
+        ],
+    }
+
     return {
-        "aircraft": state.aircraft_title,
+        "aircraft": state.aircraft,
         "flight_phase": state.flight_phase.value,
         "position": {
             "lat": round(state.position.latitude, 6),
             "lon": round(state.position.longitude, 6),
-            "altitude_msl": round(state.position.altitude),
+            "altitude_msl": round(state.position.altitude_msl),
             "altitude_agl": round(state.position.altitude_agl),
         },
         "attitude": {
             "pitch": round(state.attitude.pitch, 1),
             "bank": round(state.attitude.bank, 1),
-            "heading": round(state.attitude.heading),
+            "heading_magnetic": round(state.attitude.heading_magnetic),
+            "heading_true": round(state.attitude.heading_true),
         },
         "speeds": {
-            "indicated": round(state.speeds.indicated),
+            "indicated_airspeed": round(state.speeds.indicated_airspeed),
             "true_airspeed": round(state.speeds.true_airspeed),
             "ground_speed": round(state.speeds.ground_speed),
             "mach": round(state.speeds.mach, 3),
             "vertical_speed": round(state.speeds.vertical_speed),
         },
-        "engine": {
-            "rpm": [round(r) for r in state.engine.rpm],
-            "fuel_flow": [round(f, 1) for f in state.engine.fuel_flow],
-            "oil_temp": [round(t) for t in state.engine.oil_temp],
-            "oil_pressure": [round(p) for p in state.engine.oil_pressure],
-        },
+        "engines": engine_data,
         "autopilot": {
-            "engaged": state.autopilot.master,
-            "heading": round(state.autopilot.set_heading),
-            "altitude": round(state.autopilot.set_altitude),
+            "master": state.autopilot.master,
+            "heading": round(state.autopilot.heading),
+            "altitude": round(state.autopilot.altitude),
+            "vertical_speed": round(state.autopilot.vertical_speed),
+            "airspeed": round(state.autopilot.airspeed),
         },
         "fuel": {
-            "total_gallons": round(state.fuel.total, 1),
-            "total_weight_lbs": round(state.fuel.total_weight, 1),
+            "total_gallons": round(state.fuel.total_gallons, 1),
+            "total_weight_lbs": round(state.fuel.total_weight_lbs, 1),
         },
         "environment": {
-            "wind": f"{round(state.environment.wind_direction)}° at {round(state.environment.wind_speed)}kt",
-            "visibility_sm": round(state.environment.visibility, 1),
-            "temperature_c": round(state.environment.temperature),
-            "altimeter_inhg": round(state.environment.pressure, 2),
+            "wind": f"{round(state.environment.wind_direction)}° at {round(state.environment.wind_speed_kts)}kt",
+            "visibility_sm": round(state.environment.visibility_sm, 1),
+            "temperature_c": round(state.environment.temperature_c),
+            "barometer_inhg": round(state.environment.barometer_inhg, 2),
         },
         "surfaces": {
-            "gear_down": state.surfaces.gear_down,
-            "flaps": state.surfaces.flaps_position,
-            "spoilers": state.surfaces.spoilers_deployed,
+            "gear_handle": state.surfaces.gear_handle,
+            "flaps_percent": round(state.surfaces.flaps_percent),
+            "spoilers_percent": round(state.surfaces.spoilers_percent),
         },
         "on_ground": state.on_ground,
     }
@@ -198,12 +217,25 @@ async def get_checklist(
     context_store: ContextStore,
     aircraft_type: str = "",
 ) -> dict[str, Any]:
-    """Return the checklist appropriate for the given flight phase."""
+    """Return the checklist appropriate for the given flight phase.
+
+    Accepts the phase as a string (case-insensitive) or a FlightPhase enum.
+    """
     if isinstance(phase, str):
+        phase_upper = phase.strip().upper()
         try:
-            phase = FlightPhase(phase.upper())
+            phase = FlightPhase(phase_upper)
         except ValueError:
-            return {"error": f"Unknown flight phase: {phase}"}
+            # Try matching by enum name as well
+            matched = None
+            for fp in FlightPhase:
+                if fp.value == phase_upper or fp.name == phase_upper:
+                    matched = fp
+                    break
+            if matched is None:
+                valid = ", ".join(fp.value for fp in FlightPhase)
+                return {"error": f"Unknown flight phase: {phase}. Valid phases: {valid}"}
+            phase = matched
 
     # Try to find an aircraft-specific checklist in the knowledge base
     if aircraft_type:

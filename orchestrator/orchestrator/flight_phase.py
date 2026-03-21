@@ -61,12 +61,12 @@ class FlightPhaseDetector:
         t = self._thresholds
         on_ground = s.on_ground
         gs = s.speeds.ground_speed
-        ias = s.speeds.indicated
+        ias = s.speeds.indicated_airspeed
         vs = s.speeds.vertical_speed
         agl = s.position.altitude_agl
-        gear = s.surfaces.gear_down
-        flaps = s.surfaces.flaps_position
-        has_power = any(r > 100 for r in s.engine.rpm) or any(n > 5 for n in s.engine.n1)
+        gear = s.surfaces.gear_handle
+        flaps = s.surfaces.flaps_percent
+        has_power = any(e.rpm > 100 for e in s.engines.active_engines)
 
         # On the ground
         if on_ground:

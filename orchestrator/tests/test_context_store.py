@@ -226,7 +226,7 @@ class TestGetRelevantContext:
 
             store = ContextStore(persist_path="/tmp/test_db")
             state = SimState(
-                aircraft_title="Cessna 172",
+                aircraft="Cessna 172",
                 flight_phase=FlightPhase.TAKEOFF,
             )
             results = await store.get_relevant_context(state)
@@ -251,7 +251,7 @@ class TestGetRelevantContext:
             mock_client_cls.return_value = mock_client
 
             store = ContextStore(persist_path="/tmp/test_db")
-            state = SimState(aircraft_title="Cessna 172", flight_phase=FlightPhase.CRUISE)
+            state = SimState(aircraft="Cessna 172", flight_phase=FlightPhase.CRUISE)
             results = await store.get_relevant_context(state)
 
         assert len(results) == 1
@@ -284,7 +284,7 @@ class TestGetRelevantContext:
             mock_client_cls.return_value = mock_client
 
             store = ContextStore(persist_path="/tmp/test_db")
-            state = SimState(aircraft_title="Cessna 172", flight_phase=FlightPhase.CRUISE)
+            state = SimState(aircraft="Cessna 172", flight_phase=FlightPhase.CRUISE)
             results = await store.get_relevant_context(state)
 
         assert call_count == 2

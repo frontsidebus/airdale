@@ -11,7 +11,8 @@ import pytest
 from orchestrator.sim_client import (
     Attitude,
     AutopilotState,
-    EngineParams,
+    EngineData,
+    Engines,
     Environment,
     FlightPhase,
     FuelState,
@@ -53,13 +54,20 @@ def mock_env_vars(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+def _make_engine(rpm: float = 0, fuel_flow_gph: float = 0, oil_temp: float = 0,
+                 oil_pressure: float = 0, manifold_pressure: float = 0, egt: float = 0) -> EngineData:
+    return EngineData(
+        rpm=rpm, manifold_pressure=manifold_pressure, fuel_flow_gph=fuel_flow_gph,
+        egt=egt, oil_temp=oil_temp, oil_pressure=oil_pressure,
+    )
+
+
 def _make_sim_state(**overrides: Any) -> SimState:
     """Build a SimState with sensible defaults, applying overrides."""
     defaults: dict[str, Any] = {
-        "timestamp": 1000.0,
-        "aircraft_title": "Cessna 172 Skyhawk",
-        "on_ground": True,
-        "sim_paused": False,
+        "timestamp": "2026-03-20T00:00:00+00:00",
+        "connected": True,
+        "aircraft": "Cessna 172 Skyhawk",
         "flight_phase": FlightPhase.PREFLIGHT,
     }
     defaults.update(overrides)
@@ -70,14 +78,13 @@ def _make_sim_state(**overrides: Any) -> SimState:
 def sim_state_parked() -> SimState:
     """Aircraft parked on the ramp, engines off."""
     return _make_sim_state(
-        position=Position(latitude=28.4294, longitude=-81.309, altitude=96, altitude_agl=0),
-        attitude=Attitude(pitch=0, bank=0, heading=270),
-        speeds=Speeds(indicated=0, true_airspeed=0, ground_speed=0, mach=0, vertical_speed=0),
-        engine=EngineParams(rpm=[0], fuel_flow=[0], oil_temp=[75], oil_pressure=[0]),
-        surfaces=SurfaceState(gear_down=True, gear_retractable=False, flaps_position=0, parking_brake=True),
-        fuel=FuelState(quantities=[21, 21], total=42, total_weight=252),
-        environment=Environment(wind_speed=5, wind_direction=270, visibility=10, temperature=25, pressure=29.92),
-        on_ground=True,
+        position=Position(latitude=28.4294, longitude=-81.309, altitude_msl=96, altitude_agl=0),
+        attitude=Attitude(pitch=0, bank=0, heading_true=270, heading_magnetic=267),
+        speeds=Speeds(indicated_airspeed=0, true_airspeed=0, ground_speed=0, mach=0, vertical_speed=0),
+        engines=Engines(engine_count=1, engines=[_make_engine(rpm=0, fuel_flow_gph=0, oil_temp=75, oil_pressure=0)]),
+        surfaces=SurfaceState(gear_handle=True, flaps_percent=0, spoilers_percent=0),
+        fuel=FuelState(total_gallons=42, total_weight_lbs=252),
+        environment=Environment(wind_speed_kts=5, wind_direction=270, visibility_sm=10, temperature_c=25, barometer_inhg=29.92),
         flight_phase=FlightPhase.PREFLIGHT,
     )
 
@@ -86,12 +93,11 @@ def sim_state_parked() -> SimState:
 def sim_state_taxiing() -> SimState:
     """Aircraft taxiing at low speed with engines running."""
     return _make_sim_state(
-        position=Position(latitude=28.4294, longitude=-81.309, altitude=96, altitude_agl=0),
-        attitude=Attitude(pitch=0, bank=0, heading=90),
-        speeds=Speeds(indicated=12, true_airspeed=12, ground_speed=12, mach=0, vertical_speed=0),
-        engine=EngineParams(rpm=[1800], fuel_flow=[8], oil_temp=[180], oil_pressure=[60]),
-        surfaces=SurfaceState(gear_down=True, flaps_position=0, parking_brake=False),
-        on_ground=True,
+        position=Position(latitude=28.4294, longitude=-81.309, altitude_msl=96, altitude_agl=0),
+        attitude=Attitude(pitch=0, bank=0, heading_true=90, heading_magnetic=87),
+        speeds=Speeds(indicated_airspeed=12, true_airspeed=12, ground_speed=12, mach=0, vertical_speed=0),
+        engines=Engines(engine_count=1, engines=[_make_engine(rpm=1800, fuel_flow_gph=8, oil_temp=180, oil_pressure=60)]),
+        surfaces=SurfaceState(gear_handle=True, flaps_percent=0, spoilers_percent=0),
         flight_phase=FlightPhase.TAXI,
     )
 
@@ -100,12 +106,11 @@ def sim_state_taxiing() -> SimState:
 def sim_state_takeoff_roll() -> SimState:
     """Aircraft accelerating on the runway for takeoff."""
     return _make_sim_state(
-        position=Position(latitude=28.4294, longitude=-81.309, altitude=96, altitude_agl=0),
-        attitude=Attitude(pitch=0, bank=0, heading=90),
-        speeds=Speeds(indicated=55, true_airspeed=55, ground_speed=55, mach=0.08, vertical_speed=0),
-        engine=EngineParams(rpm=[2700], fuel_flow=[14], oil_temp=[200], oil_pressure=[65]),
-        surfaces=SurfaceState(gear_down=True, flaps_position=1, flaps_num_positions=4),
-        on_ground=True,
+        position=Position(latitude=28.4294, longitude=-81.309, altitude_msl=96, altitude_agl=0),
+        attitude=Attitude(pitch=0, bank=0, heading_true=90, heading_magnetic=87),
+        speeds=Speeds(indicated_airspeed=55, true_airspeed=55, ground_speed=55, mach=0.08, vertical_speed=0),
+        engines=Engines(engine_count=1, engines=[_make_engine(rpm=2700, fuel_flow_gph=14, oil_temp=200, oil_pressure=65)]),
+        surfaces=SurfaceState(gear_handle=True, flaps_percent=25, spoilers_percent=0),
         flight_phase=FlightPhase.TAKEOFF,
     )
 
@@ -114,12 +119,11 @@ def sim_state_takeoff_roll() -> SimState:
 def sim_state_initial_climb() -> SimState:
     """Aircraft just after liftoff, climbing through 500 ft AGL."""
     return _make_sim_state(
-        position=Position(latitude=28.43, longitude=-81.30, altitude=600, altitude_agl=500),
-        attitude=Attitude(pitch=10, bank=0, heading=90),
-        speeds=Speeds(indicated=85, true_airspeed=86, ground_speed=82, mach=0.13, vertical_speed=800),
-        engine=EngineParams(rpm=[2700], fuel_flow=[14], oil_temp=[200], oil_pressure=[65]),
-        surfaces=SurfaceState(gear_down=False, gear_retractable=True, flaps_position=1, flaps_num_positions=4),
-        on_ground=False,
+        position=Position(latitude=28.43, longitude=-81.30, altitude_msl=600, altitude_agl=500),
+        attitude=Attitude(pitch=10, bank=0, heading_true=90, heading_magnetic=87),
+        speeds=Speeds(indicated_airspeed=85, true_airspeed=86, ground_speed=82, mach=0.13, vertical_speed=800),
+        engines=Engines(engine_count=1, engines=[_make_engine(rpm=2700, fuel_flow_gph=14, oil_temp=200, oil_pressure=65)]),
+        surfaces=SurfaceState(gear_handle=False, flaps_percent=25, spoilers_percent=0),
         flight_phase=FlightPhase.CLIMB,
     )
 
@@ -128,13 +132,12 @@ def sim_state_initial_climb() -> SimState:
 def sim_state_cruise() -> SimState:
     """Aircraft in stable cruise at FL065."""
     return _make_sim_state(
-        position=Position(latitude=28.6, longitude=-81.1, altitude=6500, altitude_agl=6400),
-        attitude=Attitude(pitch=2, bank=0, heading=45),
-        speeds=Speeds(indicated=120, true_airspeed=130, ground_speed=135, mach=0.20, vertical_speed=50),
-        engine=EngineParams(rpm=[2400], fuel_flow=[9], oil_temp=[190], oil_pressure=[60]),
-        autopilot=AutopilotState(master=True, heading_hold=True, altitude_hold=True, set_heading=45, set_altitude=6500),
-        surfaces=SurfaceState(gear_down=False, gear_retractable=True, flaps_position=0),
-        on_ground=False,
+        position=Position(latitude=28.6, longitude=-81.1, altitude_msl=6500, altitude_agl=6400),
+        attitude=Attitude(pitch=2, bank=0, heading_true=45, heading_magnetic=42),
+        speeds=Speeds(indicated_airspeed=120, true_airspeed=130, ground_speed=135, mach=0.20, vertical_speed=50),
+        engines=Engines(engine_count=1, engines=[_make_engine(rpm=2400, fuel_flow_gph=9, oil_temp=190, oil_pressure=60)]),
+        autopilot=AutopilotState(master=True, heading=45, altitude=6500),
+        surfaces=SurfaceState(gear_handle=False, flaps_percent=0, spoilers_percent=0),
         flight_phase=FlightPhase.CRUISE,
     )
 
@@ -143,12 +146,11 @@ def sim_state_cruise() -> SimState:
 def sim_state_descent() -> SimState:
     """Aircraft descending from cruise altitude."""
     return _make_sim_state(
-        position=Position(latitude=28.7, longitude=-81.0, altitude=4500, altitude_agl=4400),
-        attitude=Attitude(pitch=-3, bank=0, heading=180),
-        speeds=Speeds(indicated=130, true_airspeed=138, ground_speed=140, mach=0.21, vertical_speed=-500),
-        engine=EngineParams(rpm=[2200], fuel_flow=[7], oil_temp=[185], oil_pressure=[58]),
-        surfaces=SurfaceState(gear_down=False, gear_retractable=True, flaps_position=0),
-        on_ground=False,
+        position=Position(latitude=28.7, longitude=-81.0, altitude_msl=4500, altitude_agl=4400),
+        attitude=Attitude(pitch=-3, bank=0, heading_true=180, heading_magnetic=177),
+        speeds=Speeds(indicated_airspeed=130, true_airspeed=138, ground_speed=140, mach=0.21, vertical_speed=-500),
+        engines=Engines(engine_count=1, engines=[_make_engine(rpm=2200, fuel_flow_gph=7, oil_temp=185, oil_pressure=58)]),
+        surfaces=SurfaceState(gear_handle=False, flaps_percent=0, spoilers_percent=0),
         flight_phase=FlightPhase.DESCENT,
     )
 
@@ -157,12 +159,11 @@ def sim_state_descent() -> SimState:
 def sim_state_approach() -> SimState:
     """Aircraft on approach, gear down, some flaps."""
     return _make_sim_state(
-        position=Position(latitude=28.42, longitude=-81.32, altitude=1500, altitude_agl=1400),
-        attitude=Attitude(pitch=-2, bank=-5, heading=270),
-        speeds=Speeds(indicated=90, true_airspeed=92, ground_speed=88, mach=0.14, vertical_speed=-500),
-        engine=EngineParams(rpm=[2100], fuel_flow=[8], oil_temp=[190], oil_pressure=[60]),
-        surfaces=SurfaceState(gear_down=True, gear_retractable=True, flaps_position=2, flaps_num_positions=4),
-        on_ground=False,
+        position=Position(latitude=28.42, longitude=-81.32, altitude_msl=1500, altitude_agl=1400),
+        attitude=Attitude(pitch=-2, bank=-5, heading_true=270, heading_magnetic=267),
+        speeds=Speeds(indicated_airspeed=90, true_airspeed=92, ground_speed=88, mach=0.14, vertical_speed=-500),
+        engines=Engines(engine_count=1, engines=[_make_engine(rpm=2100, fuel_flow_gph=8, oil_temp=190, oil_pressure=60)]),
+        surfaces=SurfaceState(gear_handle=True, flaps_percent=50, spoilers_percent=0),
         flight_phase=FlightPhase.APPROACH,
     )
 
@@ -171,46 +172,63 @@ def sim_state_approach() -> SimState:
 def sim_state_landing() -> SimState:
     """Aircraft on short final, about to touch down."""
     return _make_sim_state(
-        position=Position(latitude=28.4295, longitude=-81.3095, altitude=146, altitude_agl=50),
-        attitude=Attitude(pitch=3, bank=0, heading=270),
-        speeds=Speeds(indicated=65, true_airspeed=66, ground_speed=62, mach=0.10, vertical_speed=-300),
-        engine=EngineParams(rpm=[1500], fuel_flow=[5], oil_temp=[185], oil_pressure=[58]),
-        surfaces=SurfaceState(gear_down=True, gear_retractable=True, flaps_position=3, flaps_num_positions=4),
-        on_ground=False,
+        position=Position(latitude=28.4295, longitude=-81.3095, altitude_msl=146, altitude_agl=50),
+        attitude=Attitude(pitch=3, bank=0, heading_true=270, heading_magnetic=267),
+        speeds=Speeds(indicated_airspeed=65, true_airspeed=66, ground_speed=62, mach=0.10, vertical_speed=-300),
+        engines=Engines(engine_count=1, engines=[_make_engine(rpm=1500, fuel_flow_gph=5, oil_temp=185, oil_pressure=58)]),
+        surfaces=SurfaceState(gear_handle=True, flaps_percent=75, spoilers_percent=0),
         flight_phase=FlightPhase.LANDING,
     )
 
 
 # ---------------------------------------------------------------------------
-# Sample JSON payloads
+# Sample JSON payloads (matching the actual bridge broadcast format)
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-def sample_state_json() -> dict[str, Any]:
-    """A raw JSON payload as would arrive from the SimConnect bridge."""
+def sample_bridge_broadcast() -> dict[str, Any]:
+    """A raw JSON payload as broadcast by the SimConnect bridge."""
     return {
-        "timestamp": 12345.678,
-        "aircraft_title": "Cessna 172 Skyhawk",
-        "position": {"latitude": 28.4294, "longitude": -81.309, "altitude": 6500, "altitude_agl": 6400},
-        "attitude": {"pitch": 2, "bank": 0, "heading": 45},
-        "speeds": {"indicated": 120, "true_airspeed": 130, "ground_speed": 135, "mach": 0.20, "vertical_speed": 50},
-        "engine": {"rpm": [2400], "fuel_flow": [9.0], "egt": [], "oil_temp": [190], "oil_pressure": [60], "manifold_pressure": [], "n1": [], "n2": []},
-        "autopilot": {"master": True, "heading_hold": True, "altitude_hold": True, "nav_hold": False, "approach_hold": False, "vertical_speed_hold": False, "set_heading": 45, "set_altitude": 6500, "set_speed": 0, "set_vertical_speed": 0},
-        "radios": {"com1_active": 121.7, "com1_standby": 118.3, "com2_active": 0, "com2_standby": 0, "nav1_active": 110.3, "nav1_standby": 0, "nav2_active": 0, "nav2_standby": 0, "transponder": 1200, "adf": 0},
-        "fuel": {"quantities": [21, 21], "total": 42, "total_weight": 252},
-        "environment": {"wind_speed": 5, "wind_direction": 270, "visibility": 10, "temperature": 25, "pressure": 29.92, "precipitation": "none"},
-        "surfaces": {"gear_down": False, "gear_retractable": True, "flaps_position": 0, "flaps_num_positions": 4, "spoilers_deployed": False, "parking_brake": False},
-        "flight_phase": "CRUISE",
-        "on_ground": False,
-        "sim_paused": False,
+        "timestamp": "2026-03-20T23:22:23.8472527+00:00",
+        "connected": True,
+        "aircraft": "Cessna 172 Skyhawk",
+        "position": {"latitude": 28.4294, "longitude": -81.309, "altitude_msl": 6500, "altitude_agl": 6400},
+        "attitude": {"pitch": 2, "bank": 0, "heading_true": 45, "heading_magnetic": 42},
+        "speeds": {"indicated_airspeed": 120, "true_airspeed": 130, "ground_speed": 135, "mach": 0.20, "vertical_speed": 50},
+        "engines": {
+            "engine_count": 1,
+            "engines": [
+                {"rpm": 2400, "manifold_pressure": 24.0, "fuel_flow_gph": 9.0, "egt": 1200, "oil_temp": 190, "oil_pressure": 60},
+                {"rpm": 0, "manifold_pressure": 0, "fuel_flow_gph": 0, "egt": 0, "oil_temp": 0, "oil_pressure": 0},
+                {"rpm": 0, "manifold_pressure": 0, "fuel_flow_gph": 0, "egt": 0, "oil_temp": 0, "oil_pressure": 0},
+                {"rpm": 0, "manifold_pressure": 0, "fuel_flow_gph": 0, "egt": 0, "oil_temp": 0, "oil_pressure": 0},
+            ],
+        },
+        "autopilot": {"master": True, "heading": 45, "altitude": 6500, "vertical_speed": 0, "airspeed": 0},
+        "radios": {"com1": 121.7, "com2": 118.3, "nav1": 110.3, "nav2": 110.5},
+        "fuel": {"total_gallons": 42, "total_weight_lbs": 252},
+        "environment": {"wind_speed_kts": 5, "wind_direction": 270, "visibility_sm": 10, "temperature_c": 25, "barometer_inhg": 29.92},
+        "surfaces": {"gear_handle": False, "flaps_percent": 0, "spoilers_percent": 0},
     }
 
 
 @pytest.fixture
-def sample_state_update_message(sample_state_json: dict[str, Any]) -> str:
-    """A WebSocket message wrapping a state update."""
-    return json.dumps({"type": "state_update", "data": sample_state_json})
+def sample_state_json(sample_bridge_broadcast: dict[str, Any]) -> dict[str, Any]:
+    """Alias for backwards compat — returns the bridge broadcast format."""
+    return sample_bridge_broadcast
+
+
+@pytest.fixture
+def sample_bridge_broadcast_message(sample_bridge_broadcast: dict[str, Any]) -> str:
+    """A WebSocket message as the bridge would broadcast (raw JSON, no wrapper)."""
+    return json.dumps(sample_bridge_broadcast)
+
+
+@pytest.fixture
+def sample_state_update_message(sample_bridge_broadcast: dict[str, Any]) -> str:
+    """Legacy alias — now returns a raw broadcast (not wrapped in type/data)."""
+    return json.dumps(sample_bridge_broadcast)
 
 
 # ---------------------------------------------------------------------------

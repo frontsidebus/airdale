@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 import anthropic
 
 from .context_store import ContextStore
 from .sim_client import SimConnectClient, SimState
+
 from .tools import (
     create_flight_plan,
     get_checklist,
@@ -20,7 +22,13 @@ from .tools import (
 
 logger = logging.getLogger(__name__)
 
-MERLIN_PERSONA = """\
+# ---------------------------------------------------------------------------
+# MERLIN persona — prefer the rich markdown version from disk when available.
+# ---------------------------------------------------------------------------
+
+_MERLIN_SYSTEM_PATH = Path(__file__).resolve().parents[2] / "data" / "prompts" / "merlin_system.md"
+
+_INLINE_PERSONA = """\
 You are MERLIN, an AI co-pilot assistant for Microsoft Flight Simulator 2024. Your persona:
 
 - **Background**: Former Navy Test Pilot School graduate turned digital co-pilot. You carry \
@@ -41,6 +49,20 @@ replacement for real flight training or certified flight instructors.
 
 Current flight context will be injected below. Use it to make your responses situationally aware.
 """
+
+
+def _load_merlin_persona() -> str:
+    """Return the full MERLIN system prompt, preferring the on-disk markdown file."""
+    if _MERLIN_SYSTEM_PATH.exists():
+        try:
+            return _MERLIN_SYSTEM_PATH.read_text(encoding="utf-8")
+        except Exception:
+            logger.warning("Failed to read %s; falling back to inline persona", _MERLIN_SYSTEM_PATH)
+    return _INLINE_PERSONA
+
+
+MERLIN_PERSONA: str = _load_merlin_persona()
+
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
@@ -162,21 +184,21 @@ class ClaudeClient:
         parts = [MERLIN_PERSONA]
 
         parts.append(f"\n--- CURRENT FLIGHT STATE ---\n{sim_state.telemetry_summary()}")
-        parts.append(f"Aircraft: {sim_state.aircraft_title or 'Unknown'}")
+        parts.append(f"Aircraft: {sim_state.aircraft or 'Unknown'}")
         parts.append(f"On ground: {sim_state.on_ground}")
 
         if sim_state.autopilot.master:
             ap = sim_state.autopilot
             parts.append(
-                f"Autopilot: HDG {ap.set_heading:.0f} | ALT {ap.set_altitude:.0f} | "
-                f"VS {ap.set_vertical_speed:+.0f}"
+                f"Autopilot: HDG {ap.heading:.0f} | ALT {ap.altitude:.0f} | "
+                f"VS {ap.vertical_speed:+.0f} | IAS {ap.airspeed:.0f}"
             )
 
         env = sim_state.environment
         parts.append(
-            f"Weather: Wind {env.wind_direction:.0f}°/{env.wind_speed:.0f}kt | "
-            f"Vis {env.visibility:.0f}sm | Temp {env.temperature:.0f}°C | "
-            f"QNH {env.pressure:.2f}\"Hg"
+            f"Weather: Wind {env.wind_direction:.0f}°/{env.wind_speed_kts:.0f}kt | "
+            f"Vis {env.visibility_sm:.0f}sm | Temp {env.temperature_c:.0f}°C | "
+            f"QNH {env.barometer_inhg:.2f}\"Hg"
         )
 
         if context_docs:
@@ -302,13 +324,13 @@ class ClaudeClient:
                 return await search_manual(
                     args["query"],
                     self._context_store,
-                    aircraft_type=sim_state.aircraft_title,
+                    aircraft_type=sim_state.aircraft,
                 )
             elif name == "get_checklist":
                 return await get_checklist(
                     args["phase"],
                     self._context_store,
-                    aircraft_type=sim_state.aircraft_title,
+                    aircraft_type=sim_state.aircraft,
                 )
             elif name == "create_flight_plan":
                 return await create_flight_plan(

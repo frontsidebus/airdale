@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 import chromadb
-from chromadb.config import Settings as ChromaSettings
 
 from .sim_client import FlightPhase, SimState
 
@@ -29,21 +28,74 @@ PHASE_TOPICS: dict[FlightPhase, list[str]] = {
 
 
 class ContextStore:
-    """Vector store for aviation documents with flight-phase-aware retrieval."""
+    """Vector store for aviation documents with flight-phase-aware retrieval.
 
-    def __init__(self, persist_path: str = "./data/chromadb") -> None:
-        self._client = chromadb.PersistentClient(
-            path=persist_path,
-            settings=ChromaSettings(anonymized_telemetry=False),
-        )
-        self._collection = self._client.get_or_create_collection(
-            name="merlin_docs",
-            metadata={"hnsw:space": "cosine"},
-        )
+    Connects to a ChromaDB instance running as a Docker container via the
+    HTTP client.  If the server is unavailable at construction time the store
+    degrades gracefully: all queries return empty results and document counts
+    report zero.
+    """
+
+    def __init__(self, chromadb_url: str = "http://localhost:8000") -> None:
+        self._available = False
+        self._collection: Any = None
+        try:
+            self._client = chromadb.HttpClient(
+                host=self._parse_host(chromadb_url),
+                port=self._parse_port(chromadb_url),
+            )
+            # Verify connectivity with a heartbeat
+            self._client.heartbeat()
+            self._collection = self._client.get_or_create_collection(
+                name="merlin_docs",
+                metadata={"hnsw:space": "cosine"},
+            )
+            self._available = True
+            logger.info(
+                "Connected to ChromaDB at %s (collection: merlin_docs)", chromadb_url
+            )
+        except Exception as exc:
+            logger.warning(
+                "ChromaDB unavailable at %s (%s); context store disabled. "
+                "RAG queries will return empty results.",
+                chromadb_url,
+                exc,
+            )
+
+    # --- helpers for parsing the URL -----------------------------------------
+
+    @staticmethod
+    def _parse_host(url: str) -> str:
+        """Extract host from a URL like http://localhost:8000."""
+        url = url.replace("http://", "").replace("https://", "")
+        return url.split(":")[0].split("/")[0]
+
+    @staticmethod
+    def _parse_port(url: str) -> int:
+        """Extract port from a URL like http://localhost:8000."""
+        url = url.replace("http://", "").replace("https://", "")
+        parts = url.split(":")
+        if len(parts) >= 2:
+            try:
+                return int(parts[1].split("/")[0])
+            except ValueError:
+                pass
+        return 8000
+
+    # --- public API ----------------------------------------------------------
+
+    @property
+    def available(self) -> bool:
+        return self._available
 
     @property
     def document_count(self) -> int:
-        return self._collection.count()
+        if not self._available or self._collection is None:
+            return 0
+        try:
+            return self._collection.count()
+        except Exception:
+            return 0
 
     async def ingest_document(
         self,
@@ -57,6 +109,10 @@ class ContextStore:
         Splits the document into overlapping chunks and stores each with
         metadata for filtered retrieval. Returns the number of chunks ingested.
         """
+        if not self._available or self._collection is None:
+            logger.warning("Context store unavailable; cannot ingest %s", path)
+            return 0
+
         path = Path(path)
         text = path.read_text(encoding="utf-8")
         base_meta = {"source": str(path), "filename": path.name}
@@ -87,22 +143,34 @@ class ContextStore:
         filters: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Query the store and return matching documents with metadata."""
-        where = filters if filters else None
-        results = self._collection.query(
-            query_texts=[text],
-            n_results=n_results,
-            where=where,
-        )
+        if not self._available or self._collection is None:
+            return []
 
-        docs = []
-        if results["documents"] and results["metadatas"]:
-            for doc, meta, dist in zip(
-                results["documents"][0],
-                results["metadatas"][0],
-                results["distances"][0] if results["distances"] else [0.0] * len(results["documents"][0]),
-            ):
-                docs.append({"content": doc, "metadata": meta, "distance": dist})
-        return docs
+        try:
+            where = filters if filters else None
+            results = self._collection.query(
+                query_texts=[text],
+                n_results=n_results,
+                where=where,
+            )
+
+            docs = []
+            if results["documents"] and results["metadatas"]:
+                distances = (
+                    results["distances"][0]
+                    if results.get("distances")
+                    else [0.0] * len(results["documents"][0])
+                )
+                for doc, meta, dist in zip(
+                    results["documents"][0],
+                    results["metadatas"][0],
+                    distances,
+                ):
+                    docs.append({"content": doc, "metadata": meta, "distance": dist})
+            return docs
+        except Exception as exc:
+            logger.warning("ChromaDB query failed: %s", exc)
+            return []
 
     async def get_relevant_context(
         self,
@@ -110,21 +178,22 @@ class ContextStore:
         n_results: int = 5,
     ) -> list[dict[str, Any]]:
         """Retrieve documents relevant to the current aircraft and flight phase."""
-        topics = PHASE_TOPICS.get(sim_state.flight_phase, ["general"])
-        query_text = f"{sim_state.aircraft_title} {' '.join(topics)}"
+        if not self._available:
+            return []
 
-        filters = None
-        if sim_state.aircraft_title:
-            # Try aircraft-specific docs first; fall back to unfiltered if empty
+        topics = PHASE_TOPICS.get(sim_state.flight_phase, ["general"])
+        query_text = f"{sim_state.aircraft} {' '.join(topics)}"
+
+        if sim_state.aircraft:
             aircraft_results = await self.query(
                 query_text,
                 n_results=n_results,
-                filters={"aircraft_type": sim_state.aircraft_title},
+                filters={"aircraft_type": sim_state.aircraft},
             )
             if aircraft_results:
                 return aircraft_results
 
-        return await self.query(query_text, n_results=n_results, filters=filters)
+        return await self.query(query_text, n_results=n_results)
 
     @staticmethod
     def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:

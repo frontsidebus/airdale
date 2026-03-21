@@ -114,25 +114,25 @@ class TestSystemPromptBuilding:
         assert "CRUISE" in prompt
         assert "6500ft" in prompt
 
-    def test_prompt_contains_aircraft_title(self, claude_client: ClaudeClient) -> None:
-        state = SimState(aircraft_title="Cessna 172 Skyhawk")
+    def test_prompt_contains_aircraft(self, claude_client: ClaudeClient) -> None:
+        state = SimState(aircraft="Cessna 172 Skyhawk")
         prompt = claude_client._build_system_prompt(state, [])
         assert "Cessna 172 Skyhawk" in prompt
 
     def test_prompt_unknown_aircraft(self, claude_client: ClaudeClient) -> None:
-        state = SimState(aircraft_title="")
+        state = SimState(aircraft="")
         prompt = claude_client._build_system_prompt(state, [])
         assert "Unknown" in prompt
 
     def test_prompt_includes_on_ground_status(self, claude_client: ClaudeClient) -> None:
-        state = SimState(on_ground=True)
+        state = SimState()  # AGL=0 => on_ground=True
         prompt = claude_client._build_system_prompt(state, [])
         assert "On ground: True" in prompt
 
     def test_prompt_includes_autopilot_when_engaged(self, claude_client: ClaudeClient) -> None:
         state = SimState(
             autopilot=AutopilotState(
-                master=True, set_heading=270, set_altitude=6500, set_vertical_speed=-500,
+                master=True, heading=270, altitude=6500, vertical_speed=-500,
             )
         )
         prompt = claude_client._build_system_prompt(state, [])
@@ -147,7 +147,10 @@ class TestSystemPromptBuilding:
 
     def test_prompt_includes_weather(self, claude_client: ClaudeClient) -> None:
         state = SimState(
-            environment=Environment(wind_speed=12, wind_direction=270, visibility=10, temperature=20, pressure=30.12),
+            environment=Environment(
+                wind_speed_kts=12, wind_direction=270, visibility_sm=10,
+                temperature_c=20, barometer_inhg=30.12,
+            ),
         )
         prompt = claude_client._build_system_prompt(state, [])
         assert "Wind" in prompt
@@ -232,7 +235,7 @@ class TestToolExecution:
 
     @pytest.mark.asyncio
     async def test_execute_get_sim_state(self, claude_client: ClaudeClient, mock_sim_client: MagicMock) -> None:
-        mock_state = SimState(aircraft_title="Test Aircraft")
+        mock_state = SimState(aircraft="Test Aircraft")
         mock_sim_client.get_state = AsyncMock(return_value=mock_state)
         with patch("orchestrator.claude_client.get_sim_state", new_callable=AsyncMock, return_value={"aircraft": "Test Aircraft"}) as mock_fn:
             result = await claude_client._execute_tool("get_sim_state", {}, SimState())
@@ -248,7 +251,7 @@ class TestToolExecution:
 
     @pytest.mark.asyncio
     async def test_execute_search_manual(self, claude_client: ClaudeClient) -> None:
-        state = SimState(aircraft_title="Cessna 172")
+        state = SimState(aircraft="Cessna 172")
         with patch("orchestrator.claude_client.search_manual", new_callable=AsyncMock, return_value=[]) as mock_fn:
             result = await claude_client._execute_tool("search_manual", {"query": "V-speeds"}, state)
             mock_fn.assert_awaited_once()

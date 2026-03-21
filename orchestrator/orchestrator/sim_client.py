@@ -26,113 +26,121 @@ class FlightPhase(str, Enum):
     LANDED = "LANDED"
 
 
+# ---------------------------------------------------------------------------
+# Pydantic models matching the SimConnect bridge JSON field names exactly
+# ---------------------------------------------------------------------------
+
+
 class Position(BaseModel):
     latitude: float = 0.0
     longitude: float = 0.0
-    altitude: float = 0.0  # feet MSL
+    altitude_msl: float = 0.0  # feet MSL
     altitude_agl: float = 0.0  # feet AGL
 
 
 class Attitude(BaseModel):
     pitch: float = 0.0  # degrees
     bank: float = 0.0  # degrees
-    heading: float = 0.0  # magnetic
+    heading_true: float = 0.0  # degrees true
+    heading_magnetic: float = 0.0  # degrees magnetic
 
 
 class Speeds(BaseModel):
-    indicated: float = 0.0  # knots
+    indicated_airspeed: float = 0.0  # knots
     true_airspeed: float = 0.0  # knots
     ground_speed: float = 0.0  # knots
     mach: float = 0.0
     vertical_speed: float = 0.0  # feet per minute
 
 
-class EngineParams(BaseModel):
-    rpm: list[float] = Field(default_factory=list)
-    manifold_pressure: list[float] = Field(default_factory=list)
-    fuel_flow: list[float] = Field(default_factory=list)
-    egt: list[float] = Field(default_factory=list)
-    oil_temp: list[float] = Field(default_factory=list)
-    oil_pressure: list[float] = Field(default_factory=list)
-    n1: list[float] = Field(default_factory=list)
-    n2: list[float] = Field(default_factory=list)
+class EngineData(BaseModel):
+    """Single-engine parameter block as sent by the bridge."""
+    rpm: float = 0.0
+    manifold_pressure: float = 0.0
+    fuel_flow_gph: float = 0.0
+    egt: float = 0.0
+    oil_temp: float = 0.0
+    oil_pressure: float = 0.0
+
+
+class Engines(BaseModel):
+    """Engine section from the bridge, containing a count and array."""
+    engine_count: int = 0
+    engines: list[EngineData] = Field(default_factory=list)
+
+    @property
+    def active_engines(self) -> list[EngineData]:
+        """Return only the engines that are actually installed (up to engine_count)."""
+        return self.engines[: self.engine_count]
 
 
 class AutopilotState(BaseModel):
     master: bool = False
-    heading_hold: bool = False
-    altitude_hold: bool = False
-    nav_hold: bool = False
-    approach_hold: bool = False
-    vertical_speed_hold: bool = False
-    set_heading: float = 0.0
-    set_altitude: float = 0.0
-    set_speed: float = 0.0
-    set_vertical_speed: float = 0.0
+    heading: float = 0.0
+    altitude: float = 0.0
+    vertical_speed: float = 0.0
+    airspeed: float = 0.0
 
 
 class RadioState(BaseModel):
-    com1_active: float = 0.0
-    com1_standby: float = 0.0
-    com2_active: float = 0.0
-    com2_standby: float = 0.0
-    nav1_active: float = 0.0
-    nav1_standby: float = 0.0
-    nav2_active: float = 0.0
-    nav2_standby: float = 0.0
-    transponder: int = 1200
-    adf: float = 0.0
+    com1: float = 0.0
+    com2: float = 0.0
+    nav1: float = 0.0
+    nav2: float = 0.0
 
 
 class FuelState(BaseModel):
-    quantities: list[float] = Field(default_factory=list)  # gallons per tank
-    total: float = 0.0  # total gallons
-    total_weight: float = 0.0  # total pounds
+    total_gallons: float = 0.0
+    total_weight_lbs: float = 0.0
 
 
 class Environment(BaseModel):
-    wind_speed: float = 0.0  # knots
+    wind_speed_kts: float = 0.0
     wind_direction: float = 0.0  # degrees
-    visibility: float = 0.0  # statute miles
-    temperature: float = 0.0  # celsius
-    pressure: float = 29.92  # inHg
-    precipitation: str = "none"
+    visibility_sm: float = 0.0  # statute miles
+    temperature_c: float = 0.0  # celsius
+    barometer_inhg: float = 29.92  # inHg
 
 
 class SurfaceState(BaseModel):
-    gear_down: bool = True
-    gear_retractable: bool = False
-    flaps_position: int = 0  # 0-based index
-    flaps_num_positions: int = 1
-    spoilers_deployed: bool = False
-    parking_brake: bool = False
+    gear_handle: bool = False
+    flaps_percent: float = 0.0
+    spoilers_percent: float = 0.0
 
 
 class SimState(BaseModel):
-    """Complete snapshot of the simulator state."""
+    """Complete snapshot of the simulator state.
 
-    timestamp: float = 0.0
-    aircraft_title: str = ""
+    Field names match the SimConnect bridge broadcast JSON exactly.
+    """
+
+    timestamp: str = ""
+    connected: bool = False
+    aircraft: str = ""
     position: Position = Field(default_factory=Position)
     attitude: Attitude = Field(default_factory=Attitude)
     speeds: Speeds = Field(default_factory=Speeds)
-    engine: EngineParams = Field(default_factory=EngineParams)
+    engines: Engines = Field(default_factory=Engines)
     autopilot: AutopilotState = Field(default_factory=AutopilotState)
     radios: RadioState = Field(default_factory=RadioState)
     fuel: FuelState = Field(default_factory=FuelState)
     environment: Environment = Field(default_factory=Environment)
     surfaces: SurfaceState = Field(default_factory=SurfaceState)
+    # Computed / enriched by the orchestrator (not from bridge)
     flight_phase: FlightPhase = FlightPhase.PREFLIGHT
-    on_ground: bool = True
-    sim_paused: bool = False
+
+    @property
+    def on_ground(self) -> bool:
+        """Derived from altitude AGL — on the ground if below 10 feet."""
+        return self.position.altitude_agl < 10
 
     def telemetry_summary(self) -> str:
         """One-line summary of key flight parameters for context injection."""
         parts = [
             f"Phase: {self.flight_phase.value}",
-            f"Alt: {self.position.altitude:.0f}ft",
-            f"IAS: {self.speeds.indicated:.0f}kt",
-            f"HDG: {self.attitude.heading:.0f}°",
+            f"Alt: {self.position.altitude_msl:.0f}ft",
+            f"IAS: {self.speeds.indicated_airspeed:.0f}kt",
+            f"HDG: {self.attitude.heading_magnetic:.0f}°",
             f"VS: {self.speeds.vertical_speed:+.0f}fpm",
         ]
         if not self.on_ground:
@@ -178,32 +186,49 @@ class SimConnectClient:
         logger.info("Disconnected from SimConnect bridge")
 
     async def get_state(self) -> SimState:
-        """Request and return the current sim state."""
-        if self._ws is None:
-            raise ConnectionError("Not connected to SimConnect bridge")
-        await self._ws.send(json.dumps({"type": "get_state"}))
-        raw = await self._ws.recv()
-        data = json.loads(raw)
-        self._state = SimState.model_validate(data)
+        """Return the cached sim state (updated continuously by the broadcast)."""
         return self._state
 
     def subscribe(self, callback: StateCallback) -> None:
         self._subscribers.append(callback)
 
     async def _listen_loop(self) -> None:
-        """Background loop that receives state updates from the bridge."""
+        """Background loop that receives state broadcasts from the bridge.
+
+        The bridge sends the full state JSON directly (no wrapping ``type``
+        field).  We identify state broadcasts by checking for the ``position``
+        key.  Messages that contain a ``type`` field (e.g. ``state_response``)
+        are logged and ignored — the broadcast is the authoritative source.
+        """
         assert self._ws is not None
         try:
             async for message in self._ws:
                 try:
                     data = json.loads(message)
-                    if data.get("type") == "state_update":
-                        self._state = SimState.model_validate(data.get("data", {}))
+
+                    # The bridge broadcasts raw state JSON — identify it by
+                    # the presence of the "position" key.
+                    if "position" in data:
+                        # Preserve the current flight_phase (set by the
+                        # orchestrator's phase detector) across updates.
+                        current_phase = self._state.flight_phase
+                        self._state = SimState.model_validate(data)
+                        self._state.flight_phase = current_phase
+
                         for cb in self._subscribers:
                             try:
                                 await cb(self._state)
                             except Exception:
                                 logger.exception("Error in state subscriber callback")
+                    elif "type" in data:
+                        # Informational response (e.g. state_response) — skip.
+                        logger.debug(
+                            "Received typed message from bridge: %s",
+                            data.get("type"),
+                        )
+                    else:
+                        logger.debug("Ignoring unrecognised bridge message")
+
                 except json.JSONDecodeError:
                     logger.warning("Received invalid JSON from bridge")
         except websockets.ConnectionClosed:
