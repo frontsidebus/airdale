@@ -790,7 +790,7 @@
     const txt = dom.voiceStatusText;
 
     btn.classList.remove('recording', 'processing', 'speaking', 'thinking');
-    txt.classList.remove('recording', 'processing', 'speaking', 'thinking');
+    txt.classList.remove('recording', 'processing', 'speaking', 'thinking', 'speech-detected');
 
     switch (mode) {
       case 'recording':
@@ -901,6 +901,36 @@
 
   // ── Waveform Visualization ─────────────────────────────
 
+  // Speech energy threshold for the browser-side VAD indicator.
+  // This is a UI-only hint -- actual VAD runs server-side via Silero.
+  const SPEECH_ENERGY_THRESHOLD = 0.015;
+
+  function computeSpeechEnergy(analyser) {
+    // Compute energy from frequency-domain data for a simple speech indicator.
+    const freqData = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(freqData);
+    let sum = 0;
+    for (let i = 0; i < freqData.length; i++) {
+      const normalized = freqData[i] / 255.0;
+      sum += normalized * normalized;
+    }
+    return Math.sqrt(sum / freqData.length);
+  }
+
+  function updateVadIndicator(isSpeech) {
+    const txt = dom.voiceStatusText;
+    if (!txt) return;
+    if (state.voiceMode !== 'recording') return;
+
+    if (isSpeech) {
+      txt.textContent = 'SPEECH DETECTED';
+      txt.classList.add('speech-detected');
+    } else {
+      txt.textContent = 'LISTENING...';
+      txt.classList.remove('speech-detected');
+    }
+  }
+
   function drawWaveform() {
     const canvas = dom.waveformCanvas;
     const ctx = canvas.getContext('2d');
@@ -923,6 +953,10 @@
       requestAnimationFrame(draw);
 
       if (!state.analyser) return;
+
+      // Compute speech energy for the VAD indicator
+      const energy = computeSpeechEnergy(state.analyser);
+      updateVadIndicator(energy > SPEECH_ENERGY_THRESHOLD);
 
       const bufferLength = state.analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);

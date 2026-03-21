@@ -16,6 +16,7 @@ import numpy as np
 
 from .audio_processing import (
     AVIATION_PROMPT,
+    SileroVAD,
     preprocess_audio,
     samples_to_wav_bytes,
 )
@@ -37,7 +38,7 @@ class VoiceInput:
         sample_rate: int = 16000,
         channels: int = 1,
         vad_threshold: float = 0.02,
-        vad_silence_duration: float = 1.5,
+        vad_silence_duration: float = 0.4,
         mode: InputMode = InputMode.PUSH_TO_TALK,
     ) -> None:
         self._whisper_url = whisper_url.rstrip("/")
@@ -47,6 +48,7 @@ class VoiceInput:
         self._vad_silence_secs = vad_silence_duration
         self._mode = mode
         self._recording = False
+        self._vad = SileroVAD(threshold=0.5, silence_ms=400)
 
     @property
     def mode(self) -> InputMode:
@@ -92,14 +94,27 @@ class VoiceInput:
         self._recording = False
 
     async def record_vad(self) -> np.ndarray:
-        """Record audio using voice activity detection."""
+        """Record audio using voice activity detection.
+
+        Uses Silero VAD for neural speech endpoint detection when available.
+        Falls back to RMS-based detection if torch is not installed.
+        """
         import sounddevice as sd
 
-        logger.debug("VAD recording started")
+        use_silero = self._vad.available
+        if use_silero:
+            logger.debug("VAD recording started (Silero neural VAD)")
+            self._vad.reset()
+        else:
+            logger.debug("VAD recording started (RMS fallback)")
+
         frames: list[np.ndarray] = []
         silence_frames = 0
         speech_detected = False
-        silence_limit = int(self._vad_silence_secs * self._sample_rate / 1024)
+        blocksize = 1024
+        chunk_duration_ms = int(blocksize / self._sample_rate * 1000)
+        # RMS fallback uses the configured silence duration
+        rms_silence_limit = int(self._vad_silence_secs * self._sample_rate / blocksize)
 
         event = asyncio.Event()
         result_audio: list[np.ndarray | None] = [None]
@@ -108,23 +123,44 @@ class VoiceInput:
             indata: np.ndarray, frame_count: int, time_info: dict, status: int
         ) -> None:
             nonlocal silence_frames, speech_detected
-            rms = np.sqrt(np.mean(indata**2))
-            frames.append(indata.copy())
+            chunk = indata.copy()
+            frames.append(chunk)
+            flat = chunk.flatten()
 
-            if rms > self._vad_threshold:
-                speech_detected = True
-                silence_frames = 0
-            elif speech_detected:
-                silence_frames += 1
-                if silence_frames >= silence_limit:
-                    result_audio[0] = np.concatenate(frames, axis=0).flatten()
-                    event.set()
+            if use_silero:
+                prob = self._vad.speech_probability(flat, self._sample_rate)
+                is_speech = prob >= self._vad._threshold
+
+                if is_speech:
+                    speech_detected = True
+                    silence_frames = 0
+                elif speech_detected:
+                    silence_frames += 1
+                    accumulated_ms = silence_frames * chunk_duration_ms
+                    if accumulated_ms >= self._vad._silence_ms:
+                        result_audio[0] = np.concatenate(
+                            frames, axis=0
+                        ).flatten()
+                        event.set()
+            else:
+                # RMS fallback
+                rms = np.sqrt(np.mean(flat**2))
+                if rms > self._vad_threshold:
+                    speech_detected = True
+                    silence_frames = 0
+                elif speech_detected:
+                    silence_frames += 1
+                    if silence_frames >= rms_silence_limit:
+                        result_audio[0] = np.concatenate(
+                            frames, axis=0
+                        ).flatten()
+                        event.set()
 
         stream = sd.InputStream(
             samplerate=self._sample_rate,
             channels=self._channels,
             dtype="float32",
-            blocksize=1024,
+            blocksize=blocksize,
             callback=callback,
         )
         stream.start()
