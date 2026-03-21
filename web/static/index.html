@@ -112,29 +112,18 @@
   <audio id="tts-audio" preload="none"></audio>
   <script src="/static/app.js"></script>
   <script>
-    // Volume percentage display
+    // Hide static welcome message once app.js adds real chat messages
     (function() {
-      var slider = document.getElementById('tts-volume');
-      var pct = document.getElementById('volume-pct');
-      if (slider && pct) {
-        slider.addEventListener('input', function() {
-          pct.textContent = Math.round(slider.value * 100) + '%';
-        });
-      }
-
-      // Hide welcome message when first chat message arrives
-      var observer = new MutationObserver(function(mutations) {
+      var chatMessages = document.getElementById('chat-messages');
+      if (!chatMessages) return;
+      var observer = new MutationObserver(function() {
         var welcome = document.getElementById('chat-welcome');
-        var messages = document.getElementById('chat-messages');
-        if (welcome && messages && messages.children.length > 1) {
+        if (welcome && chatMessages.children.length > 1) {
           welcome.style.display = 'none';
           observer.disconnect();
         }
       });
-      var chatMessages = document.getElementById('chat-messages');
-      if (chatMessages) {
-        observer.observe(chatMessages, { childList: true });
-      }
+      observer.observe(chatMessages, { childList: true });
     })();
   </script>
 </body>

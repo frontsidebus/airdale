@@ -15,7 +15,6 @@
   const RECONNECT_MAX_MS = 30_000;
   const TYPEWRITER_CHAR_MS = 18;
   const SCROLL_THRESHOLD_PX = 100; // auto-scroll if within this distance of bottom
-  const RENDER_BATCH_MS = 32;     // ~2 frames at 60fps for batched DOM updates
 
   // ── DOM References ─────────────────────────────────────
   const dom = {
@@ -35,7 +34,7 @@
     statusChroma:     document.querySelector('#status-chromadb .led'),
     statusClaude:     document.querySelector('#status-claude .led'),
     ttsVolume:        document.getElementById('tts-volume'),
-    volumeValue:      document.getElementById('volume-value'),
+    volumePct:        document.getElementById('volume-pct'),
     connQuality:      document.getElementById('conn-quality'),
     connQualityText:  document.getElementById('conn-quality-text'),
   };
@@ -74,6 +73,7 @@
     wsMessageBuffer: [],            // backpressure buffer
     wsBufferProcessing: false,
     thinkingMsgEl: null,            // "MERLIN is thinking..." indicator
+    _acquiringMic: false,           // mutex for async mic acquisition
   };
 
   // ═══════════════════════════════════════════════════════
@@ -110,11 +110,12 @@
 
   function isNearBottom() {
     const el = dom.chatContent;
+    if (!el) return true;
     return el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_THRESHOLD_PX;
   }
 
   function scrollChatIfNeeded() {
-    if (!state.isUserScrolledUp) {
+    if (!state.isUserScrolledUp && dom.chatContent) {
       dom.chatContent.scrollTop = dom.chatContent.scrollHeight;
     }
   }
@@ -229,6 +230,7 @@
   const _telemValueCache = new Map();
 
   function buildTelemetryDOM() {
+    if (!dom.telemetryContent) return;
     dom.telemetryContent.innerHTML = '';
     _telemValueCache.clear();
     const frag = document.createDocumentFragment();
@@ -361,6 +363,7 @@
   }
 
   function showAwaitingTelemetry() {
+    if (!dom.telemetryContent) return;
     dom.telemetryContent.innerHTML = '<div class="awaiting-link">AWAITING TELEMETRY LINK...</div>';
     _telemValueCache.clear();
   }
@@ -391,8 +394,8 @@
       try {
         const data = JSON.parse(evt.data);
         updateTelemetryValues(data);
-      } catch (e) {
-        console.warn('Telemetry parse error:', e);
+      } catch (_) {
+        // Telemetry parse error — silently discard malformed frames
       }
     });
 
@@ -441,7 +444,7 @@
       msg.innerHTML = ts + senderSpan + textSpan;
     }
 
-    dom.chatMessages.appendChild(msg);
+    if (dom.chatMessages) dom.chatMessages.appendChild(msg);
     scrollChatIfNeeded();
     return msg;
   }
@@ -459,7 +462,7 @@
     const ts = `<span class="timestamp">[${timestamp()}]</span> `;
     const sender = `<span class="sender-merlin">MERLIN:</span> `;
     msg.innerHTML = ts + sender + `<span class="msg-text-merlin thinking-dots">thinking</span>`;
-    dom.chatMessages.appendChild(msg);
+    if (dom.chatMessages) dom.chatMessages.appendChild(msg);
     state.thinkingMsgEl = msg;
     scrollChatIfNeeded();
   }
@@ -480,7 +483,7 @@
     const ts = `<span class="timestamp">[${timestamp()}]</span> `;
     const sender = `<span class="sender-merlin">MERLIN:</span> `;
     msg.innerHTML = ts + sender + `<span class="msg-text-merlin" data-streaming></span><span class="typing-cursor"></span>`;
-    dom.chatMessages.appendChild(msg);
+    if (dom.chatMessages) dom.chatMessages.appendChild(msg);
     state.streamingMsgEl = msg;
     state.streamingText = '';
     state.streamingIndex = 0;
@@ -788,23 +791,25 @@
 
   // ── Chat Input Handling ────────────────────────────────
 
-  dom.chatInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      const text = dom.chatInput.value.trim();
-      if (text) {
-        sendChatText(text);
-        dom.chatInput.value = '';
+  if (dom.chatInput) {
+    dom.chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        const text = dom.chatInput.value.trim();
+        if (text) {
+          sendChatText(text);
+          dom.chatInput.value = '';
+        }
       }
-    }
-  });
+    });
 
-  // Barge-in on typing while TTS is playing
-  dom.chatInput.addEventListener('input', () => {
-    if (state.isPlayingAudio || state.audioQueue.length > 0) {
-      bargeIn();
-    }
-  });
+    // Barge-in on typing while TTS is playing
+    dom.chatInput.addEventListener('input', () => {
+      if (state.isPlayingAudio || state.audioQueue.length > 0) {
+        bargeIn();
+      }
+    });
+  }
 
   // ═══════════════════════════════════════════════════════
   //  VOICE INPUT SYSTEM
@@ -815,37 +820,34 @@
     const btn = dom.pttButton;
     const txt = dom.voiceStatusText;
 
-    btn.classList.remove('recording', 'processing', 'speaking', 'thinking');
-    txt.classList.remove('recording', 'processing', 'speaking', 'thinking', 'speech-detected');
+    if (btn) btn.classList.remove('recording', 'processing', 'speaking', 'thinking');
+    if (txt) txt.classList.remove('recording', 'processing', 'speaking', 'thinking', 'speech-detected');
 
     switch (mode) {
       case 'recording':
-        btn.classList.add('recording');
-        txt.classList.add('recording');
-        txt.textContent = 'RECORDING';
+        if (btn) btn.classList.add('recording');
+        if (txt) { txt.classList.add('recording'); txt.textContent = 'RECORDING'; }
         break;
       case 'processing':
-        btn.classList.add('processing');
-        txt.classList.add('processing');
-        txt.textContent = 'PROCESSING...';
+        if (btn) btn.classList.add('processing');
+        if (txt) { txt.classList.add('processing'); txt.textContent = 'PROCESSING...'; }
         break;
       case 'thinking':
-        btn.classList.add('thinking');
-        txt.classList.add('thinking');
-        txt.textContent = 'MERLIN THINKING...';
+        if (btn) btn.classList.add('thinking');
+        if (txt) { txt.classList.add('thinking'); txt.textContent = 'MERLIN THINKING...'; }
         break;
       case 'speaking':
-        btn.classList.add('speaking');
-        txt.classList.add('speaking');
-        txt.textContent = 'MERLIN SPEAKING';
+        if (btn) btn.classList.add('speaking');
+        if (txt) { txt.classList.add('speaking'); txt.textContent = 'MERLIN SPEAKING'; }
         break;
       default:
-        txt.textContent = 'IDLE';
+        if (txt) txt.textContent = 'IDLE';
     }
   }
 
   async function startRecording() {
-    if (state.voiceMode === 'recording') return;
+    if (state.voiceMode === 'recording' || state._acquiringMic) return;
+    state._acquiringMic = true;
 
     // Barge-in: stop TTS if MERLIN is speaking
     bargeIn();
@@ -890,10 +892,12 @@
 
       state.mediaRecorder.start(100); // collect in 100ms chunks
       setVoiceMode('recording');
+      state._acquiringMic = false;
       drawWaveform();
 
     } catch (err) {
-      console.error('Mic access error:', err);
+      state._acquiringMic = false;
+      // Mic access error — report to user via system message
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         addSystemMessage('Microphone access denied. Enable mic permissions to use voice input.');
       } else {
@@ -1012,6 +1016,7 @@
     _lastDrawTime = ts;
 
     const canvas = dom.waveformCanvas;
+    if (!canvas) return;
     const ctx = canvas.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
     // Use CSS pixel dimensions for drawing (canvas is scaled by dpr)
@@ -1307,13 +1312,9 @@
     }
   }
 
-  // ── Legacy entry points (called by startRecording / init) ──
+  // ── Legacy entry point (called by startRecording) ──
 
   function drawWaveform() {
-    startWaveformLoop();
-  }
-
-  function drawIdleWaveform() {
     startWaveformLoop();
   }
 
@@ -1329,14 +1330,16 @@
     stopRecording();
   }
 
-  dom.pttButton.addEventListener('mousedown', pttDown);
-  dom.pttButton.addEventListener('mouseup', pttUp);
-  dom.pttButton.addEventListener('mouseleave', (e) => {
-    if (state.voiceMode === 'recording') stopRecording();
-  });
-  dom.pttButton.addEventListener('touchstart', pttDown);
-  dom.pttButton.addEventListener('touchend', pttUp);
-  dom.pttButton.addEventListener('touchcancel', pttUp);
+  if (dom.pttButton) {
+    dom.pttButton.addEventListener('mousedown', pttDown);
+    dom.pttButton.addEventListener('mouseup', pttUp);
+    dom.pttButton.addEventListener('mouseleave', () => {
+      if (state.voiceMode === 'recording') stopRecording();
+    });
+    dom.pttButton.addEventListener('touchstart', pttDown);
+    dom.pttButton.addEventListener('touchend', pttUp);
+    dom.pttButton.addEventListener('touchcancel', pttUp);
+  }
 
   // ── Spacebar PTT ──────────────────────────────────────
 
@@ -1446,7 +1449,7 @@
       _playbackGain.connect(_playbackCtx.destination);
     }
     if (_playbackCtx.state === 'suspended') {
-      _playbackCtx.resume();
+      _playbackCtx.resume().catch(() => { /* browser may block autoplay */ });
     }
     return _playbackCtx;
   }
@@ -1481,19 +1484,6 @@
   function queueAudioBlob(blob) {
     state.audioQueue.push(blob);
     if (!state.isPlayingAudio) playNextAudio();
-  }
-
-  function queueTTS(text) {
-    // Fallback: fetch TTS via REST if not streamed over WebSocket
-    if (!text || !text.trim()) return;
-    fetch(`${API_BASE}/api/tts`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    })
-      .then(r => r.blob())
-      .then(blob => queueAudioBlob(blob))
-      .catch(err => console.warn('TTS fetch error:', err));
   }
 
   async function playNextAudio() {
@@ -1541,7 +1531,7 @@
 
       source.start(0);
     } catch (err) {
-      console.warn('Audio decode/playback error:', err);
+      // Audio decode/playback error — skip to next queued clip
       playNextAudio();
     }
   }
@@ -1551,7 +1541,7 @@
   if (dom.ttsVolume) {
     // Set initial volume label
     const initPct = Math.round(state.ttsVolume * 100);
-    if (dom.volumeValue) dom.volumeValue.textContent = `${initPct}%`;
+    if (dom.volumePct) dom.volumePct.textContent = `${initPct}%`;
 
     dom.ttsVolume.addEventListener('input', (e) => {
       state.ttsVolume = parseFloat(e.target.value);
@@ -1560,7 +1550,7 @@
         _playbackGain.gain.value = state.ttsVolume;
       }
       const pct = Math.round(state.ttsVolume * 100);
-      if (dom.volumeValue) dom.volumeValue.textContent = `${pct}%`;
+      if (dom.volumePct) dom.volumePct.textContent = `${pct}%`;
     });
   }
 
@@ -1597,13 +1587,15 @@
   // ═══════════════════════════════════════════════════════
 
   function resizeWaveformCanvas() {
+    if (!dom.waveformCanvas) return;
     const container = dom.waveformCanvas.parentElement;
+    if (!container) return;
     const dpr = window.devicePixelRatio || 1;
     dom.waveformCanvas.width = container.clientWidth * dpr;
     dom.waveformCanvas.height = container.clientHeight * dpr;
     const ctx = dom.waveformCanvas.getContext('2d');
     ctx.scale(dpr, dpr);
-    drawIdleWaveform();
+    startWaveformLoop();
   }
 
   // ═══════════════════════════════════════════════════════
@@ -1624,7 +1616,7 @@
 
       // Resume AudioContext if it was suspended by the browser
       if (_playbackCtx && _playbackCtx.state === 'suspended') {
-        _playbackCtx.resume();
+        _playbackCtx.resume().catch(() => { /* browser may block autoplay */ });
       }
 
       // Restart waveform animation loop
@@ -1647,7 +1639,7 @@
   function init() {
     resizeWaveformCanvas();
     window.addEventListener('resize', resizeWaveformCanvas);
-    drawIdleWaveform();
+    startWaveformLoop();
     showAwaitingTelemetry();
 
     // Show welcome message before connections
