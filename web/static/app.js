@@ -1020,16 +1020,31 @@
   //  AUDIO PLAYBACK (with volume normalization)
   // ═══════════════════════════════════════════════════════
 
-  // Shared AudioContext for decoding and normalized playback
+  // Shared AudioContext for decoding and normalized playback.
+  // Audio chain: source → clipGain (normalization) → compressor → masterGain (volume slider) → dest
   let _playbackCtx = null;
   let _playbackGain = null;
-  const TARGET_RMS = 0.18; // Target RMS level for normalization
+  let _compressor = null;
+  const TARGET_RMS = 0.15; // Target RMS level for normalization
+  const SILENCE_THRESHOLD = 0.01; // Samples below this are silence
 
   function getPlaybackContext() {
     if (!_playbackCtx || _playbackCtx.state === 'closed') {
       _playbackCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+      // Dynamics compressor to even out volume spikes within each clip
+      _compressor = _playbackCtx.createDynamicsCompressor();
+      _compressor.threshold.value = -20;  // dB — compress above this
+      _compressor.knee.value = 12;        // dB — soft knee for natural sound
+      _compressor.ratio.value = 6;        // 6:1 compression — aggressive for speech
+      _compressor.attack.value = 0.003;   // 3ms — fast attack catches transients
+      _compressor.release.value = 0.15;   // 150ms — smooth release
+
+      // Master volume controlled by slider
       _playbackGain = _playbackCtx.createGain();
       _playbackGain.gain.value = state.ttsVolume;
+
+      _compressor.connect(_playbackGain);
       _playbackGain.connect(_playbackCtx.destination);
     }
     if (_playbackCtx.state === 'suspended') {
@@ -1038,16 +1053,29 @@
     return _playbackCtx;
   }
 
-  function measureRMS(audioBuffer) {
-    // Measure RMS across all channels
+  function measureActiveRMS(audioBuffer) {
+    // Measure RMS of only the non-silent portions of the audio.
+    // This avoids silence padding in MP3s from skewing the measurement.
     let sumSq = 0;
     let count = 0;
     for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
       const data = audioBuffer.getChannelData(ch);
       for (let i = 0; i < data.length; i++) {
+        const abs = Math.abs(data[i]);
+        if (abs > SILENCE_THRESHOLD) {
+          sumSq += data[i] * data[i];
+          count++;
+        }
+      }
+    }
+    // If almost entirely silence, use full-buffer RMS as fallback
+    if (count < audioBuffer.length * 0.1) {
+      const data = audioBuffer.getChannelData(0);
+      sumSq = 0;
+      count = data.length;
+      for (let i = 0; i < data.length; i++) {
         sumSq += data[i] * data[i];
       }
-      count += data.length;
     }
     return Math.sqrt(sumSq / (count || 1));
   }
@@ -1088,19 +1116,19 @@
       const arrayBuf = await blob.arrayBuffer();
       const audioBuffer = await ctx.decodeAudioData(arrayBuf);
 
-      // Measure RMS and compute normalization gain
-      const rms = measureRMS(audioBuffer);
-      const gain = rms > 0.001 ? TARGET_RMS / rms : 1.0;
-      // Clamp gain to avoid blowing out quiet clips or clipping loud ones
-      const clampedGain = Math.min(Math.max(gain, 0.5), 4.0);
+      // Measure RMS of active (non-silent) audio and compute gain
+      const rms = measureActiveRMS(audioBuffer);
+      const gain = rms > 0.005 ? TARGET_RMS / rms : 1.0;
+      // Tight clamp: 0.7x-2.5x — keeps volume within a narrow band
+      const clampedGain = Math.min(Math.max(gain, 0.7), 2.5);
 
       // Update the master volume from slider
       _playbackGain.gain.value = state.ttsVolume;
 
-      // Create a per-clip gain node for normalization
+      // Per-clip gain for normalization → feeds into compressor → master gain
       const clipGain = ctx.createGain();
       clipGain.gain.value = clampedGain;
-      clipGain.connect(_playbackGain);
+      clipGain.connect(_compressor);
 
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
