@@ -2,15 +2,15 @@ using System.Text.Json;
 using SimConnectBridge;
 
 // ---------------------------------------------------------------------------
-//  MERLIN SimConnect Bridge -- Entry Point
-//  Connects to MSFS 2024 via SimConnect and broadcasts telemetry over WebSocket.
+//  MERLIN MSFS Adapter
+//  Connects to MSFS 2024 via SimConnect and pushes telemetry to the
+//  universal telemetry service.
 //
-//  The bridge automatically reconnects when MSFS is restarted -- no manual
-//  restart required.  If SimConnect is not registered (COM error 0xe0434352),
-//  it logs a diagnostic message and retries.
+//  The adapter automatically reconnects to both MSFS and the telemetry
+//  service independently.
 // ---------------------------------------------------------------------------
 
-Log("INFO", "=== MERLIN SimConnect Bridge ===");
+Log("INFO", "=== MERLIN MSFS Adapter ===");
 
 // Load configuration
 var config = LoadConfiguration();
@@ -19,10 +19,14 @@ string appName = config.GetProperty("SimConnect").GetProperty("AppName").GetStri
     ?? "MERLIN SimConnect Bridge";
 int highHz = config.GetProperty("SimConnect").GetProperty("HighFrequencyHz").GetInt32();
 int lowHz = config.GetProperty("SimConnect").GetProperty("LowFrequencyHz").GetInt32();
-string wsHost = config.GetProperty("WebSocket").GetProperty("Host").GetString() ?? "0.0.0.0";
-int wsPort = config.GetProperty("WebSocket").GetProperty("Port").GetInt32();
 
-Log("INFO", $"Config: HF={highHz}Hz, LF={lowHz}Hz, WS={wsHost}:{wsPort}");
+// Telemetry service configuration
+string serviceUrl = config.GetProperty("TelemetryService").GetProperty("Url").GetString()
+    ?? "ws://localhost:8081/ws/ingest";
+string adapterId = config.GetProperty("TelemetryService").GetProperty("AdapterId").GetString()
+    ?? "msfs-adapter";
+
+Log("INFO", $"Config: HF={highHz}Hz, LF={lowHz}Hz, Service={serviceUrl}");
 
 // Set up cancellation for graceful shutdown
 using var cts = new CancellationTokenSource();
@@ -39,15 +43,15 @@ AppDomain.CurrentDomain.ProcessExit += (_, _) =>
     cts.Cancel();
 };
 
-// Start WebSocket server
-using var wsServer = new TelemetryWebSocketServer(wsHost, wsPort);
-wsServer.Start();
+// Connect to telemetry service
+using var telemetryClient = new TelemetryServiceClient(serviceUrl, adapterId);
+_ = telemetryClient.ConnectAsync(cts.Token);
 
 // Start SimConnect manager
 using var simConnect = new SimConnectManager(appName, highHz, lowHz);
 
-// Wire up state updates to WebSocket broadcast
-simConnect.StateUpdated += state => wsServer.BroadcastState(state);
+// Wire up state updates to telemetry service push
+simConnect.StateUpdated += state => _ = telemetryClient.PushStateAsync(state);
 
 simConnect.ConnectionChanged += connected =>
 {
@@ -81,7 +85,6 @@ catch (Exception ex)
 
 Log("INFO", "Shutting down...");
 simConnect.Disconnect();
-wsServer.Stop();
 Log("INFO", "Goodbye.");
 
 // ---------------------------------------------------------------------------
@@ -91,7 +94,7 @@ Log("INFO", "Goodbye.");
 static void Log(string level, string message)
 {
     var ts = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
-    Console.WriteLine($"{ts} [{level}] Bridge: {message}");
+    Console.WriteLine($"{ts} [{level}] MsfsAdapter: {message}");
 }
 
 static JsonElement LoadConfiguration()
@@ -108,9 +111,9 @@ static JsonElement LoadConfiguration()
             "HighFrequencyHz": 30,
             "LowFrequencyHz": 1
           },
-          "WebSocket": {
-            "Port": 8080,
-            "Host": "0.0.0.0"
+          "TelemetryService": {
+            "Url": "ws://localhost:8081/ws/ingest",
+            "AdapterId": "msfs-adapter"
           }
         }
         """;

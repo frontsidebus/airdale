@@ -19,7 +19,7 @@ from orchestrator.sim_client import (
     FlightPhase,
     FuelState,
     Position,
-    SimConnectClient,
+    TelemetryClient,
     SimState,
     Speeds,
     SurfaceState,
@@ -44,7 +44,7 @@ class TestGetSimState:
 
     @pytest.mark.asyncio
     async def test_returns_formatted_dict(self, sim_state_cruise: SimState) -> None:
-        mock_client = MagicMock(spec=SimConnectClient)
+        mock_client = MagicMock(spec=TelemetryClient)
         mock_client.get_state = AsyncMock(return_value=sim_state_cruise)
 
         result = await get_sim_state(mock_client)
@@ -62,7 +62,7 @@ class TestGetSimState:
         state = SimState(
             position=Position(latitude=28.429412345, longitude=-81.30912345, altitude_msl=6543.7, altitude_agl=6443.2),
         )
-        mock_client = MagicMock(spec=SimConnectClient)
+        mock_client = MagicMock(spec=TelemetryClient)
         mock_client.get_state = AsyncMock(return_value=state)
         result = await get_sim_state(mock_client)
         assert result["position"]["lat"] == pytest.approx(28.429412, abs=1e-6)
@@ -75,7 +75,7 @@ class TestGetSimState:
                 EngineData(rpm=2412.6, fuel_flow_gph=9.37, oil_temp=192.4, oil_pressure=61.8),
             ]),
         )
-        mock_client = MagicMock(spec=SimConnectClient)
+        mock_client = MagicMock(spec=TelemetryClient)
         mock_client.get_state = AsyncMock(return_value=state)
         result = await get_sim_state(mock_client)
         eng = result["engines"]["engines"][0]
@@ -86,7 +86,7 @@ class TestGetSimState:
     @pytest.mark.asyncio
     async def test_fuel_formatting(self) -> None:
         state = SimState(fuel=FuelState(total_gallons=42.37, total_weight_lbs=252.22))
-        mock_client = MagicMock(spec=SimConnectClient)
+        mock_client = MagicMock(spec=TelemetryClient)
         mock_client.get_state = AsyncMock(return_value=state)
         result = await get_sim_state(mock_client)
         assert result["fuel"]["total_gallons"] == pytest.approx(42.4, abs=0.1)
@@ -97,14 +97,14 @@ class TestGetSimState:
         state = SimState(
             environment=Environment(wind_direction=270.4, wind_speed_kts=12.3),
         )
-        mock_client = MagicMock(spec=SimConnectClient)
+        mock_client = MagicMock(spec=TelemetryClient)
         mock_client.get_state = AsyncMock(return_value=state)
         result = await get_sim_state(mock_client)
         assert result["environment"]["wind"] == "270° at 12kt"
 
     @pytest.mark.asyncio
     async def test_surfaces_state(self, sim_state_approach: SimState) -> None:
-        mock_client = MagicMock(spec=SimConnectClient)
+        mock_client = MagicMock(spec=TelemetryClient)
         mock_client.get_state = AsyncMock(return_value=sim_state_approach)
         result = await get_sim_state(mock_client)
         assert result["surfaces"]["gear_handle"] is True
