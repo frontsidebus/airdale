@@ -11,7 +11,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Fleck" Version="1.2.0" />
+    <!-- Fleck removed: adapter is now a WS client pushing to the telemetry service -->
     <!--
       SimConnect SDK reference — update the HintPath to your local SDK install.
       Typical locations:

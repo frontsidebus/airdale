@@ -1,9 +1,11 @@
-# MERLIN - AI Co-Pilot for MSFS 2024
+# MERLIN - AI Co-Pilot for Flight Simulators
 # Docker Compose configuration for local services.
 #
-# NOTE: The SimConnect bridge (C#) runs natively on the Windows host
-# because it requires direct access to the SimConnect SDK.
-# The orchestrator connects to it via WebSocket on localhost:8080.
+# Architecture:
+#   Sim Adapters (native exe) → Telemetry Service (Docker) → Orchestrator/Web
+#
+# The MSFS adapter (C#) runs natively on the Windows host and pushes
+# telemetry to the telemetry service via WebSocket.
 #
 # Usage:
 #   docker compose up -d              # start all services
@@ -74,8 +76,32 @@ services:
       - merlin
 
   # ---------------------------------------------------------------------------
+  # Telemetry Service - Universal telemetry hub
+  # Receives telemetry from sim adapters and broadcasts to consumers.
+  # ---------------------------------------------------------------------------
+  telemetry-service:
+    build:
+      context: ./telemetry-service
+      dockerfile: Dockerfile
+    container_name: merlin-telemetry
+    ports:
+      - "8080:8080"   # Consumer endpoint (orchestrator, web UI connect here)
+      - "8081:8081"   # Adapter ingest endpoint (MSFS adapter pushes here)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - merlin
+
+  # ---------------------------------------------------------------------------
   # Orchestrator - MERLIN's brain
-  # Coordinates between Claude, SimConnect bridge, Whisper, and ChromaDB.
+  # Coordinates between Claude, telemetry service, Whisper, and ChromaDB.
   # ---------------------------------------------------------------------------
   orchestrator:
     build:
@@ -89,16 +115,16 @@ services:
         condition: service_healthy
       chromadb:
         condition: service_healthy
+      telemetry-service:
+        condition: service_healthy
     env_file:
       - .env
     environment:
       - WHISPER_URL=http://whisper:8000
       - CHROMADB_URL=http://chromadb:8000
-      # The SimConnect bridge runs on the Windows host. In Docker Desktop for
-      # Windows, host.docker.internal resolves to the host machine.
-      - SIMCONNECT_BRIDGE_URL=ws://host.docker.internal:8080
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - TELEMETRY_SERVICE_URL=ws://telemetry-service:8080/ws/telemetry
+      # Legacy fallback (still works via telemetry service)
+      - SIMCONNECT_BRIDGE_URL=ws://telemetry-service:8080/ws/telemetry
     restart: unless-stopped
     networks:
       - merlin

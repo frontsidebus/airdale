@@ -12,7 +12,7 @@ from typing import Any
 import anthropic
 
 from .context_store import ContextStore
-from .sim_client import FlightPhase, SimConnectClient, SimState
+from .sim_client import FlightPhase, SimState, TelemetryClient
 from .tools import (
     create_flight_plan,
     get_checklist,
@@ -286,7 +286,7 @@ class ClaudeClient:
         self,
         api_key: str,
         model: str,
-        sim_client: SimConnectClient,
+        sim_client: TelemetryClient,
         context_store: ContextStore,
         max_tokens: int = 1024,
         max_tokens_briefing: int = 2048,

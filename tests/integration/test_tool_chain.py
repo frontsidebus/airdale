@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from orchestrator.context_store import ContextStore
-from orchestrator.sim_client import FlightPhase, SimConnectClient, SimState
+from orchestrator.sim_client import FlightPhase, TelemetryClient, SimState
 from orchestrator.tools import (
     create_flight_plan,
     get_checklist,
@@ -71,7 +71,7 @@ def populated_context_store(
 class TestGetSimState:
     async def test_returns_formatted_telemetry(self, sim_state: SimState) -> None:
         """get_sim_state should call sim_client.get_state and return a dict."""
-        mock_sim = AsyncMock(spec=SimConnectClient)
+        mock_sim = AsyncMock(spec=TelemetryClient)
         mock_sim.get_state.return_value = sim_state
 
         result = await get_sim_state(mock_sim)
@@ -84,7 +84,7 @@ class TestGetSimState:
         assert result["on_ground"] is False
 
     async def test_engine_params_in_result(self, sim_state: SimState) -> None:
-        mock_sim = AsyncMock(spec=SimConnectClient)
+        mock_sim = AsyncMock(spec=TelemetryClient)
         mock_sim.get_state.return_value = sim_state
 
         result = await get_sim_state(mock_sim)
@@ -268,7 +268,7 @@ class TestToolDispatchFlow:
 
     async def test_dispatch_get_sim_state(self, sim_state: SimState) -> None:
         """Dispatch a get_sim_state tool call and verify the result."""
-        mock_sim = AsyncMock(spec=SimConnectClient)
+        mock_sim = AsyncMock(spec=TelemetryClient)
         mock_sim.get_state.return_value = sim_state
 
         # Simulated tool_use block from Claude
@@ -296,7 +296,7 @@ class TestToolDispatchFlow:
         self, sim_state: SimState, context_store: ContextStore
     ) -> None:
         """All tool results must be JSON-serializable for the Claude API."""
-        mock_sim = AsyncMock(spec=SimConnectClient)
+        mock_sim = AsyncMock(spec=TelemetryClient)
         mock_sim.get_state.return_value = sim_state
 
         results = [

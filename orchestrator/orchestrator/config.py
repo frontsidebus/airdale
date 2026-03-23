@@ -40,18 +40,32 @@ class Settings(BaseSettings):
         description="Max message pairs to retain in conversation history",
     )
 
-    # --- SimConnect bridge ---------------------------------------------------
+    # --- Telemetry service ---------------------------------------------------
+    telemetry_service_host: str = Field(
+        default="localhost",
+        description="Telemetry service host",
+    )
+    telemetry_service_port: int = Field(
+        default=8080,
+        description="Telemetry service consumer WebSocket port",
+    )
+    telemetry_service_url: str = Field(
+        default="",
+        description="Full telemetry service WebSocket URL (constructed if empty)",
+    )
+
+    # --- Legacy SimConnect bridge (deprecated, kept for backward compat) -----
     simconnect_ws_host: str = Field(
         default="localhost",
-        description="WebSocket host for the SimConnect bridge",
+        description="(Deprecated) WebSocket host for direct SimConnect bridge",
     )
     simconnect_ws_port: int = Field(
         default=8080,
-        description="WebSocket port for the SimConnect bridge",
+        description="(Deprecated) WebSocket port for direct SimConnect bridge",
     )
     simconnect_bridge_url: str = Field(
         default="",
-        description="Full WebSocket URL (constructed from host+port if empty)",
+        description="(Deprecated) Full WebSocket URL for direct bridge connection",
     )
 
     # --- Whisper STT ---------------------------------------------------------
@@ -98,12 +112,17 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _build_derived(self) -> Settings:
-        # Construct the bridge URL from host + port when not explicitly set
+        # Build telemetry service URL from components if not explicitly set
+        if not self.telemetry_service_url:
+            self.telemetry_service_url = (
+                f"ws://{self.telemetry_service_host}"
+                f":{self.telemetry_service_port}/ws/telemetry"
+            )
+        # Legacy: construct bridge URL for backward compat
         if not self.simconnect_bridge_url:
             self.simconnect_bridge_url = (
                 f"ws://{self.simconnect_ws_host}:{self.simconnect_ws_port}"
             )
-        # Alias: accept voice_id from env as ELEVENLABS_VOICE_ID
         return self
 
     @property

@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 
 from .context_store import ContextStore
-from .sim_client import FlightPhase, SimConnectClient
+from .sim_client import FlightPhase, TelemetryClient
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ DEFAULT_CHECKLISTS: dict[FlightPhase, list[str]] = {
 }
 
 
-async def get_sim_state(sim_client: SimConnectClient) -> dict[str, Any]:
+async def get_sim_state(sim_client: TelemetryClient) -> dict[str, Any]:
     """Return formatted current telemetry."""
     try:
         state = await sim_client.get_state()

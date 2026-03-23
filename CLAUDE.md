@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Airdale** (codename) is an AI co-pilot called **MERLIN** for Microsoft Flight Simulator 2024. It connects to the sim via SimConnect, processes real-time telemetry, and provides voice-interactive flight guidance powered by Claude. The persona is a Navy Test Pilot with encyclopedic aviation knowledge and dry humor.
+**Airdale** (codename) is an AI co-pilot called **MERLIN** for flight simulators and vehicle sims. It uses a pluggable adapter architecture: per-sim adapters connect to game SDKs and push telemetry to a universal telemetry service, which feeds the orchestrator. Currently supports MSFS 2024, with an architecture designed for X-Plane, DCS, and other sims. The MERLIN persona is a Navy Test Pilot with encyclopedic aviation knowledge and dry humor.
 
 ## Tech Stack
 
@@ -10,18 +10,41 @@
 |---|---|
 | Orchestrator | Python 3.11+ (async, hatch build system) |
 | Web Server | FastAPI with WebSocket support (browser UI) |
-| SimConnect Bridge | C# / .NET 8 (out-of-process exe, event-driven message pump) |
+| Telemetry Service | Python / FastAPI (universal hub for sim adapters) |
+| MSFS Adapter | C# / .NET 8 (out-of-process exe, event-driven message pump) |
 | AI Inference | Anthropic Claude API with tool use |
 | Vector Store / RAG | ChromaDB with sentence-transformers embeddings |
 | Speech-to-Text | faster-whisper (CTranslate2) `medium` model via Docker |
 | Text-to-Speech | ElevenLabs streaming API (`eleven_multilingual_v2` model) |
-| IPC | WebSocket (JSON) between bridge and orchestrator |
+| IPC | WebSocket (JSON) between adapters, telemetry service, and consumers |
 | Config | pydantic-settings with .env files |
 
 ## Directory Structure
 
 ```
 airdale/
+├── telemetry-service/           # Universal telemetry hub
+│   ├── telemetry/               # Python package
+│   │   ├── schema.py            # Universal data models (TelemetryEnvelope)
+│   │   ├── adapter_protocol.py  # Adapter ↔ service message types
+│   │   ├── adapter_manager.py   # Adapter tracking and consumer broadcast
+│   │   ├── service.py           # FastAPI app (/ws/ingest + /ws/telemetry)
+│   │   └── config.py            # Service configuration
+│   ├── tests/                   # Service tests
+│   ├── pyproject.toml
+│   └── Dockerfile
+├── adapters/                    # Per-sim adapter apps
+│   ├── msfs/                    # MSFS 2024 adapter (C# .NET 8)
+│   │   ├── Models/
+│   │   │   ├── SimDataStructs.cs    # SimConnect data structure definitions
+│   │   │   └── SimState.cs          # Internal telemetry data model
+│   │   ├── SimConnectBridge.Tests/  # xUnit tests
+│   │   ├── SimConnectManager.cs     # Event-driven SimConnect message pump
+│   │   ├── TelemetryServiceClient.cs # WS client pushing to telemetry service
+│   │   ├── Program.cs               # Entry point
+│   │   ├── SimConnectBridge.csproj
+│   │   └── appsettings.json
+│   └── README.md                # How to write a new adapter
 ├── orchestrator/                # Python package -- the brain
 │   ├── orchestrator/            # Source package
 │   │   ├── __init__.py
@@ -32,7 +55,7 @@ airdale/
 │   │   ├── flight_phase.py      # State-machine flight phase detector
 │   │   ├── main.py              # CLI entry point
 │   │   ├── screen_capture.py    # Optional screen capture for vision analysis
-│   │   ├── sim_client.py        # WebSocket client, telemetry models, health monitor
+│   │   ├── sim_client.py        # Telemetry client, models, health monitor
 │   │   ├── tools.py             # Claude tool implementations
 │   │   ├── tts_preprocessor.py  # ICAO-compliant aviation text preprocessing for TTS
 │   │   ├── voice.py             # Voice I/O (PTT, VAD, barge-in, streaming TTS)
@@ -40,16 +63,6 @@ airdale/
 │   ├── tests/                   # Unit tests (pytest + pytest-asyncio)
 │   ├── Dockerfile
 │   └── pyproject.toml           # Build config, dependencies, ruff settings
-├── simconnect-bridge/           # C# .NET project -- the sensor layer
-│   ├── Models/
-│   │   ├── SimDataStructs.cs    # SimConnect data structure definitions
-│   │   └── SimState.cs          # Telemetry data model
-│   ├── SimConnectBridge.Tests/  # xUnit tests for bridge components
-│   ├── SimConnectManager.cs     # Event-driven SimConnect message pump
-│   ├── WebSocketServer.cs       # Fleck WebSocket server with client tracking
-│   ├── Program.cs               # Entry point
-│   ├── SimConnectBridge.csproj
-│   └── appsettings.json
 ├── web/                         # FastAPI web UI server
 │   ├── server.py                # Backend: telemetry WS, chat, STT/TTS proxy
 │   ├── run.py                   # Dev server launcher
@@ -121,16 +134,31 @@ pip install -r requirements.txt
 python run.py
 ```
 
-### C# SimConnect Bridge
+### Telemetry Service
 
 ```bash
-cd simconnect-bridge
+cd telemetry-service
+
+# Install
+pip install -e ".[dev]"
+
+# Run the service
+uvicorn telemetry.service:app --host 0.0.0.0 --port 8080
+
+# Run tests
+pytest
+```
+
+### MSFS Adapter (C#)
+
+```bash
+cd adapters/msfs
 
 # Restore and build
 dotnet restore
 dotnet build
 
-# Run (MSFS must be running)
+# Run (MSFS must be running, telemetry service must be up)
 dotnet run
 
 # Run tests
@@ -155,12 +183,12 @@ docker compose build --no-cache orchestrator
 
 ### WSL2 Note
 
-When running the orchestrator or web server inside WSL2, the SimConnect bridge runs on the Windows host. Set the bridge URL to reach the host:
+When running in WSL2, sim adapters run on the Windows host. Set the telemetry service URL accordingly:
 
 ```bash
 # In .env
-SIMCONNECT_WS_HOST=host.docker.internal   # Docker
-SIMCONNECT_WS_HOST=$(hostname).local       # WSL2 native
+TELEMETRY_SERVICE_HOST=host.docker.internal   # Docker
+TELEMETRY_SERVICE_HOST=$(hostname).local       # WSL2 native
 ```
 
 ## Code Style
@@ -187,13 +215,15 @@ SIMCONNECT_WS_HOST=$(hostname).local       # WSL2 native
 
 ## Important Architectural Decisions
 
-1. **SimConnect bridge MUST be out-of-process** -- It runs as a separate .exe, not a WASM module. This is Microsoft's recommendation for stability. If the bridge crashes, MSFS keeps running.
+1. **Pluggable adapter architecture** -- Each sim has its own small adapter app that connects to the game's SDK and pushes telemetry to a universal telemetry service. This decouples sim-specific code from the orchestrator and makes it easy to add new sims.
 
-2. **Event-driven SimConnect message pump** -- The bridge uses an `EventWaitHandle`-based message pump instead of timer-based polling. SimConnect signals the event when data is ready; the pump thread calls `ReceiveMessage()` in response. This eliminates the 0x80004005 COM errors caused by unsynchronized timer polling.
+2. **Universal telemetry service** -- The `telemetry-service/` is a Python/FastAPI hub with two WebSocket endpoints: `/ws/ingest` (adapters push here) and `/ws/telemetry` (consumers subscribe here). It handles adapter registration, state broadcasting, and consumer field subscriptions.
 
-3. **Subscription-based data delivery** -- The `TelemetryWebSocketServer` broadcasts state updates to all connected WebSocket clients. Clients can subscribe to field subsets to reduce bandwidth.
+3. **Sim adapters are out-of-process** -- The MSFS adapter runs as a separate .exe (Microsoft's recommendation for SimConnect stability). Future adapters can be in any language — they just need to push JSON to the ingest WebSocket.
 
-4. **WebSocket for IPC** -- The bridge and orchestrator communicate over WebSocket with JSON payloads. This keeps the components language-agnostic and independently deployable.
+4. **Event-driven SimConnect message pump** -- The MSFS adapter uses an `EventWaitHandle`-based message pump instead of timer-based polling. SimConnect signals the event when data is ready; the pump thread calls `ReceiveMessage()` in response. This eliminates the 0x80004005 COM errors caused by unsynchronized timer polling.
+
+5. **WebSocket for IPC** -- All components communicate over WebSocket with JSON payloads. This keeps everything language-agnostic and independently deployable.
 
 5. **Claude tool use for actions** -- The orchestrator defines tools (`get_sim_state`, `lookup_airport`, `search_manual`, `get_checklist`, `create_flight_plan`) that Claude calls mid-response. Do not pre-fetch everything into the context window.
 
@@ -213,7 +243,7 @@ SIMCONNECT_WS_HOST=$(hostname).local       # WSL2 native
 
 13. **Barge-in / interruption support** -- If the user sends new audio or text while MERLIN is responding, the current Claude stream and TTS pipeline are cancelled immediately. The web server manages cancellation tokens per-client.
 
-14. **Delta detection for telemetry deduplication** -- The `SimConnectClient` tracks previous state and only fires update callbacks when telemetry values actually change, reducing unnecessary processing.
+14. **Delta detection for telemetry deduplication** -- The `TelemetryClient` tracks previous state and only fires update callbacks when telemetry values actually change, reducing unnecessary processing.
 
 15. **Query cache for ChromaDB** -- The `ContextStore` uses a TTL-based cache (60s default) keyed by query text, result count, and filter hash. Within a single flight phase, relevant documents rarely change, so this avoids redundant round-trips to ChromaDB.
 

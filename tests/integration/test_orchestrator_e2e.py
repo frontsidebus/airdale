@@ -20,7 +20,7 @@ from orchestrator.claude_client import ClaudeClient
 from orchestrator.config import Settings
 from orchestrator.context_store import ContextStore
 from orchestrator.main import Orchestrator
-from orchestrator.sim_client import SimConnectClient, SimState
+from orchestrator.sim_client import TelemetryClient, SimState
 
 from .conftest import MockSimConnectServer
 
@@ -114,7 +114,7 @@ class TestClaudeClientChat:
         self, mock_simconnect_server: MockSimConnectServer, tmp_path: Path
     ) -> None:
         """chat() should yield text chunks from the Claude API stream."""
-        sim_client = SimConnectClient(mock_simconnect_server.url)
+        sim_client = TelemetryClient(mock_simconnect_server.url)
         context_store = ContextStore(persist_path=str(tmp_path / "chroma"))
 
         claude = ClaudeClient(
@@ -139,7 +139,7 @@ class TestClaudeClientChat:
         self, mock_simconnect_server: MockSimConnectServer, tmp_path: Path
     ) -> None:
         """The system prompt should include telemetry from sim state."""
-        sim_client = SimConnectClient(mock_simconnect_server.url)
+        sim_client = TelemetryClient(mock_simconnect_server.url)
         context_store = ContextStore(persist_path=str(tmp_path / "chroma"))
 
         claude = ClaudeClient(
@@ -164,7 +164,7 @@ class TestClaudeClientChat:
     async def test_clear_history(
         self, mock_simconnect_server: MockSimConnectServer, tmp_path: Path
     ) -> None:
-        sim_client = SimConnectClient(mock_simconnect_server.url)
+        sim_client = TelemetryClient(mock_simconnect_server.url)
         context_store = ContextStore(persist_path=str(tmp_path / "chroma"))
 
         claude = ClaudeClient(
@@ -193,7 +193,7 @@ class TestClaudeToolLoop:
         self, mock_simconnect_server: MockSimConnectServer, tmp_path: Path
     ) -> None:
         """Simulate Claude requesting a tool, then producing a final text response."""
-        sim_client = SimConnectClient(mock_simconnect_server.url)
+        sim_client = TelemetryClient(mock_simconnect_server.url)
         await sim_client.connect()
 
         context_store = ContextStore(persist_path=str(tmp_path / "chroma"))

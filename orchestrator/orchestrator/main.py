@@ -22,8 +22,8 @@ from .screen_capture import CaptureManager
 from .sim_client import (
     ConnectionState,
     HealthMonitor,
-    SimConnectClient,
     SimState,
+    TelemetryClient,
 )
 from .voice import InputMode, VoiceInput, VoiceOutput
 
@@ -42,8 +42,8 @@ class Orchestrator:
         self._settings = settings
         self._text_only = text_only
 
-        self._sim_client = SimConnectClient(
-            settings.simconnect_bridge_url,
+        self._sim_client = TelemetryClient(
+            settings.telemetry_service_url,
             auto_reconnect=True,
         )
         self._context_store = ContextStore(settings.chromadb_url)
@@ -100,9 +100,9 @@ class Orchestrator:
                 )
             except Exception:
                 logger.warning(
-                    "Could not connect to SimConnect bridge at %s; "
+                    "Could not connect to telemetry service at %s; "
                     "running in text-only mode without live telemetry",
-                    self._settings.simconnect_bridge_url,
+                    self._settings.telemetry_service_url,
                 )
                 self._health.update(
                     "simconnect_bridge",
@@ -111,7 +111,7 @@ class Orchestrator:
                 )
         else:
             logger.info(
-                "Text-only mode: skipping SimConnect bridge connection"
+                "Text-only mode: skipping telemetry service connection"
             )
             self._health.update(
                 "simconnect_bridge", False, "Skipped (text-only mode)"
@@ -475,7 +475,7 @@ def _parse_args() -> argparse.Namespace:
         "--text-only",
         action="store_true",
         default=False,
-        help="Skip SimConnect bridge connection (text chat only)",
+        help="Skip telemetry service connection (text chat only)",
     )
     return parser.parse_args()
 
