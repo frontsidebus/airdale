@@ -8,6 +8,7 @@
     <RootNamespace>SimConnectBridge</RootNamespace>
     <AssemblyName>SimConnectBridge</AssemblyName>
     <Version>1.1.0</Version>
+    <InternalsVisibleTo>SimConnectBridge.Tests</InternalsVisibleTo>
   </PropertyGroup>
 
   <ItemGroup>
