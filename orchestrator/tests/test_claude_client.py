@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from orchestrator.claude_client import (
-    MERLIN_PERSONA,
     STOP_SEQUENCES,
     TOOL_DEFINITIONS,
     ClaudeClient,
@@ -21,7 +20,6 @@ from orchestrator.sim_client import (
     FlightPhase,
     SimState,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -211,11 +209,53 @@ class TestMaxTokensForQuery:
 # ---------------------------------------------------------------------------
 
 
+def _blocks_text(blocks: list[dict[str, Any]]) -> str:
+    """Concatenate all text from a list of system prompt content blocks."""
+    return "\n".join(b["text"] for b in blocks if b.get("type") == "text")
+
+
 class TestSystemPromptBuilding:
     """Test _build_system_prompt with various SimState and context combinations."""
 
+    def test_returns_list_of_blocks(self, claude_client: ClaudeClient) -> None:
+        blocks = claude_client._build_system_prompt(SimState(), [])
+        assert isinstance(blocks, list)
+        assert all(isinstance(b, dict) for b in blocks)
+        assert all(b.get("type") == "text" for b in blocks)
+
+    def test_first_block_has_cache_control(self, claude_client: ClaudeClient) -> None:
+        blocks = claude_client._build_system_prompt(SimState(), [])
+        assert blocks[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_dynamic_block_has_no_cache_control(
+        self,
+        claude_client: ClaudeClient,
+    ) -> None:
+        blocks = claude_client._build_system_prompt(SimState(), [])
+        # The second block (dynamic content) must not be cached
+        assert len(blocks) >= 2
+        assert "cache_control" not in blocks[1]
+
+    def test_static_block_contains_persona_and_pacing(
+        self,
+        claude_client: ClaudeClient,
+    ) -> None:
+        blocks = claude_client._build_system_prompt(SimState(), [])
+        static = blocks[0]["text"]
+        assert "MERLIN" in static or "Captain" in static
+        assert "RESPONSE RULES" in static
+        assert "brevity saves lives" in static
+
+    def test_dynamic_block_excludes_persona(
+        self,
+        claude_client: ClaudeClient,
+    ) -> None:
+        blocks = claude_client._build_system_prompt(SimState(), [])
+        dynamic = blocks[1]["text"]
+        assert "RESPONSE RULES" not in dynamic
+
     def test_prompt_contains_persona(self, claude_client: ClaudeClient) -> None:
-        prompt = claude_client._build_system_prompt(SimState(), [])
+        prompt = _blocks_text(claude_client._build_system_prompt(SimState(), []))
         assert "MERLIN" in prompt
         assert "Captain" in prompt
 
@@ -224,23 +264,27 @@ class TestSystemPromptBuilding:
         claude_client: ClaudeClient,
         sim_state_cruise: SimState,
     ) -> None:
-        prompt = claude_client._build_system_prompt(sim_state_cruise, [])
+        prompt = _blocks_text(
+            claude_client._build_system_prompt(sim_state_cruise, [])
+        )
         assert "CRUISE" in prompt
         assert "6500ft" in prompt
 
     def test_prompt_contains_aircraft(self, claude_client: ClaudeClient) -> None:
         state = SimState(aircraft="Cessna 172 Skyhawk")
-        prompt = claude_client._build_system_prompt(state, [])
+        prompt = _blocks_text(claude_client._build_system_prompt(state, []))
         assert "Cessna 172 Skyhawk" in prompt
 
     def test_prompt_unknown_aircraft(self, claude_client: ClaudeClient) -> None:
         state = SimState(aircraft="")
-        prompt = claude_client._build_system_prompt(state, [])
+        prompt = _blocks_text(claude_client._build_system_prompt(state, []))
         assert "Unknown" in prompt
 
-    def test_prompt_includes_on_ground_status(self, claude_client: ClaudeClient) -> None:
+    def test_prompt_includes_on_ground_status(
+        self, claude_client: ClaudeClient
+    ) -> None:
         state = SimState()  # AGL=0 => on_ground=True
-        prompt = claude_client._build_system_prompt(state, [])
+        prompt = _blocks_text(claude_client._build_system_prompt(state, []))
         assert "On ground: True" in prompt
 
     def test_prompt_includes_autopilot_when_engaged(
@@ -252,7 +296,7 @@ class TestSystemPromptBuilding:
                 master=True, heading=270, altitude=6500, vertical_speed=-500,
             )
         )
-        prompt = claude_client._build_system_prompt(state, [])
+        prompt = _blocks_text(claude_client._build_system_prompt(state, []))
         assert "Autopilot:" in prompt
         assert "HDG 270" in prompt
         assert "ALT 6500" in prompt
@@ -262,7 +306,7 @@ class TestSystemPromptBuilding:
         claude_client: ClaudeClient,
     ) -> None:
         state = SimState(autopilot=AutopilotState(master=False))
-        prompt = claude_client._build_system_prompt(state, [])
+        prompt = _blocks_text(claude_client._build_system_prompt(state, []))
         assert "Autopilot:" not in prompt
 
     def test_prompt_includes_weather(self, claude_client: ClaudeClient) -> None:
@@ -272,13 +316,15 @@ class TestSystemPromptBuilding:
                 temperature_c=20, barometer_inhg=30.12,
             ),
         )
-        prompt = claude_client._build_system_prompt(state, [])
+        prompt = _blocks_text(claude_client._build_system_prompt(state, []))
         assert "Wind" in prompt
         assert "Vis" in prompt
         assert "Temp" in prompt
         assert "QNH" in prompt
 
-    def test_prompt_includes_context_docs(self, claude_client: ClaudeClient) -> None:
+    def test_prompt_includes_context_docs(
+        self, claude_client: ClaudeClient
+    ) -> None:
         docs = [
             {
                 "content": "Engine runup procedure for Cessna 172...",
@@ -289,7 +335,9 @@ class TestSystemPromptBuilding:
                 "metadata": {"source": "checklist.pdf"},
             },
         ]
-        prompt = claude_client._build_system_prompt(SimState(), docs)
+        prompt = _blocks_text(
+            claude_client._build_system_prompt(SimState(), docs)
+        )
         assert "RELEVANT REFERENCE MATERIAL" in prompt
         assert "poh.pdf" in prompt
         assert "Engine runup" in prompt
@@ -302,14 +350,20 @@ class TestSystemPromptBuilding:
             {"content": f"Doc {i}", "metadata": {"source": f"src{i}.pdf"}}
             for i in range(5)
         ]
-        prompt = claude_client._build_system_prompt(SimState(), docs)
+        prompt = _blocks_text(
+            claude_client._build_system_prompt(SimState(), docs)
+        )
         assert "src0.pdf" in prompt
         assert "src2.pdf" in prompt
         assert "src3.pdf" not in prompt
 
-    def test_prompt_truncates_long_content(self, claude_client: ClaudeClient) -> None:
+    def test_prompt_truncates_long_content(
+        self, claude_client: ClaudeClient
+    ) -> None:
         docs = [{"content": "X" * 1000, "metadata": {"source": "big.pdf"}}]
-        prompt = claude_client._build_system_prompt(SimState(), docs)
+        prompt = _blocks_text(
+            claude_client._build_system_prompt(SimState(), docs)
+        )
         # Content should be truncated to 500 chars
         assert "X" * 500 in prompt
         assert "X" * 501 not in prompt
@@ -318,7 +372,9 @@ class TestSystemPromptBuilding:
         self,
         claude_client: ClaudeClient,
     ) -> None:
-        prompt = claude_client._build_system_prompt(SimState(), [])
+        prompt = _blocks_text(
+            claude_client._build_system_prompt(SimState(), [])
+        )
         assert "RESPONSE RULES" in prompt
         assert "brevity saves lives" in prompt
         assert "STOP" in prompt
@@ -328,7 +384,7 @@ class TestSystemPromptBuilding:
         claude_client: ClaudeClient,
     ) -> None:
         state = SimState(flight_phase=FlightPhase.APPROACH)
-        prompt = claude_client._build_system_prompt(state, [])
+        prompt = _blocks_text(claude_client._build_system_prompt(state, []))
         assert "ULTRA-BRIEF" in prompt
         assert "CURRENT RESPONSE STYLE" in prompt
 
@@ -337,7 +393,7 @@ class TestSystemPromptBuilding:
         claude_client: ClaudeClient,
     ) -> None:
         state = SimState(flight_phase=FlightPhase.CRUISE)
-        prompt = claude_client._build_system_prompt(state, [])
+        prompt = _blocks_text(claude_client._build_system_prompt(state, []))
         assert "Conversational" in prompt
         assert "teach" in prompt
 
@@ -346,7 +402,7 @@ class TestSystemPromptBuilding:
         claude_client: ClaudeClient,
     ) -> None:
         state = SimState(flight_phase=FlightPhase.TAKEOFF)
-        prompt = claude_client._build_system_prompt(state, [])
+        prompt = _blocks_text(claude_client._build_system_prompt(state, []))
         assert "ULTRA-BRIEF" in prompt
         assert "Callouts only" in prompt
 

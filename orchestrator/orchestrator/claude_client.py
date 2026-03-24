@@ -291,6 +291,7 @@ class ClaudeClient:
         max_tokens: int = 1024,
         max_tokens_briefing: int = 2048,
         max_history: int = 20,
+        temperature: float = 0.7,
     ) -> None:
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
@@ -300,47 +301,68 @@ class ClaudeClient:
         self._max_history = max_history
         self._max_tokens = max_tokens
         self._max_tokens_briefing = max_tokens_briefing
+        self._temperature = temperature
 
     def _build_system_prompt(
         self,
         sim_state: SimState,
         context_docs: list[dict[str, Any]],
-    ) -> str:
-        parts = [MERLIN_PERSONA]
+    ) -> list[dict[str, Any]]:
+        # Block 1 (CACHED): Static persona + response pacing rules.
+        # These never change between calls, so we mark them for Anthropic
+        # prompt caching (~5 min TTL) to reduce TTFT and cost.
+        static_text = MERLIN_PERSONA + _RESPONSE_PACING
 
-        # Flight-phase-aware response style
+        # Block 2 (NOT cached): Dynamic content that changes every turn —
+        # flight phase style, telemetry, RAG docs.
+        dynamic_parts: list[str] = []
+
         phase = sim_state.flight_phase
         if phase in _PHASE_STYLE:
-            parts.append(f"\n--- CURRENT RESPONSE STYLE ---\n{_PHASE_STYLE[phase]}")
+            dynamic_parts.append(
+                f"--- CURRENT RESPONSE STYLE ---\n{_PHASE_STYLE[phase]}"
+            )
 
-        parts.append(f"\n--- CURRENT FLIGHT STATE ---\n{sim_state.telemetry_summary()}")
-        parts.append(f"Aircraft: {sim_state.aircraft or 'Unknown'}")
-        parts.append(f"On ground: {sim_state.on_ground}")
+        dynamic_parts.append(
+            f"--- CURRENT FLIGHT STATE ---\n{sim_state.telemetry_summary()}"
+        )
+        dynamic_parts.append(f"Aircraft: {sim_state.aircraft or 'Unknown'}")
+        dynamic_parts.append(f"On ground: {sim_state.on_ground}")
 
         if sim_state.autopilot.master:
             ap = sim_state.autopilot
-            parts.append(
+            dynamic_parts.append(
                 f"Autopilot: HDG {ap.heading:.0f} | ALT {ap.altitude:.0f} | "
                 f"VS {ap.vertical_speed:+.0f} | IAS {ap.airspeed:.0f}"
             )
 
         env = sim_state.environment
-        parts.append(
-            f"Weather: Wind {env.wind_direction:.0f}\u00b0/{env.wind_speed_kts:.0f}kt | "
-            f"Vis {env.visibility_sm:.0f}sm | Temp {env.temperature_c:.0f}\u00b0C | "
+        dynamic_parts.append(
+            f"Weather: Wind {env.wind_direction:.0f}\u00b0/"
+            f"{env.wind_speed_kts:.0f}kt | "
+            f"Vis {env.visibility_sm:.0f}sm | "
+            f"Temp {env.temperature_c:.0f}\u00b0C | "
             f"QNH {env.barometer_inhg:.2f}\"Hg"
         )
 
         if context_docs:
-            parts.append("\n--- RELEVANT REFERENCE MATERIAL ---")
+            dynamic_parts.append("--- RELEVANT REFERENCE MATERIAL ---")
             for doc in context_docs[:3]:
                 source = doc.get("metadata", {}).get("source", "unknown")
-                parts.append(f"[{source}]\n{doc['content'][:500]}")
+                dynamic_parts.append(f"[{source}]\n{doc['content'][:500]}")
 
-        # Append response pacing rules last so they take priority
-        parts.append(_RESPONSE_PACING)
+        blocks: list[dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": static_text,
+                "cache_control": {"type": "ephemeral"},
+            },
+        ]
+        dynamic_text = "\n".join(dynamic_parts)
+        if dynamic_text:
+            blocks.append({"type": "text", "text": dynamic_text})
 
-        return "\n".join(parts)
+        return blocks
 
     async def chat(
         self,
@@ -397,6 +419,7 @@ class ClaudeClient:
             async with self._client.messages.stream(
                 model=self._model,
                 max_tokens=effective_max_tokens,
+                temperature=self._temperature,
                 system=system,
                 messages=self._conversation,
                 tools=TOOL_DEFINITIONS,

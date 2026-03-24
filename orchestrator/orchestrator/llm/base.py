@@ -6,7 +6,6 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-
 # ---------------------------------------------------------------------------
 # Stream event types — a unified vocabulary for LLM streaming responses.
 # ---------------------------------------------------------------------------
@@ -89,7 +88,8 @@ class LLMClient(Protocol):
         *,
         tools: list[ToolDefinition] | None = None,
         max_tokens: int = 1024,
-        system: str | None = None,
+        temperature: float | None = None,
+        system: str | list[dict[str, Any]] | None = None,
         stop_sequences: list[str] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Stream a response from the LLM, yielding ``StreamEvent`` instances.
@@ -99,7 +99,10 @@ class LLMClient(Protocol):
                 (``{"role": "user"|"assistant", "content": ...}``).
             tools: Optional tool definitions (Anthropic schema).
             max_tokens: Maximum number of tokens to generate.
-            system: Optional system prompt text.
+            system: Optional system prompt — a plain string or a list of
+                content blocks (Anthropic ``TextBlockParam`` dicts).
+                The list form enables prompt caching via
+                ``cache_control`` markers.
             stop_sequences: Optional sequences that halt generation.
 
         Yields:

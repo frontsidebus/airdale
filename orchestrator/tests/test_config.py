@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from orchestrator.config import Settings, load_settings
@@ -20,7 +18,7 @@ class TestSettingsDefaults:
     def test_default_whisper_model(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("WHISPER_MODEL", raising=False)
         s = Settings(anthropic_api_key="sk-test")
-        assert s.whisper_model == "medium"
+        assert s.whisper_model == "large-v3-turbo"
 
     def test_default_whisper_url(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("WHISPER_URL", raising=False)
@@ -57,6 +55,11 @@ class TestSettingsDefaults:
         s = Settings(anthropic_api_key="sk-test")
         assert s.voice_id == ""
 
+    def test_default_claude_temperature(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CLAUDE_TEMPERATURE", raising=False)
+        s = Settings(anthropic_api_key="sk-test")
+        assert s.claude_temperature == 0.7
+
 
 class TestSettingsEnvOverrides:
     """Verify that environment variables override defaults."""
@@ -84,6 +87,11 @@ class TestSettingsEnvOverrides:
     def test_env_overrides_api_key(self, mock_env_vars: dict[str, str]) -> None:
         s = Settings()
         assert s.anthropic_api_key == "sk-ant-test-key-000"
+
+    def test_env_overrides_claude_temperature(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_TEMPERATURE", "0.3")
+        s = Settings()
+        assert s.claude_temperature == 0.3
 
 
 class TestSettingsValidation:

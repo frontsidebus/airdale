@@ -75,6 +75,7 @@ def create_llm_client(settings: Settings) -> LLMClient:
         return AnthropicClient(
             api_key=settings.anthropic_api_key,
             model=settings.claude_model,
+            temperature=settings.claude_temperature,
         )
 
     if backend == "local":

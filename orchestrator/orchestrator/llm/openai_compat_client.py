@@ -55,12 +55,14 @@ def _convert_tools(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
 
 def _convert_messages(
     messages: list[dict[str, Any]],
-    system: str | None,
+    system: str | list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
     """Convert Anthropic-style messages to OpenAI chat format.
 
     Key differences handled:
     - Anthropic uses a separate ``system`` parameter; OpenAI uses a system message.
+      When ``system`` is a list of content blocks (Anthropic prompt-caching
+      format), the text from each block is concatenated into a single string.
     - Anthropic content can be a list of typed blocks; OpenAI expects a string
       for simple text or a list of content parts for multimodal.
     - Anthropic ``tool_use`` / ``tool_result`` blocks map to OpenAI
@@ -69,7 +71,16 @@ def _convert_messages(
     converted: list[dict[str, Any]] = []
 
     if system:
-        converted.append({"role": "system", "content": system})
+        # Flatten list-of-blocks format (Anthropic prompt caching) to a
+        # single string for OpenAI-compatible endpoints.
+        if isinstance(system, list):
+            system_text = "\n".join(
+                block["text"] for block in system if block.get("type") == "text"
+            )
+        else:
+            system_text = system
+        if system_text:
+            converted.append({"role": "system", "content": system_text})
 
     for msg in messages:
         role = msg["role"]
@@ -176,7 +187,8 @@ class OpenAICompatClient:
         *,
         tools: list[ToolDefinition] | None = None,
         max_tokens: int = 1024,
-        system: str | None = None,
+        temperature: float | None = None,
+        system: str | list[dict[str, Any]] | None = None,
         stop_sequences: list[str] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Stream a response from an OpenAI-compatible endpoint.
@@ -192,6 +204,8 @@ class OpenAICompatClient:
             "messages": oai_messages,
             "stream": True,
         }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
         if tools:
             kwargs["tools"] = _convert_tools(tools)
         if stop_sequences:

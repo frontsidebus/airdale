@@ -25,6 +25,7 @@ from .sim_client import (
     SimConnectClient,
     SimState,
 )
+from .tts import create_tts_client
 from .voice import InputMode, VoiceInput, VoiceOutput
 
 logger = logging.getLogger(__name__)
@@ -56,10 +57,12 @@ class Orchestrator:
             whisper_url=settings.whisper_url,
             mode=InputMode.PUSH_TO_TALK,
         )
-        self._voice_output = VoiceOutput(
-            api_key=settings.elevenlabs_api_key,
-            voice_id=settings.voice_id,
+        self._tts_client = (
+            create_tts_client(settings) if settings.tts_configured else None
         )
+        self._voice_output = VoiceOutput(
+            tts_client=self._tts_client,
+        ) if self._tts_client else None
         self._claude = ClaudeClient(
             api_key=settings.anthropic_api_key,
             model=settings.claude_model,
@@ -68,12 +71,11 @@ class Orchestrator:
             max_tokens=settings.claude_max_tokens,
             max_tokens_briefing=settings.claude_max_tokens_briefing,
             max_history=settings.claude_max_history,
+            temperature=settings.claude_temperature,
         )
         self._running = False
         self._sim_connected = False
-        self._tts_enabled = bool(
-            settings.elevenlabs_api_key and settings.voice_id
-        )
+        self._tts_enabled = settings.tts_configured
 
         # Health monitoring
         self._health = HealthMonitor()
@@ -319,7 +321,7 @@ class Orchestrator:
                 print()  # newline after response
 
                 # TTS output (non-blocking)
-                if self._tts_enabled and full_response:
+                if self._tts_enabled and self._voice_output and full_response:
                     task = asyncio.create_task(
                         self._voice_output.speak(full_response)
                     )

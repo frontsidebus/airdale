@@ -53,6 +53,10 @@ class Settings(BaseSettings):
         default=20,
         description="Max message pairs to retain in conversation history",
     )
+    claude_temperature: float = Field(
+        default=0.7,
+        description="Temperature for Claude responses (0.0-1.0, lower = more deterministic)",
+    )
 
     # --- SimConnect bridge ---------------------------------------------------
     simconnect_ws_host: str = Field(
@@ -70,12 +74,26 @@ class Settings(BaseSettings):
 
     # --- Whisper STT ---------------------------------------------------------
     whisper_model: str = Field(
-        default="medium",
+        default="large-v3-turbo",
         description="Whisper model size (used by Docker service, not locally)",
     )
     whisper_url: str = Field(
         default="http://localhost:9090",
         description="URL of the local Whisper ASR HTTP service",
+    )
+
+    # --- TTS backend ----------------------------------------------------------
+    tts_backend: str = Field(
+        default="elevenlabs",
+        description="TTS backend: 'elevenlabs' for cloud API, 'local' for Kokoro",
+    )
+    tts_local_url: str = Field(
+        default="http://localhost:9091",
+        description="Base URL for local Kokoro TTS server",
+    )
+    tts_voice_id_local: str = Field(
+        default="af_heart",
+        description="Voice ID for local Kokoro TTS engine",
     )
 
     # --- ElevenLabs TTS ------------------------------------------------------
@@ -114,16 +132,23 @@ class Settings(BaseSettings):
     def _build_derived(self) -> Settings:
         # Construct the bridge URL from host + port when not explicitly set
         if not self.simconnect_bridge_url:
-            self.simconnect_bridge_url = (
-                f"ws://{self.simconnect_ws_host}:{self.simconnect_ws_port}"
-            )
+            self.simconnect_bridge_url = f"ws://{self.simconnect_ws_host}:{self.simconnect_ws_port}"
         # Alias: accept voice_id from env as ELEVENLABS_VOICE_ID
         return self
 
     @property
     def voice_id(self) -> str:
         """Convenience alias so callers can use settings.voice_id."""
+        if self.tts_backend == "local":
+            return self.tts_voice_id_local
         return self.elevenlabs_voice_id
+
+    @property
+    def tts_configured(self) -> bool:
+        """Whether the selected TTS backend has all required settings."""
+        if self.tts_backend == "local":
+            return bool(self.tts_local_url)
+        return bool(self.elevenlabs_api_key and self.elevenlabs_voice_id)
 
 
 def load_settings() -> Settings:

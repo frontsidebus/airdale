@@ -29,9 +29,10 @@ class AnthropicClient:
     orchestrator layer (``ClaudeClient``).
     """
 
-    def __init__(self, api_key: str, model: str) -> None:
+    def __init__(self, api_key: str, model: str, temperature: float = 0.7) -> None:
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
+        self._temperature = temperature
 
     @property
     def model(self) -> str:
@@ -43,7 +44,8 @@ class AnthropicClient:
         *,
         tools: list[ToolDefinition] | None = None,
         max_tokens: int = 1024,
-        system: str | None = None,
+        temperature: float | None = None,
+        system: str | list[dict[str, Any]] | None = None,
         stop_sequences: list[str] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Stream a response from the Anthropic Messages API.
@@ -52,9 +54,11 @@ class AnthropicClient:
         ``StreamEvent`` instances that the orchestrator can consume
         without any Anthropic-specific knowledge.
         """
+        effective_temp = temperature if temperature is not None else self._temperature
         kwargs: dict[str, Any] = {
             "model": self._model,
             "max_tokens": max_tokens,
+            "temperature": effective_temp,
             "messages": messages,
         }
         if system:
