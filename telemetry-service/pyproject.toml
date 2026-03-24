@@ -22,6 +22,9 @@ dev = [
     "httpx>=0.25.0",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["telemetry"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
