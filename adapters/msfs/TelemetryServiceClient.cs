@@ -265,7 +265,7 @@ public sealed class TelemetryServiceClient : IDisposable
     /// Converts the internal SimState to the universal TelemetryEnvelope format.
     /// Core fields map directly; aircraft-specific data goes into extensions.
     /// </summary>
-    private TelemetryEnvelope ConvertToEnvelope(SimState state)
+    internal TelemetryEnvelope ConvertToEnvelope(SimState state)
     {
         return new TelemetryEnvelope
         {

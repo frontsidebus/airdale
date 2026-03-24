@@ -17,6 +17,19 @@ services:
     environment:
       - LOG_LEVEL=debug
 
+  telemetry-service:
+    build:
+      context: ./telemetry-service
+      dockerfile: Dockerfile
+    # Mount source code for hot-reload during development
+    volumes:
+      - ./telemetry-service/telemetry:/app/telemetry:ro
+    environment:
+      - LOG_LEVEL=DEBUG
+      - PYTHONDONTWRITEBYTECODE=1
+      # Enables auto-reload if the entrypoint supports it
+      - MERLIN_DEV_MODE=true
+
   orchestrator:
     build:
       context: ./orchestrator
@@ -29,3 +42,5 @@ services:
       - PYTHONDONTWRITEBYTECODE=1
       # Enables auto-reload if the entrypoint supports it
       - MERLIN_DEV_MODE=true
+      # Dev telemetry service URL (same as production, listed for visibility)
+      - TELEMETRY_SERVICE_URL=ws://telemetry-service:8080/ws/telemetry
