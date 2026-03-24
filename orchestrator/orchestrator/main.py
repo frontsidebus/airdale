@@ -68,6 +68,7 @@ class Orchestrator:
             max_tokens=settings.claude_max_tokens,
             max_tokens_briefing=settings.claude_max_tokens_briefing,
             max_history=settings.claude_max_history,
+            temperature=settings.claude_temperature,
         )
         self._running = False
         self._sim_connected = False
