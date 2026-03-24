@@ -16,6 +16,7 @@ import base64
 import json
 import logging
 import math
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,10 @@ phase_detector: FlightPhaseDetector | None = None
 
 # Track whether we have a live connection to the SimConnect bridge
 _sim_connected: bool = False
+
+# Lightweight bridge liveness tracking -- updated by ws_telemetry proxy
+_bridge_last_seen: float = 0.0
+_bridge_connected: bool = False
 
 # Confidence threshold: transcriptions below this trigger a retry or warning
 _LOW_CONFIDENCE_THRESHOLD = 0.4
@@ -204,6 +209,10 @@ async def lifespan(app: FastAPI):
         model=settings.claude_model,
         sim_client=sim_client,
         context_store=context_store,
+        max_tokens=settings.claude_max_tokens,
+        max_tokens_briefing=settings.claude_max_tokens_briefing,
+        max_history=settings.claude_max_history,
+        temperature=settings.claude_temperature,
     )
 
     # Pre-populate TTS cache in the background (non-blocking)
@@ -290,12 +299,15 @@ async def get_status():
 
     chromadb_ok = context_store.available if context_store else False
 
+    # Bridge is considered connected if telemetry was received recently
+    # (updated by ws_telemetry proxy), OR the startup connection succeeded.
+    bridge_ok = (
+        (_bridge_connected and (time.monotonic() - _bridge_last_seen) < 10.0)
+        or _sim_connected
+    )
+
     return {
-        "sim_connected": (
-            _sim_connected
-            and sim_client is not None
-            and sim_client.state.connected
-        ),
+        "sim_connected": bridge_ok,
         "chromadb_available": chromadb_ok,
         "chromadb_documents": (
             context_store.document_count if context_store else 0
@@ -409,6 +421,7 @@ async def ws_telemetry(ws: WebSocket):
     proxies telemetry as JSON. Falls back to polling if the bridge
     subscriber model isn't active.
     """
+    global _bridge_last_seen, _bridge_connected
     await ws.accept()
     logger.info("Telemetry WebSocket client connected")
 
@@ -434,6 +447,8 @@ async def ws_telemetry(ws: WebSocket):
                             data = json.loads(raw_msg)
                             # Use the bridge's SimConnect status, not WS status
                             sim_active = data.get("connected", False)
+                            _bridge_last_seen = time.monotonic()
+                            _bridge_connected = sim_active
                             # Detect flight phase
                             if phase_detector and "position" in data:
                                 try:

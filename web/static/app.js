@@ -62,6 +62,7 @@
     audioQueue: [],
     isPlayingAudio: false,
     currentAudio: null,
+    ttsAccumulator: [],       // accumulate binary TTS chunks per response
     ttsVolume: 0.8,
     seenMessageIds: new Set(),      // dedup after reconnect
     messageIdCounter: 0,
@@ -586,8 +587,9 @@
       state.currentAudio = null;
     }
 
-    // Clear pending audio queue
+    // Clear pending audio queue and any accumulating TTS chunks
     state.audioQueue.length = 0;
+    state.ttsAccumulator.length = 0;
     state.isPlayingAudio = false;
 
     if (state.voiceMode === 'speaking') {
@@ -618,9 +620,9 @@
     ws.binaryType = 'blob';
 
     ws.addEventListener('message', (evt) => {
-      // Binary data = TTS audio chunk
+      // Binary data = TTS audio chunk — accumulate until response ends
       if (evt.data instanceof Blob) {
-        queueAudioBlob(evt.data);
+        if (evt.data.size > 0) state.ttsAccumulator.push(evt.data);
         return;
       }
       // Buffer incoming messages for backpressure handling
@@ -705,8 +707,8 @@
       case 'done':
         // Server signals end of Claude response
         finishStreamingMessage();
-        // Flush any buffered audio chunks so they play immediately
-        flushAudioChunks();
+        // Flush accumulated TTS chunks as a single blob for gapless playback
+        flushTtsAccumulator();
         // Stay in speaking mode if TTS is still playing, otherwise idle
         if (!state.isPlayingAudio && state.audioQueue.length === 0) {
           setVoiceMode('idle');
@@ -725,7 +727,7 @@
 
       case 'stream_end':
         finishStreamingMessage();
-        flushAudioChunks();
+        flushTtsAccumulator();
         if (!state.isPlayingAudio && state.audioQueue.length === 0) {
           setVoiceMode('idle');
         }
@@ -763,9 +765,8 @@
         // Server confirms the active response was cancelled (barge-in)
         finishStreamingMessage();
         removeThinkingIndicator();
-        // Clear any pending audio on interrupt
-        _pendingChunks = [];
-        if (_chunkMergeTimer) { clearTimeout(_chunkMergeTimer); _chunkMergeTimer = null; }
+        // Discard any accumulated TTS chunks for the cancelled response
+        state.ttsAccumulator.length = 0;
         break;
 
       case 'error':
@@ -1435,8 +1436,8 @@
   //  AUDIO PLAYBACK (with volume normalization)
   // ═══════════════════════════════════════════════════════
 
-  // Shared AudioContext for decoding and normalized playback.
-  // Audio chain: source → clipGain (normalization) → compressor → masterGain (volume slider) → dest
+  // Shared AudioContext for decoding and playback.
+  // Audio chain: source → fadeGain (5ms click suppression) → compressor → masterGain (volume slider) → dest
   let _playbackCtx = null;
   let _playbackGain = null;
   let _compressor = null;
@@ -1447,13 +1448,13 @@
     if (!_playbackCtx || _playbackCtx.state === 'closed') {
       _playbackCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-      // Gentle compressor — avoid aggressive settings that amplify MP3 boundary artifacts
+      // Gentle dynamics compressor — just tame peaks, don't pump
       _compressor = _playbackCtx.createDynamicsCompressor();
       _compressor.threshold.value = -12;  // dB — only compress loud peaks
-      _compressor.knee.value = 20;        // dB — wide soft knee for smooth response
-      _compressor.ratio.value = 3;        // 3:1 — gentle compression
-      _compressor.attack.value = 0.010;   // 10ms — slower attack avoids crackling on transients
-      _compressor.release.value = 0.25;   // 250ms — smooth release
+      _compressor.knee.value = 20;        // dB — wide soft knee for transparency
+      _compressor.ratio.value = 3;        // 3:1 — gentle limiting
+      _compressor.attack.value = 0.010;   // 10ms — let transients through naturally
+      _compressor.release.value = 0.250;  // 250ms — smooth release avoids pumping
 
       // Master volume controlled by slider
       _playbackGain = _playbackCtx.createGain();
@@ -1495,41 +1496,17 @@
     return Math.sqrt(sumSq / (count || 1));
   }
 
-  // Accumulate small MP3 chunks before decoding to avoid boundary artifacts.
-  // Each tiny MP3 fragment has codec padding that causes pops when decoded
-  // and played individually. Merging into larger blobs eliminates this.
-  const _CHUNK_MERGE_DELAY_MS = 150;  // Wait this long for more chunks before playing
-  let _chunkMergeTimer = null;
-  let _pendingChunks = [];
-
-  function queueAudioBlob(blob) {
-    _pendingChunks.push(blob);
-
-    // Debounce: wait for more chunks to arrive, then merge and play
-    if (_chunkMergeTimer) clearTimeout(_chunkMergeTimer);
-    _chunkMergeTimer = setTimeout(() => {
-      _chunkMergeTimer = null;
-      if (_pendingChunks.length > 0) {
-        const merged = new Blob(_pendingChunks, { type: 'audio/mpeg' });
-        _pendingChunks = [];
-        state.audioQueue.push(merged);
-        if (!state.isPlayingAudio) playNextAudio();
-      }
-    }, _CHUNK_MERGE_DELAY_MS);
+  function flushTtsAccumulator() {
+    if (state.ttsAccumulator.length === 0) return;
+    // Concatenated MP3 chunks form a valid MP3 stream — one decode, one play.
+    const combined = new Blob(state.ttsAccumulator, { type: 'audio/mpeg' });
+    state.ttsAccumulator.length = 0;
+    queueAudioBlob(combined);
   }
 
-  // Force-flush any pending chunks (called when response ends)
-  function flushAudioChunks() {
-    if (_chunkMergeTimer) {
-      clearTimeout(_chunkMergeTimer);
-      _chunkMergeTimer = null;
-    }
-    if (_pendingChunks.length > 0) {
-      const merged = new Blob(_pendingChunks, { type: 'audio/mpeg' });
-      _pendingChunks = [];
-      state.audioQueue.push(merged);
-      if (!state.isPlayingAudio) playNextAudio();
-    }
+  function queueAudioBlob(blob) {
+    state.audioQueue.push(blob);
+    if (!state.isPlayingAudio) playNextAudio();
   }
 
   async function playNextAudio() {
@@ -1549,29 +1526,30 @@
       const ctx = getPlaybackContext();
       const arrayBuf = await blob.arrayBuffer();
       const audioBuffer = await ctx.decodeAudioData(arrayBuf);
-
-      // Measure RMS of active (non-silent) audio and compute gain
-      const rms = measureActiveRMS(audioBuffer);
-      const gain = rms > 0.005 ? TARGET_RMS / rms : 1.0;
-      // Gentle clamp to avoid amplifying noise
-      const clampedGain = Math.min(Math.max(gain, 0.8), 2.0);
+      const duration = audioBuffer.duration;
 
       // Update the master volume from slider
       _playbackGain.gain.value = state.ttsVolume;
 
-      // Per-clip gain for normalization → feeds into compressor → master gain
-      const clipGain = ctx.createGain();
-      clipGain.gain.value = clampedGain;
-      clipGain.connect(_compressor);
+      // Envelope: 10ms fade-in, 10ms fade-out — eliminates start/end clicks
+      const envelope = ctx.createGain();
+      const t0 = ctx.currentTime;
+      envelope.gain.setValueAtTime(0.0, t0);
+      envelope.gain.linearRampToValueAtTime(1.0, t0 + 0.010);
+      if (duration > 0.020) {
+        envelope.gain.setValueAtTime(1.0, t0 + duration - 0.010);
+        envelope.gain.linearRampToValueAtTime(0.0, t0 + duration);
+      }
+      envelope.connect(_compressor);
 
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(clipGain);
+      source.connect(envelope);
 
       state.currentAudio = source;
 
       source.addEventListener('ended', () => {
-        clipGain.disconnect();
+        envelope.disconnect();
         playNextAudio();
       }, { once: true });
 
