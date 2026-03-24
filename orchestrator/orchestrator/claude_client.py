@@ -12,7 +12,7 @@ from typing import Any
 import anthropic
 
 from .context_store import ContextStore
-from .sim_client import FlightPhase, SimConnectClient, SimState
+from .sim_client import FlightPhase, SimState, TelemetryClient
 from .tools import (
     create_flight_plan,
     get_checklist,
@@ -286,11 +286,12 @@ class ClaudeClient:
         self,
         api_key: str,
         model: str,
-        sim_client: SimConnectClient,
+        sim_client: TelemetryClient,
         context_store: ContextStore,
         max_tokens: int = 1024,
         max_tokens_briefing: int = 2048,
         max_history: int = 20,
+        temperature: float = 0.7,
     ) -> None:
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
@@ -300,47 +301,67 @@ class ClaudeClient:
         self._max_history = max_history
         self._max_tokens = max_tokens
         self._max_tokens_briefing = max_tokens_briefing
+        self._temperature = temperature
 
     def _build_system_prompt(
         self,
         sim_state: SimState,
         context_docs: list[dict[str, Any]],
-    ) -> str:
-        parts = [MERLIN_PERSONA]
+    ) -> list[dict[str, Any]]:
+        # Block 1 (cached): static persona + response pacing rules.
+        # These never change between calls, so we mark them for ephemeral
+        # caching to reduce time-to-first-token and API cost.
+        static_text = MERLIN_PERSONA + _RESPONSE_PACING
+        static_block: dict[str, Any] = {
+            "type": "text",
+            "text": static_text,
+            "cache_control": {"type": "ephemeral"},
+        }
+
+        # Block 2 (not cached): dynamic flight context that changes per turn.
+        dynamic_parts: list[str] = []
 
         # Flight-phase-aware response style
         phase = sim_state.flight_phase
         if phase in _PHASE_STYLE:
-            parts.append(f"\n--- CURRENT RESPONSE STYLE ---\n{_PHASE_STYLE[phase]}")
+            dynamic_parts.append(
+                f"\n--- CURRENT RESPONSE STYLE ---\n{_PHASE_STYLE[phase]}"
+            )
 
-        parts.append(f"\n--- CURRENT FLIGHT STATE ---\n{sim_state.telemetry_summary()}")
-        parts.append(f"Aircraft: {sim_state.aircraft or 'Unknown'}")
-        parts.append(f"On ground: {sim_state.on_ground}")
+        dynamic_parts.append(
+            f"\n--- CURRENT FLIGHT STATE ---\n{sim_state.telemetry_summary()}"
+        )
+        dynamic_parts.append(f"Aircraft: {sim_state.aircraft or 'Unknown'}")
+        dynamic_parts.append(f"On ground: {sim_state.on_ground}")
 
         if sim_state.autopilot.master:
             ap = sim_state.autopilot
-            parts.append(
+            dynamic_parts.append(
                 f"Autopilot: HDG {ap.heading:.0f} | ALT {ap.altitude:.0f} | "
                 f"VS {ap.vertical_speed:+.0f} | IAS {ap.airspeed:.0f}"
             )
 
         env = sim_state.environment
-        parts.append(
-            f"Weather: Wind {env.wind_direction:.0f}\u00b0/{env.wind_speed_kts:.0f}kt | "
-            f"Vis {env.visibility_sm:.0f}sm | Temp {env.temperature_c:.0f}\u00b0C | "
+        dynamic_parts.append(
+            f"Weather: Wind {env.wind_direction:.0f}\u00b0/"
+            f"{env.wind_speed_kts:.0f}kt | "
+            f"Vis {env.visibility_sm:.0f}sm | "
+            f"Temp {env.temperature_c:.0f}\u00b0C | "
             f"QNH {env.barometer_inhg:.2f}\"Hg"
         )
 
         if context_docs:
-            parts.append("\n--- RELEVANT REFERENCE MATERIAL ---")
+            dynamic_parts.append("\n--- RELEVANT REFERENCE MATERIAL ---")
             for doc in context_docs[:3]:
                 source = doc.get("metadata", {}).get("source", "unknown")
-                parts.append(f"[{source}]\n{doc['content'][:500]}")
+                dynamic_parts.append(f"[{source}]\n{doc['content'][:500]}")
 
-        # Append response pacing rules last so they take priority
-        parts.append(_RESPONSE_PACING)
+        dynamic_block: dict[str, Any] = {
+            "type": "text",
+            "text": "\n".join(dynamic_parts),
+        }
 
-        return "\n".join(parts)
+        return [static_block, dynamic_block]
 
     async def chat(
         self,
@@ -401,6 +422,7 @@ class ClaudeClient:
                 messages=self._conversation,
                 tools=TOOL_DEFINITIONS,
                 stop_sequences=STOP_SEQUENCES,
+                temperature=self._temperature,
             ) as stream:
                 async for event in stream:
                     if event.type == "content_block_start":

@@ -1,6 +1,6 @@
-"""Integration tests for the SimConnectClient WebSocket protocol.
+"""Integration tests for the TelemetryClient WebSocket protocol.
 
-These tests run a mock WebSocket server (no real MSFS needed) and verify
+These tests run a mock telemetry service (no real sim needed) and verify
 that the Python client correctly connects, receives state, and handles
 edge cases.
 """
@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 import websockets
 
-from orchestrator.sim_client import FlightPhase, SimConnectClient, SimState
+from orchestrator.sim_client import FlightPhase, TelemetryClient, SimState
 
 # Import the mock server from conftest
 from .conftest import MockSimConnectServer
@@ -32,7 +32,7 @@ class TestConnection:
         self, mock_simconnect_server: MockSimConnectServer
     ) -> None:
         """Client should connect and cleanly disconnect."""
-        client = SimConnectClient(mock_simconnect_server.url)
+        client = TelemetryClient(mock_simconnect_server.url)
         await client.connect()
         assert client._ws is not None
         await client.disconnect()
@@ -40,7 +40,7 @@ class TestConnection:
 
     async def test_connect_to_invalid_url_raises(self) -> None:
         """Connecting to a non-existent server should raise."""
-        client = SimConnectClient("ws://127.0.0.1:1")  # almost certainly nothing here
+        client = TelemetryClient("ws://127.0.0.1:1")  # almost certainly nothing here
         with pytest.raises(Exception):
             await client.connect()
 
@@ -48,7 +48,7 @@ class TestConnection:
         self, mock_simconnect_server: MockSimConnectServer
     ) -> None:
         """Client should handle repeated connect/disconnect."""
-        client = SimConnectClient(mock_simconnect_server.url)
+        client = TelemetryClient(mock_simconnect_server.url)
         for _ in range(3):
             await client.connect()
             await client.disconnect()
@@ -64,7 +64,7 @@ class TestGetState:
         self, mock_simconnect_server: MockSimConnectServer
     ) -> None:
         """get_state should return a valid SimState parsed from the server response."""
-        client = SimConnectClient(mock_simconnect_server.url)
+        client = TelemetryClient(mock_simconnect_server.url)
         await client.connect()
         try:
             state = await client.get_state()
@@ -78,7 +78,7 @@ class TestGetState:
 
     async def test_get_state_without_connection_raises(self) -> None:
         """get_state before connect() should raise ConnectionError."""
-        client = SimConnectClient("ws://127.0.0.1:9999")
+        client = TelemetryClient("ws://127.0.0.1:9999")
         with pytest.raises(ConnectionError, match="Not connected"):
             await client.get_state()
 
@@ -86,7 +86,7 @@ class TestGetState:
         self, mock_simconnect_server: MockSimConnectServer
     ) -> None:
         """After get_state, client.state should reflect the fetched data."""
-        client = SimConnectClient(mock_simconnect_server.url)
+        client = TelemetryClient(mock_simconnect_server.url)
         await client.connect()
         try:
             # Initial state is default (empty)
@@ -107,7 +107,7 @@ class TestGetState:
         mock_simconnect_server.sim_state["aircraft_title"] = "Piper PA-28 Cherokee"
         mock_simconnect_server.sim_state["on_ground"] = True
 
-        client = SimConnectClient(mock_simconnect_server.url)
+        client = TelemetryClient(mock_simconnect_server.url)
         await client.connect()
         try:
             state = await client.get_state()
@@ -127,7 +127,7 @@ class TestStateSubscription:
         self, mock_simconnect_server: MockSimConnectServer
     ) -> None:
         """Subscribed callbacks should fire when the server broadcasts state_update."""
-        client = SimConnectClient(mock_simconnect_server.url)
+        client = TelemetryClient(mock_simconnect_server.url)
         await client.connect()
 
         received_states: list[SimState] = []
@@ -154,7 +154,7 @@ class TestStateSubscription:
         self, mock_simconnect_server: MockSimConnectServer
     ) -> None:
         """Multiple subscribers should all receive the same update."""
-        client = SimConnectClient(mock_simconnect_server.url)
+        client = TelemetryClient(mock_simconnect_server.url)
         await client.connect()
 
         results_a: list[SimState] = []
@@ -183,7 +183,7 @@ class TestStateSubscription:
         self, mock_simconnect_server: MockSimConnectServer
     ) -> None:
         """A failing subscriber callback should not kill the listen loop."""
-        client = SimConnectClient(mock_simconnect_server.url)
+        client = TelemetryClient(mock_simconnect_server.url)
         await client.connect()
 
         good_results: list[SimState] = []
@@ -218,7 +218,7 @@ class TestReconnection:
         self, mock_simconnect_server: MockSimConnectServer
     ) -> None:
         """When the server closes, the listen loop should exit gracefully."""
-        client = SimConnectClient(mock_simconnect_server.url)
+        client = TelemetryClient(mock_simconnect_server.url)
         await client.connect()
 
         await asyncio.sleep(0.1)
@@ -233,7 +233,7 @@ class TestReconnection:
 
     async def test_disconnect_is_safe_when_not_connected(self) -> None:
         """Calling disconnect when never connected should not raise."""
-        client = SimConnectClient("ws://127.0.0.1:1")
+        client = TelemetryClient("ws://127.0.0.1:1")
         await client.disconnect()  # should be a no-op
 
     async def test_reconnect_after_server_restart(self) -> None:
@@ -242,7 +242,7 @@ class TestReconnection:
         port = await server.start()
         url = server.url
 
-        client = SimConnectClient(url)
+        client = TelemetryClient(url)
         await client.connect()
         state1 = await client.get_state()
         assert state1.aircraft_title == "Cessna 172S Skyhawk"
@@ -256,7 +256,7 @@ class TestReconnection:
         await server2.start()
 
         try:
-            client2 = SimConnectClient(server2.url)
+            client2 = TelemetryClient(server2.url)
             await client2.connect()
             state2 = await client2.get_state()
             assert state2.aircraft_title == "Diamond DA40"

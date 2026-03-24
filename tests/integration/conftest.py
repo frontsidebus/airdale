@@ -262,8 +262,8 @@ _DEFAULT_SIM_STATE: dict[str, Any] = {
 }
 
 
-class MockSimConnectServer:
-    """A lightweight WebSocket server that mimics the C# SimConnect bridge.
+class MockTelemetryServer:
+    """A lightweight WebSocket server that mimics the telemetry service.
 
     Supports:
     - ``get_state`` requests (replies with current sim state)
@@ -343,9 +343,13 @@ class MockSimConnectServer:
 
 
 @pytest_asyncio.fixture()
-async def mock_simconnect_server() -> AsyncGenerator[MockSimConnectServer, None]:
-    """Start a mock SimConnect WebSocket server for the duration of a test."""
-    server = MockSimConnectServer()
+async def mock_simconnect_server() -> AsyncGenerator[MockTelemetryServer, None]:
+    """Start a mock telemetry WebSocket server for the duration of a test."""
+    server = MockTelemetryServer()
     await server.start()
     yield server
     await server.stop()
+
+
+# Backward compatibility alias
+MockSimConnectServer = MockTelemetryServer

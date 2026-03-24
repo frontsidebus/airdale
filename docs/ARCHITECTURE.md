@@ -1,4 +1,4 @@
-# MERLIN v1.1 -- Architecture Documentation
+# MERLIN v2.0 -- Architecture Documentation
 
 Technical deep-dive into MERLIN's system design, component responsibilities, data flows, and implementation decisions.
 
@@ -9,13 +9,32 @@ Technical deep-dive into MERLIN's system design, component responsibilities, dat
 ```
 +-------------------+         SimConnect (COM)            +------------------------+
 |                   | <---------------------------------> |                        |
-|   MSFS 2024       |   Position, Attitude, Speeds,       |   SimConnect Bridge    |
-|   (Simulator)     |   Engines, Fuel, Environment,       |   (C# / .NET 8)       |
-|                   |   Autopilot, Radios, Surfaces       |   Event-driven pump   |
+|   MSFS 2024       |   Position, Attitude, Speeds,       |   MSFS Adapter         |
+|   (Simulator)     |   Engines, Fuel, Environment,       |   (adapters/msfs/)     |
+|                   |   Autopilot, Radios, Surfaces       |   C# / .NET 8          |
 +-------------------+                                     +----------+-------------+
                                                                      |
-                                                          WebSocket (JSON)
-                                                          ws://localhost:8080
++-------------------+         X-Plane UDP (future)        +----------+-------------+
+|   X-Plane 12      | <--------------------------------> |   X-Plane Adapter      |
++-------------------+                                     +----------+-------------+
+                                                                     |
++-------------------+         DCS Export.lua (future)     +----------+-------------+
+|   DCS World       | <--------------------------------> |   DCS Adapter          |
++-------------------+                                     +----------+-------------+
+                                                                     |
+                                                          WebSocket push (JSON)
+                                                          ws://localhost:8081/ws/ingest
+                                                                     |
+                                                                     v
+                                                          +------------------------+
+                                                          |  Telemetry Service     |
+                                                          |  (telemetry-service/)  |
+                                                          |  Python / FastAPI      |
+                                                          |  Universal hub         |
+                                                          +----------+-------------+
+                                                                     |
+                                                          WebSocket broadcast (JSON)
+                                                          ws://localhost:8080/ws/telemetry
                                                                      |
                     +------------------------------------------------+
                     |
@@ -26,8 +45,8 @@ Technical deep-dive into MERLIN's system design, component responsibilities, dat
 |                     http://localhost:3838                                          |
 |                                                                                   |
 |   +----------------+    +------------------+    +--------------+                  |
-|   |  SimConnect     |    |  Claude Client   |    |  Flight      |                  |
-|   |  Client         |    |  (Anthropic API) |    |  Phase       |                  |
+|   |  Telemetry      |    |  Claude Client   |    |  Flight      |                  |
+|   |  Client          |    |  (Anthropic API) |    |  Phase       |                  |
 |   |  (websockets)   |    |  Tool dispatch   |    |  Detector    |                  |
 |   |  Delta detect   |    |  Token budgeting |    |  Hysteresis  |                  |
 |   +----------------+    +------------------+    +--------------+                  |

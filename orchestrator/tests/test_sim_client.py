@@ -1,4 +1,4 @@
-"""Tests for orchestrator.sim_client -- SimState model and SimConnectClient."""
+"""Tests for orchestrator.sim_client -- SimState model and TelemetryClient."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from orchestrator.sim_client import (
     HealthMonitor,
     Position,
     RadioState,
-    SimConnectClient,
+    TelemetryClient,
     SimState,
     Speeds,
     SubsystemHealth,
@@ -174,25 +174,25 @@ class TestSimStateTelemetrySummary:
 
 
 # ---------------------------------------------------------------------------
-# SimConnectClient
+# TelemetryClient
 # ---------------------------------------------------------------------------
 
 
-class TestSimConnectClient:
+class TestTelemetryClient:
     """Test WebSocket client behavior with mocked connections."""
 
     def test_initial_state_is_default(self) -> None:
-        client = SimConnectClient("ws://localhost:8080")
+        client = TelemetryClient("ws://localhost:8080")
         assert client.state.aircraft == ""
         assert client.state.on_ground is True
 
     def test_initial_connection_state(self) -> None:
-        client = SimConnectClient("ws://localhost:8080")
+        client = TelemetryClient("ws://localhost:8080")
         assert client.connection_state == ConnectionState.DISCONNECTED
 
     @pytest.mark.asyncio
     async def test_connect_creates_listen_task(self) -> None:
-        client = SimConnectClient("ws://localhost:8080")
+        client = TelemetryClient("ws://localhost:8080")
         mock_ws = AsyncMock()
         mock_ws.__aiter__ = MagicMock(return_value=iter([]))
         with patch(
@@ -209,7 +209,7 @@ class TestSimConnectClient:
 
     @pytest.mark.asyncio
     async def test_disconnect_closes_websocket(self) -> None:
-        client = SimConnectClient("ws://localhost:8080")
+        client = TelemetryClient("ws://localhost:8080")
         mock_ws = AsyncMock()
         mock_ws.__aiter__ = MagicMock(return_value=iter([]))
         with patch(
@@ -229,7 +229,7 @@ class TestSimConnectClient:
     @pytest.mark.asyncio
     async def test_get_state_returns_cached_state(self) -> None:
         """get_state now returns cached state -- no WS send needed."""
-        client = SimConnectClient("ws://localhost:8080")
+        client = TelemetryClient("ws://localhost:8080")
         state = await client.get_state()
         assert state.aircraft == ""  # default cached state
 
@@ -237,7 +237,7 @@ class TestSimConnectClient:
     async def test_subscribe_callback_called_on_broadcast(
         self, sample_bridge_broadcast: dict[str, Any]
     ) -> None:
-        client = SimConnectClient(
+        client = TelemetryClient(
             "ws://localhost:8080", auto_reconnect=False
         )
         callback = AsyncMock()
@@ -261,7 +261,7 @@ class TestSimConnectClient:
 
     @pytest.mark.asyncio
     async def test_listen_loop_ignores_invalid_json(self) -> None:
-        client = SimConnectClient(
+        client = TelemetryClient(
             "ws://localhost:8080", auto_reconnect=False
         )
         callback = AsyncMock()
@@ -280,7 +280,7 @@ class TestSimConnectClient:
     @pytest.mark.asyncio
     async def test_listen_loop_ignores_typed_messages(self) -> None:
         """Messages with a 'type' field but no 'position' are ignored."""
-        client = SimConnectClient(
+        client = TelemetryClient(
             "ws://localhost:8080", auto_reconnect=False
         )
         callback = AsyncMock()
@@ -302,7 +302,7 @@ class TestSimConnectClient:
     async def test_subscriber_exception_does_not_crash_loop(
         self, sample_bridge_broadcast: dict[str, Any]
     ) -> None:
-        client = SimConnectClient(
+        client = TelemetryClient(
             "ws://localhost:8080", auto_reconnect=False
         )
         bad_callback = AsyncMock(side_effect=RuntimeError("boom"))
@@ -329,7 +329,7 @@ class TestSimConnectClient:
         self, sample_bridge_broadcast: dict[str, Any]
     ) -> None:
         """The listen loop should preserve the current flight_phase."""
-        client = SimConnectClient(
+        client = TelemetryClient(
             "ws://localhost:8080", auto_reconnect=False
         )
         client._state.flight_phase = FlightPhase.CRUISE
@@ -357,7 +357,7 @@ class TestConnectionState:
     """Test connection state tracking and diagnostics."""
 
     def test_stats_default(self) -> None:
-        client = SimConnectClient("ws://localhost:8080")
+        client = TelemetryClient("ws://localhost:8080")
         stats = client.stats
         assert stats["connection_state"] == "DISCONNECTED"
         assert stats["reconnect_count"] == 0
@@ -365,12 +365,12 @@ class TestConnectionState:
         assert stats["url"] == "ws://localhost:8080"
 
     def test_last_message_age_infinity_when_no_messages(self) -> None:
-        client = SimConnectClient("ws://localhost:8080")
+        client = TelemetryClient("ws://localhost:8080")
         assert client.last_message_age == float("inf")
 
     @pytest.mark.asyncio
     async def test_connect_sets_state_to_connected(self) -> None:
-        client = SimConnectClient("ws://localhost:8080")
+        client = TelemetryClient("ws://localhost:8080")
         mock_ws = AsyncMock()
         mock_ws.__aiter__ = MagicMock(return_value=iter([]))
         with patch(
@@ -388,7 +388,7 @@ class TestConnectionState:
     async def test_connect_failure_sets_state_to_disconnected(
         self,
     ) -> None:
-        client = SimConnectClient("ws://localhost:8080")
+        client = TelemetryClient("ws://localhost:8080")
         with patch(
             "orchestrator.sim_client.websockets.connect",
             new_callable=AsyncMock,
@@ -405,7 +405,7 @@ class TestConnectionState:
     async def test_messages_received_incremented(
         self, sample_bridge_broadcast: dict[str, Any]
     ) -> None:
-        client = SimConnectClient(
+        client = TelemetryClient(
             "ws://localhost:8080", auto_reconnect=False
         )
         message = json.dumps(sample_bridge_broadcast)
@@ -435,7 +435,7 @@ class TestReconnection:
 
     @pytest.mark.asyncio
     async def test_reconnect_increments_count(self) -> None:
-        client = SimConnectClient("ws://localhost:8080")
+        client = TelemetryClient("ws://localhost:8080")
 
         # First call fails, second succeeds
         call_count = 0
@@ -473,7 +473,7 @@ class TestReconnection:
 
     @pytest.mark.asyncio
     async def test_reconnect_disabled_does_nothing(self) -> None:
-        client = SimConnectClient(
+        client = TelemetryClient(
             "ws://localhost:8080", auto_reconnect=False
         )
         await client._reconnect()
@@ -485,7 +485,7 @@ class TestReconnection:
     @pytest.mark.asyncio
     async def test_reconnect_backoff_increases_delay(self) -> None:
         """Verify the delay increases exponentially."""
-        client = SimConnectClient("ws://localhost:8080")
+        client = TelemetryClient("ws://localhost:8080")
         client.RECONNECT_BASE_DELAY = 0.01
         client.RECONNECT_MAX_DELAY = 0.1
         client.RECONNECT_BACKOFF_FACTOR = 2.0
@@ -525,7 +525,7 @@ class TestReconnection:
         """When the WebSocket closes, the listen loop should reconnect."""
         import websockets
 
-        client = SimConnectClient("ws://localhost:8080")
+        client = TelemetryClient("ws://localhost:8080")
         client.RECONNECT_BASE_DELAY = 0.01
 
         # First WS: yields one message then closes
@@ -581,7 +581,7 @@ class TestDeltaDetection:
     async def test_duplicate_messages_skip_callback(
         self, sample_bridge_broadcast: dict[str, Any]
     ) -> None:
-        client = SimConnectClient(
+        client = TelemetryClient(
             "ws://localhost:8080", auto_reconnect=False
         )
         callback = AsyncMock()
@@ -607,7 +607,7 @@ class TestDeltaDetection:
     async def test_changed_messages_trigger_callback(
         self, sample_bridge_broadcast: dict[str, Any]
     ) -> None:
-        client = SimConnectClient(
+        client = TelemetryClient(
             "ws://localhost:8080", auto_reconnect=False
         )
         callback = AsyncMock()
@@ -702,8 +702,8 @@ class TestGracefulDegradation:
 
     @pytest.mark.asyncio
     async def test_client_works_without_connection(self) -> None:
-        """SimConnectClient should return a default state when not connected."""
-        client = SimConnectClient("ws://localhost:8080")
+        """TelemetryClient should return a default state when not connected."""
+        client = TelemetryClient("ws://localhost:8080")
         state = await client.get_state()
         assert state.connected is False
         assert state.aircraft == ""
@@ -712,7 +712,7 @@ class TestGracefulDegradation:
     @pytest.mark.asyncio
     async def test_connect_failure_is_recoverable(self) -> None:
         """After a connect failure, the client should remain usable."""
-        client = SimConnectClient(
+        client = TelemetryClient(
             "ws://localhost:8080", auto_reconnect=False
         )
         with patch(

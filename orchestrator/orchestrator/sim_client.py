@@ -1,4 +1,8 @@
-"""WebSocket client for the SimConnect bridge."""
+"""WebSocket client for the telemetry service.
+
+Connects to the universal telemetry service (or directly to a legacy
+SimConnect bridge) and receives telemetry state broadcasts.
+"""
 
 from __future__ import annotations
 
@@ -129,12 +133,17 @@ class SurfaceState(BaseModel):
 class SimState(BaseModel):
     """Complete snapshot of the simulator state.
 
-    Field names match the SimConnect bridge broadcast JSON exactly.
+    Field names match the telemetry service broadcast JSON. Also accepts
+    the legacy SimConnect bridge format for backward compatibility.
     """
 
     timestamp: str = ""
     connected: bool = False
     aircraft: str = ""
+    # Envelope metadata (populated when connected via telemetry service)
+    adapter_id: str = ""
+    sim_name: str = ""
+    vehicle_type: str = "aircraft"
     position: Position = Field(default_factory=Position)
     attitude: Attitude = Field(default_factory=Attitude)
     speeds: Speeds = Field(default_factory=Speeds)
@@ -234,8 +243,12 @@ class HealthMonitor:
         }
 
 
-class SimConnectClient:
-    """Manages the WebSocket connection to the SimConnect bridge.
+class TelemetryClient:
+    """Manages the WebSocket connection to the telemetry service.
+
+    Connects to the universal telemetry service and receives telemetry
+    broadcasts from any registered sim adapter. Also supports direct
+    connection to a legacy SimConnect bridge for backward compatibility.
 
     Features:
     - Automatic reconnection with exponential backoff
@@ -300,14 +313,14 @@ class SimConnectClient:
     async def connect(self) -> None:
         """Connect to the SimConnect bridge WebSocket server."""
         self._connection_state = ConnectionState.CONNECTING
-        logger.info("Connecting to SimConnect bridge at %s", self._url)
+        logger.info("Connecting to telemetry service at %s", self._url)
         try:
             self._ws = await websockets.connect(self._url)
             self._connection_state = ConnectionState.CONNECTED
             self._last_message_time = time.monotonic()
             self._listen_task = asyncio.create_task(self._listen_loop())
             self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-            logger.info("Connected to SimConnect bridge")
+            logger.info("Connected to telemetry service")
         except Exception:
             self._connection_state = ConnectionState.DISCONNECTED
             raise
@@ -333,7 +346,7 @@ class SimConnectClient:
             await self._ws.close()
             self._ws = None
         self._connection_state = ConnectionState.DISCONNECTED
-        logger.info("Disconnected from SimConnect bridge")
+        logger.info("Disconnected from telemetry service")
 
     async def get_state(self) -> SimState:
         """Return the cached sim state (updated continuously by the broadcast)."""
@@ -357,7 +370,7 @@ class SimConnectClient:
             age = self.last_message_age
             if age > self.HEARTBEAT_TIMEOUT:
                 logger.warning(
-                    "No data from bridge for %.1fs (timeout=%.1fs); "
+                    "No data from telemetry service for %.1fs (timeout=%.1fs); "
                     "connection may be stale",
                     age,
                     self.HEARTBEAT_TIMEOUT,
@@ -403,7 +416,7 @@ class SimConnectClient:
                 self._connection_state = ConnectionState.CONNECTED
                 self._last_message_time = time.monotonic()
                 logger.info(
-                    "Reconnected to SimConnect bridge (attempt %d)",
+                    "Reconnected to telemetry service (attempt %d)",
                     self._reconnect_count,
                 )
                 # Restart heartbeat
@@ -477,20 +490,20 @@ class SimConnectClient:
                         elif "type" in data:
                             # Informational response (e.g. state_response).
                             logger.debug(
-                                "Received typed message from bridge: %s",
+                                "Received typed message from service: %s",
                                 data.get("type"),
                             )
                         else:
                             logger.debug(
-                                "Ignoring unrecognised bridge message"
+                                "Ignoring unrecognised service message"
                             )
 
                     except json.JSONDecodeError:
                         logger.warning(
-                            "Received invalid JSON from bridge"
+                            "Received invalid JSON from telemetry service"
                         )
             except websockets.ConnectionClosed:
-                logger.warning("SimConnect bridge connection closed")
+                logger.warning("Telemetry service connection closed")
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -507,3 +520,7 @@ class SimConnectClient:
             await self._reconnect()
             if self._connection_state != ConnectionState.CONNECTED:
                 break  # reconnect gave up
+
+
+# Backward compatibility alias
+SimConnectClient = TelemetryClient

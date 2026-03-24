@@ -37,7 +37,7 @@ from orchestrator.claude_client import ClaudeClient  # noqa: E402
 from orchestrator.config import load_settings  # noqa: E402
 from orchestrator.context_store import ContextStore  # noqa: E402
 from orchestrator.flight_phase import FlightPhaseDetector  # noqa: E402
-from orchestrator.sim_client import SimConnectClient, SimState  # noqa: E402
+from orchestrator.sim_client import SimState, TelemetryClient  # noqa: E402
 from orchestrator.tts_preprocessor import preprocess_for_tts  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -57,7 +57,7 @@ logging.getLogger().setLevel(
     getattr(logging, settings.log_level.upper(), logging.INFO)
 )
 
-sim_client: SimConnectClient | None = None
+sim_client: TelemetryClient | None = None
 claude_client: ClaudeClient | None = None
 context_store: ContextStore | None = None
 phase_detector: FlightPhaseDetector | None = None
@@ -173,20 +173,20 @@ async def lifespan(app: FastAPI):
     # Context store (ChromaDB) -- degrades gracefully if unavailable
     context_store = ContextStore(chromadb_url=settings.chromadb_url)
 
-    # SimConnect client
-    sim_client = SimConnectClient(url=settings.simconnect_bridge_url)
+    # Telemetry client
+    sim_client = TelemetryClient(url=settings.telemetry_service_url)
     try:
         await sim_client.connect()
         _sim_connected = True
         logger.info(
-            "SimConnect bridge connected at %s",
-            settings.simconnect_bridge_url,
+            "Telemetry service connected at %s",
+            settings.telemetry_service_url,
         )
     except Exception as exc:
         _sim_connected = False
         logger.warning(
-            "SimConnect bridge unavailable at %s (%s); telemetry will be offline",
-            settings.simconnect_bridge_url,
+            "Telemetry service unavailable at %s (%s); telemetry will be offline",
+            settings.telemetry_service_url,
             exc,
         )
 
@@ -317,7 +317,7 @@ async def get_status():
             settings.elevenlabs_api_key and settings.voice_id
         ),
         "claude_model": settings.claude_model,
-        "simconnect_bridge_url": settings.simconnect_bridge_url,
+        "telemetry_service_url": settings.telemetry_service_url,
     }
 
 
@@ -425,16 +425,16 @@ async def ws_telemetry(ws: WebSocket):
     await ws.accept()
     logger.info("Telemetry WebSocket client connected")
 
-    bridge_url = settings.simconnect_bridge_url
+    telemetry_url = settings.telemetry_service_url
 
     try:
         while True:
-            # Try to connect directly to the SimConnect bridge WebSocket
+            # Connect to the telemetry service consumer endpoint
             try:
-                async with ws_lib.connect(bridge_url) as bridge_ws:
+                async with ws_lib.connect(telemetry_url) as bridge_ws:
                     logger.info(
-                        "Telemetry proxy connected to bridge at %s",
-                        bridge_url,
+                        "Telemetry proxy connected to service at %s",
+                        telemetry_url,
                     )
                     # Bridge WS is open, but don't claim sim is connected
                     # until we receive data with connected=true from the bridge
@@ -467,7 +467,7 @@ async def ws_telemetry(ws: WebSocket):
 
             except (ConnectionRefusedError, OSError, Exception) as exc:
                 logger.debug(
-                    "Bridge not available (%s), retrying in 3s", exc
+                    "Telemetry service not available (%s), retrying in 3s", exc
                 )
                 await ws.send_json({
                     "type": "telemetry",
