@@ -39,6 +39,10 @@ class Settings(BaseSettings):
         default=20,
         description="Max message pairs to retain in conversation history",
     )
+    claude_temperature: float = Field(
+        default=0.7,
+        description="Temperature for Claude responses (0.0-1.0, lower = more deterministic)",
+    )
 
     # --- SimConnect bridge ---------------------------------------------------
     simconnect_ws_host: str = Field(
