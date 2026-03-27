@@ -57,6 +57,32 @@ class KokoroClient:
             async for chunk in resp.aiter_bytes(chunk_size=4096):
                 yield chunk
 
+    async def synthesize_ws_stream(
+        self,
+        text_chunks: AsyncIterator[str],
+    ) -> AsyncIterator[bytes]:
+        """Buffer text to sentence boundaries and flush via synthesize_stream.
+
+        Kokoro does not support WebSocket streaming, so this method buffers
+        incoming text chunks until a sentence boundary is detected, then
+        synthesises each sentence via the REST streaming endpoint.
+        """
+        buffer = ""
+        sentence_endings = ".!?\n"
+        async for chunk in text_chunks:
+            buffer += chunk
+            last_boundary = max(buffer.rfind(ch) for ch in sentence_endings)
+            if last_boundary >= 0:
+                sentence = buffer[: last_boundary + 1].strip()
+                buffer = buffer[last_boundary + 1 :]
+                if sentence:
+                    async for audio_chunk in self.synthesize_stream(sentence):
+                        yield audio_chunk
+        # Flush remaining text
+        if buffer.strip():
+            async for audio_chunk in self.synthesize_stream(buffer.strip()):
+                yield audio_chunk
+
     async def aclose(self) -> None:
         """Release the persistent HTTP client."""
         await self._http.aclose()

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import json
 import logging
 from collections.abc import AsyncIterator
 
 import httpx
+import websockets
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +93,90 @@ class ElevenLabsClient:
             resp.raise_for_status()
             async for chunk in resp.aiter_bytes(chunk_size=4096):
                 yield chunk
+
+    async def synthesize_ws_stream(
+        self,
+        text_chunks: AsyncIterator[str],
+    ) -> AsyncIterator[bytes]:
+        """Stream text chunks to ElevenLabs via WebSocket and yield audio bytes.
+
+        Opens a single WebSocket connection to the ElevenLabs stream-input
+        endpoint, concurrently sends text and receives base64-encoded audio.
+        """
+        ws_url = (
+            f"wss://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}"
+            f"/stream-input?model_id={self._model_id}&output_format=mp3_44100_128"
+        )
+
+        audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+        try:
+            async with websockets.connect(
+                ws_url,
+                additional_headers={"xi-api-key": self._api_key},
+            ) as ws:
+                # Send initialization message with voice settings
+                await ws.send(json.dumps({
+                    "text": " ",
+                    "voice_settings": {
+                        "stability": self._stability,
+                        "similarity_boost": self._similarity_boost,
+                        "style": self._style,
+                    },
+                }))
+
+                async def _receive_audio() -> None:
+                    """Read WS messages, decode base64 audio, enqueue chunks."""
+                    try:
+                        async for msg in ws:
+                            if isinstance(msg, str):
+                                data = json.loads(msg)
+                                if data.get("isFinal"):
+                                    break
+                                audio_b64 = data.get("audio")
+                                if audio_b64:
+                                    audio_bytes = base64.b64decode(audio_b64)
+                                    if audio_bytes:
+                                        await audio_queue.put(audio_bytes)
+                            elif isinstance(msg, bytes):
+                                if msg:
+                                    await audio_queue.put(msg)
+                    except Exception as exc:
+                        logger.debug("ElevenLabs WS receive error: %s", exc)
+                    finally:
+                        await audio_queue.put(None)
+
+                recv_task = asyncio.create_task(_receive_audio())
+
+                try:
+                    # Feed text chunks into the WebSocket
+                    async for chunk in text_chunks:
+                        if chunk:
+                            await ws.send(json.dumps({
+                                "text": chunk,
+                                "try_trigger_generation": True,
+                            }))
+
+                    # Send flush signal to get final audio
+                    await ws.send(json.dumps({"text": ""}))
+                except Exception as exc:
+                    logger.debug("ElevenLabs WS send error: %s", exc)
+
+                # Yield audio chunks as they arrive
+                while True:
+                    audio = await asyncio.wait_for(audio_queue.get(), timeout=30.0)
+                    if audio is None:
+                        break
+                    yield audio
+
+                # Ensure receiver finishes cleanly
+                try:
+                    await asyncio.wait_for(recv_task, timeout=5.0)
+                except (TimeoutError, asyncio.CancelledError):
+                    recv_task.cancel()
+
+        except Exception as exc:
+            logger.warning("ElevenLabs WebSocket streaming failed: %s", exc)
 
     async def aclose(self) -> None:
         """Release the persistent HTTP client."""

@@ -31,6 +31,21 @@ class TTSClient(Protocol):
         if False:  # pragma: no cover
             yield  # type: ignore[misc]
 
+    async def synthesize_ws_stream(
+        self,
+        text_chunks: AsyncIterator[str],
+    ) -> AsyncIterator[bytes]:
+        """Accept streaming text and yield audio chunks via WebSocket (or fallback).
+
+        For backends with native WS streaming (e.g. ElevenLabs), this opens a
+        persistent connection and feeds text incrementally.  For backends without
+        WS support (e.g. Kokoro), text is buffered to sentence boundaries and
+        synthesised via ``synthesize_stream``.
+        """
+        ...
+        if False:  # pragma: no cover
+            yield  # type: ignore[misc]
+
     async def aclose(self) -> None:
         """Release resources held by the client (e.g. persistent HTTP connections)."""
         ...
