@@ -25,6 +25,7 @@ from .sim_client import (
     SimState,
     TelemetryClient,
 )
+from .tts import create_tts_client
 from .voice import InputMode, VoiceInput, VoiceOutput
 
 logger = logging.getLogger(__name__)
@@ -56,10 +57,8 @@ class Orchestrator:
             whisper_url=settings.whisper_url,
             mode=InputMode.PUSH_TO_TALK,
         )
-        self._voice_output = VoiceOutput(
-            api_key=settings.elevenlabs_api_key,
-            voice_id=settings.voice_id,
-        )
+        self._tts_client = create_tts_client(settings)
+        self._voice_output = VoiceOutput(tts_client=self._tts_client)
         self._claude = ClaudeClient(
             api_key=settings.anthropic_api_key,
             model=settings.claude_model,
@@ -72,9 +71,7 @@ class Orchestrator:
         )
         self._running = False
         self._sim_connected = False
-        self._tts_enabled = bool(
-            settings.elevenlabs_api_key and settings.voice_id
-        )
+        self._tts_enabled = settings.tts_configured
 
         # Health monitoring
         self._health = HealthMonitor()
@@ -160,6 +157,7 @@ class Orchestrator:
         await self._capture_manager.stop()
         if self._sim_connected:
             await self._sim_client.disconnect()
+        await self._tts_client.aclose()
         logger.info("MERLIN orchestrator shut down")
 
     # -------------------------------------------------------------------
