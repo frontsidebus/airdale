@@ -60,7 +60,7 @@ class Settings(BaseSettings):
 
     # --- Whisper STT ---------------------------------------------------------
     whisper_model: str = Field(
-        default="medium",
+        default="large-v3-turbo",
         description="Whisper model size (used by Docker service, not locally)",
     )
     whisper_url: str = Field(
