@@ -23,7 +23,7 @@ services:
     ports:
       - "9090:8000"
     environment:
-      - WHISPER__MODEL=${WHISPER_MODEL:-medium}
+      - WHISPER__MODEL=${WHISPER_MODEL:-large-v3-turbo}
       - WHISPER__INFERENCE_DEVICE=cpu
     volumes:
       - whisper_cache:/root/.cache/huggingface

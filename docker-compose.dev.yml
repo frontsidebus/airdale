@@ -10,7 +10,8 @@
 services:
   whisper:
     environment:
-      # Use the tiny model for faster startup during development
+      # Use the tiny model for faster startup during development.
+      # Production default is large-v3-turbo (see docker-compose.yml).
       - WHISPER__MODEL=tiny
 
   chromadb:

@@ -1,4 +1,4 @@
-"""Client for the local faster-whisper speech-to-text HTTP service.
+"""Async client for the local faster-whisper speech-to-text HTTP service.
 
 Communicates with a faster-whisper-server (fedirz/faster-whisper-server)
 to transcribe audio without sending data to any external API.
@@ -7,9 +7,9 @@ The server exposes an OpenAI-compatible /v1/audio/transcriptions endpoint.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
-import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -44,7 +44,10 @@ class WhisperClientError(Exception):
 
 
 class WhisperClient:
-    """HTTP client for a local faster-whisper-server.
+    """Async HTTP client for a local faster-whisper-server.
+
+    Uses a persistent httpx.AsyncClient for connection reuse. Follows the
+    same lifecycle pattern as TTSClient (aclose for cleanup).
 
     Args:
         base_url: Root URL of the Whisper service (e.g. http://whisper:9090).
@@ -67,7 +70,7 @@ class WhisperClient:
         self.model = model
         self.language = language
         self.initial_prompt = initial_prompt or AVIATION_PROMPT
-        self._client = httpx.Client(timeout=self.timeout)
+        self._client = httpx.AsyncClient(timeout=self.timeout)
 
     # -- Internal helpers -----------------------------------------------------
 
@@ -89,146 +92,6 @@ class WhisperClient:
 
         files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
         return data, files
-
-    # -- Public API -----------------------------------------------------------
-
-    def transcribe(
-        self,
-        audio_bytes: bytes,
-        *,
-        output_format: OutputFormat = "text",
-        language: str | None = None,
-    ) -> str:
-        """Transcribe audio bytes to text.
-
-        Args:
-            audio_bytes: Raw audio data (WAV, MP3, FLAC, etc.).
-            output_format: Desired response format from the ASR server.
-            language: Override the default language for this request.
-
-        Returns:
-            The transcribed text.
-
-        Raises:
-            WhisperClientError: If transcription fails after all retries.
-        """
-        lang = language or self.language
-        url = f"{self.base_url}/v1/audio/transcriptions"
-        data, files = self._build_form_data(audio_bytes, output_format, lang)
-
-        last_error: Exception | None = None
-        for attempt in range(1, _MAX_RETRIES + 1):
-            try:
-                response = self._client.post(url, data=data, files=files)
-                response.raise_for_status()
-                result = response.text.strip()
-                logger.debug("Whisper transcription (%d chars): %s...", len(result), result[:80])
-                return result
-            except httpx.ConnectError as exc:
-                last_error = exc
-                wait = _RETRY_BACKOFF * attempt
-                logger.warning(
-                    "Whisper service unreachable (attempt %d/%d), retrying in %.1fs: %s",
-                    attempt,
-                    _MAX_RETRIES,
-                    wait,
-                    exc,
-                )
-                time.sleep(wait)
-            except httpx.HTTPStatusError as exc:
-                last_error = exc
-                logger.error(
-                    "Whisper returned HTTP %d: %s",
-                    exc.response.status_code,
-                    exc.response.text[:200],
-                )
-                # Don't retry on client errors (4xx) -- the request itself is bad
-                if 400 <= exc.response.status_code < 500:
-                    break
-                wait = _RETRY_BACKOFF * attempt
-                time.sleep(wait)
-            except httpx.TimeoutException as exc:
-                last_error = exc
-                wait = _RETRY_BACKOFF * attempt
-                logger.warning(
-                    "Whisper request timed out (attempt %d/%d), retrying in %.1fs",
-                    attempt,
-                    _MAX_RETRIES,
-                    wait,
-                )
-                time.sleep(wait)
-
-        msg = f"Whisper transcription failed after {_MAX_RETRIES} attempts"
-        raise WhisperClientError(msg) from last_error
-
-    def transcribe_with_confidence(
-        self,
-        audio_bytes: bytes,
-        *,
-        language: str | None = None,
-    ) -> TranscriptionResult:
-        """Transcribe audio and return result with confidence scoring.
-
-        Uses verbose_json response_format to extract per-segment confidence
-        (avg_logprob). Falls back to a default confidence of 0.5 if metadata
-        is unavailable.
-
-        Args:
-            audio_bytes: Raw audio data (WAV, MP3, FLAC, etc.).
-            language: Override the default language for this request.
-
-        Returns:
-            TranscriptionResult with text, confidence, language, and duration.
-
-        Raises:
-            WhisperClientError: If transcription fails after all retries.
-        """
-        lang = language or self.language
-        url = f"{self.base_url}/v1/audio/transcriptions"
-        data, files = self._build_form_data(audio_bytes, "verbose_json", lang)
-
-        last_error: Exception | None = None
-        for attempt in range(1, _MAX_RETRIES + 1):
-            try:
-                response = self._client.post(url, data=data, files=files)
-                response.raise_for_status()
-                resp_data = response.json()
-                return self._parse_verbose_response(resp_data)
-            except httpx.ConnectError as exc:
-                last_error = exc
-                wait = _RETRY_BACKOFF * attempt
-                logger.warning(
-                    "Whisper service unreachable (attempt %d/%d), retrying in %.1fs: %s",
-                    attempt,
-                    _MAX_RETRIES,
-                    wait,
-                    exc,
-                )
-                time.sleep(wait)
-            except httpx.HTTPStatusError as exc:
-                last_error = exc
-                logger.error(
-                    "Whisper returned HTTP %d: %s",
-                    exc.response.status_code,
-                    exc.response.text[:200],
-                )
-                if 400 <= exc.response.status_code < 500:
-                    break
-                wait = _RETRY_BACKOFF * attempt
-                time.sleep(wait)
-            except httpx.TimeoutException as exc:
-                last_error = exc
-                wait = _RETRY_BACKOFF * attempt
-                logger.warning(
-                    "Whisper request timed out (attempt %d/%d), retrying in %.1fs",
-                    attempt,
-                    _MAX_RETRIES,
-                    wait,
-                )
-                time.sleep(wait)
-
-        msg = f"Whisper transcription failed after {_MAX_RETRIES} attempts"
-        raise WhisperClientError(msg) from last_error
 
     def _parse_verbose_response(self, data: dict[str, Any]) -> TranscriptionResult:
         """Extract text, confidence, language, and duration from verbose_json response."""
@@ -263,20 +126,160 @@ class WhisperClient:
             duration_secs=duration,
         )
 
-    def is_available(self) -> bool:
+    # -- Public API -----------------------------------------------------------
+
+    async def transcribe(
+        self,
+        audio_bytes: bytes,
+        *,
+        output_format: OutputFormat = "text",
+        language: str | None = None,
+    ) -> str:
+        """Transcribe audio bytes to text.
+
+        Args:
+            audio_bytes: Raw audio data (WAV, MP3, FLAC, etc.).
+            output_format: Desired response format from the ASR server.
+            language: Override the default language for this request.
+
+        Returns:
+            The transcribed text.
+
+        Raises:
+            WhisperClientError: If transcription fails after all retries.
+        """
+        lang = language or self.language
+        url = f"{self.base_url}/v1/audio/transcriptions"
+        data, files = self._build_form_data(audio_bytes, output_format, lang)
+
+        last_error: Exception | None = None
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                response = await self._client.post(url, data=data, files=files)
+                response.raise_for_status()
+                result = response.text.strip()
+                logger.debug("Whisper transcription (%d chars): %s...", len(result), result[:80])
+                return result
+            except httpx.ConnectError as exc:
+                last_error = exc
+                wait = _RETRY_BACKOFF * attempt
+                logger.warning(
+                    "Whisper service unreachable (attempt %d/%d), retrying in %.1fs: %s",
+                    attempt,
+                    _MAX_RETRIES,
+                    wait,
+                    exc,
+                )
+                await asyncio.sleep(wait)
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                logger.error(
+                    "Whisper returned HTTP %d: %s",
+                    exc.response.status_code,
+                    exc.response.text[:200],
+                )
+                # Don't retry on client errors (4xx) -- the request itself is bad
+                if 400 <= exc.response.status_code < 500:
+                    break
+                wait = _RETRY_BACKOFF * attempt
+                await asyncio.sleep(wait)
+            except httpx.TimeoutException as exc:
+                last_error = exc
+                wait = _RETRY_BACKOFF * attempt
+                logger.warning(
+                    "Whisper request timed out (attempt %d/%d), retrying in %.1fs",
+                    attempt,
+                    _MAX_RETRIES,
+                    wait,
+                )
+                await asyncio.sleep(wait)
+
+        msg = f"Whisper transcription failed after {_MAX_RETRIES} attempts"
+        raise WhisperClientError(msg) from last_error
+
+    async def transcribe_with_confidence(
+        self,
+        audio_bytes: bytes,
+        *,
+        language: str | None = None,
+    ) -> TranscriptionResult:
+        """Transcribe audio and return result with confidence scoring.
+
+        Uses verbose_json response_format to extract per-segment confidence
+        (avg_logprob). Falls back to a default confidence of 0.5 if metadata
+        is unavailable.
+
+        Args:
+            audio_bytes: Raw audio data (WAV, MP3, FLAC, etc.).
+            language: Override the default language for this request.
+
+        Returns:
+            TranscriptionResult with text, confidence, language, and duration.
+
+        Raises:
+            WhisperClientError: If transcription fails after all retries.
+        """
+        lang = language or self.language
+        url = f"{self.base_url}/v1/audio/transcriptions"
+        data, files = self._build_form_data(audio_bytes, "verbose_json", lang)
+
+        last_error: Exception | None = None
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                response = await self._client.post(url, data=data, files=files)
+                response.raise_for_status()
+                resp_data = response.json()
+                return self._parse_verbose_response(resp_data)
+            except httpx.ConnectError as exc:
+                last_error = exc
+                wait = _RETRY_BACKOFF * attempt
+                logger.warning(
+                    "Whisper service unreachable (attempt %d/%d), retrying in %.1fs: %s",
+                    attempt,
+                    _MAX_RETRIES,
+                    wait,
+                    exc,
+                )
+                await asyncio.sleep(wait)
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                logger.error(
+                    "Whisper returned HTTP %d: %s",
+                    exc.response.status_code,
+                    exc.response.text[:200],
+                )
+                if 400 <= exc.response.status_code < 500:
+                    break
+                wait = _RETRY_BACKOFF * attempt
+                await asyncio.sleep(wait)
+            except httpx.TimeoutException as exc:
+                last_error = exc
+                wait = _RETRY_BACKOFF * attempt
+                logger.warning(
+                    "Whisper request timed out (attempt %d/%d), retrying in %.1fs",
+                    attempt,
+                    _MAX_RETRIES,
+                    wait,
+                )
+                await asyncio.sleep(wait)
+
+        msg = f"Whisper transcription failed after {_MAX_RETRIES} attempts"
+        raise WhisperClientError(msg) from last_error
+
+    async def is_available(self) -> bool:
         """Check whether the Whisper service is reachable."""
         try:
-            resp = self._client.get(f"{self.base_url}/health", timeout=5.0)
+            resp = await self._client.get(f"{self.base_url}/health", timeout=5.0)
             return resp.status_code == 200
         except httpx.HTTPError:
             return False
 
-    def close(self) -> None:
-        """Close the underlying HTTP client."""
-        self._client.close()
+    async def aclose(self) -> None:
+        """Close the underlying async HTTP client."""
+        await self._client.aclose()
 
-    def __enter__(self) -> WhisperClient:
+    async def __aenter__(self) -> WhisperClient:
         return self
 
-    def __exit__(self, *_: object) -> None:
-        self.close()
+    async def __aexit__(self, *_: object) -> None:
+        await self.aclose()
