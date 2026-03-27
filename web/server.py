@@ -12,11 +12,11 @@ cancelled immediately.
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 import math
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -594,91 +594,70 @@ async def ws_chat(ws: WebSocket):
 
 
 # ---------------------------------------------------------------------------
-# ElevenLabs WebSocket streaming TTS
+# TTS WebSocket streaming via TTSClient protocol
 # ---------------------------------------------------------------------------
 
 
-async def _tts_websocket_stream(
+async def _text_chunks_from_queue(
+    tts_queue: asyncio.Queue[str | None],
+    interrupt: asyncio.Event,
+) -> AsyncIterator[str]:
+    """Adapt a text queue into an AsyncIterator[str] for TTSClient.
+
+    Reads sanitized text chunks from *tts_queue* until a ``None`` sentinel
+    or an interrupt signal.  Checks the phrase cache first and yields only
+    text that needs synthesis.
+    """
+    while True:
+        if interrupt.is_set():
+            return
+        try:
+            sentence = await asyncio.wait_for(tts_queue.get(), timeout=0.1)
+        except TimeoutError:
+            continue
+        if sentence is None:
+            return
+        if interrupt.is_set():
+            return
+
+        clean_text = preprocess_for_tts(sentence)
+        if not clean_text:
+            continue
+
+        # Cached phrases are handled in _tts_stream_to_browser; yield all text
+        yield clean_text
+
+
+async def _tts_stream_to_browser(
     ws: WebSocket,
+    tts_client: TTSClient,
     tts_queue: asyncio.Queue[str | None],
     interrupt: asyncio.Event,
 ) -> None:
-    """Stream TTS via ElevenLabs WebSocket API.
+    """Stream TTS audio to the browser via the TTSClient protocol.
 
-    Opens a single WebSocket connection per response, pipes sanitized text
-    chunks through it, and forwards audio chunks to the browser as they
-    arrive. Falls back to REST-based TTS if the WebSocket approach fails.
+    Converts the text queue into an async iterator, feeds it through
+    ``tts_client.synthesize_ws_stream()``, and forwards resulting audio
+    chunks to the browser WebSocket.
+
+    Cached phrases are served directly from the phrase cache; all other
+    text flows through the TTSClient's streaming implementation.
     """
-    voice_id = settings.voice_id
-    model_id = settings.elevenlabs_model_id
-    api_key = settings.elevenlabs_api_key
-    ws_url = (
-        f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-        f"/stream-input?model_id={model_id}&output_format=mp3_44100_128"
-    )
+    # Wrap the queue into an async text iterator that also handles caching
+    uncached_queue: asyncio.Queue[str | None] = asyncio.Queue()
 
-    try:
-        async with ws_lib.connect(ws_url) as tts_ws:
-            # Send initial config
-            await tts_ws.send(json.dumps({
-                "text": " ",
-                "voice_settings": {
-                    "stability": 0.75,
-                    "similarity_boost": 0.80,
-                    "style": 0.15,
-                },
-                "xi_api_key": api_key,
-            }))
-
-            # Task to receive audio chunks from ElevenLabs
-            audio_done = asyncio.Event()
-
-            async def _receive_audio() -> None:
-                """Receive audio chunks from ElevenLabs and forward to browser."""
-                try:
-                    async for msg in tts_ws:
-                        if interrupt.is_set():
-                            break
-                        if isinstance(msg, bytes):
-                            # Binary audio chunk
-                            await ws.send_json({
-                                "type": "tts_audio",
-                                "size": len(msg),
-                            })
-                            await ws.send_bytes(msg)
-                        elif isinstance(msg, str):
-                            data = json.loads(msg)
-                            if data.get("isFinal"):
-                                break
-                            # Some responses include base64 audio
-                            audio_b64 = data.get("audio")
-                            if audio_b64:
-                                audio_chunk = base64.b64decode(audio_b64)
-                                if audio_chunk:
-                                    await ws.send_json({
-                                        "type": "tts_audio",
-                                        "size": len(audio_chunk),
-                                    })
-                                    await ws.send_bytes(audio_chunk)
-                except Exception as exc:
-                    logger.debug("TTS WS receive error: %s", exc)
-                finally:
-                    audio_done.set()
-
-            recv_task = asyncio.create_task(_receive_audio())
-
-            # Feed text chunks from the queue into the WebSocket
+    async def _cache_and_forward() -> None:
+        """Drain tts_queue, serve cached phrases directly, forward the rest."""
+        try:
             while True:
                 if interrupt.is_set():
                     break
                 try:
-                    sentence = await asyncio.wait_for(
-                        tts_queue.get(), timeout=0.1
-                    )
-                except asyncio.TimeoutError:
+                    sentence = await asyncio.wait_for(tts_queue.get(), timeout=0.1)
+                except TimeoutError:
                     continue
                 if sentence is None:
-                    break  # Poison pill -- done
+                    break
                 if interrupt.is_set():
                     break
 
@@ -686,7 +665,7 @@ async def _tts_websocket_stream(
                 if not clean_text:
                     continue
 
-                # Check cache before sending over WebSocket
+                # Serve cached phrases directly to the browser
                 if clean_text in _TTS_CACHE:
                     await ws.send_json({
                         "type": "tts_audio",
@@ -695,51 +674,47 @@ async def _tts_websocket_stream(
                     await ws.send_bytes(_TTS_CACHE[clean_text])
                     continue
 
-                await tts_ws.send(json.dumps({
-                    "text": clean_text + " ",
-                    "try_trigger_generation": True,
-                }))
+                await uncached_queue.put(clean_text)
+        finally:
+            await uncached_queue.put(None)
 
-            # Send flush signal to indicate end of input
-            try:
-                await tts_ws.send(json.dumps({"text": ""}))
-            except Exception:
-                pass
+    async def _uncached_text_iter() -> AsyncIterator[str]:
+        """Yield uncached text chunks for the TTS client."""
+        while True:
+            chunk = await uncached_queue.get()
+            if chunk is None:
+                return
+            yield chunk
 
-            # Wait for remaining audio to arrive
-            try:
-                await asyncio.wait_for(recv_task, timeout=15.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                recv_task.cancel()
+    cache_task = asyncio.create_task(_cache_and_forward())
 
+    try:
+        async for audio_chunk in tts_client.synthesize_ws_stream(_uncached_text_iter()):
+            if interrupt.is_set():
+                break
+            await ws.send_json({
+                "type": "tts_audio",
+                "size": len(audio_chunk),
+            })
+            await ws.send_bytes(audio_chunk)
     except Exception as exc:
-        logger.warning(
-            "ElevenLabs WebSocket TTS failed (%s), falling back to REST", exc
-        )
-        # Fallback: drain the queue and use REST-based TTS
-        await _tts_rest_fallback(ws, tts_queue, interrupt)
-
-
-async def _tts_rest_fallback(
-    ws: WebSocket,
-    tts_queue: asyncio.Queue[str | None],
-    interrupt: asyncio.Event,
-) -> None:
-    """REST-based TTS fallback -- processes remaining items in tts_queue."""
-    while True:
-        if interrupt.is_set():
-            break
+        logger.warning("TTS streaming failed (%s), falling back to REST", exc)
+        # Fallback: drain remaining items via REST synthesis
+        while True:
+            if interrupt.is_set():
+                break
+            try:
+                sentence = await asyncio.wait_for(tts_queue.get(), timeout=0.1)
+            except TimeoutError:
+                continue
+            if sentence is None:
+                break
+            await _send_tts_chunk_rest(ws, sentence)
+    finally:
         try:
-            sentence = await asyncio.wait_for(
-                tts_queue.get(), timeout=0.1
-            )
-        except asyncio.TimeoutError:
-            continue
-        if sentence is None:
-            break
-        if interrupt.is_set():
-            break
-        await _send_tts_chunk_rest(ws, sentence)
+            await asyncio.wait_for(cache_task, timeout=5.0)
+        except (TimeoutError, asyncio.CancelledError):
+            cache_task.cancel()
 
 
 async def _stream_response(
@@ -760,10 +735,10 @@ async def _stream_response(
     # TTS queue ensures audio chunks are sent in order
     tts_queue: asyncio.Queue[str | None] = asyncio.Queue()
 
-    # Use WebSocket streaming TTS sender
-    if tts_enabled:
+    # Use TTSClient protocol streaming
+    if tts_enabled and _tts_client_instance is not None:
         tts_task: asyncio.Task[None] | None = asyncio.create_task(
-            _tts_websocket_stream(ws, tts_queue, interrupt)
+            _tts_stream_to_browser(ws, _tts_client_instance, tts_queue, interrupt)
         )
     else:
         tts_task = None
