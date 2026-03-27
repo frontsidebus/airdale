@@ -18,7 +18,7 @@ services:
   # Provides an OpenAI-compatible /v1/audio/transcriptions endpoint.
   # ---------------------------------------------------------------------------
   whisper:
-    image: fedirz/faster-whisper-server:latest-cpu
+    image: fedirz/faster-whisper-server:0.8.3-cpu
     container_name: merlin-whisper
     ports:
       - "9090:8000"
@@ -42,7 +42,7 @@ services:
     # See: https://docs.docker.com/compose/gpu-support/
     # -------------------------------------------------------------------------
     # Uncomment for GPU acceleration (requires nvidia-container-toolkit):
-    # image: fedirz/faster-whisper-server:latest-cuda
+    # image: fedirz/faster-whisper-server:0.8.3-cuda
     # deploy:
     #   resources:
     #     reservations:
@@ -56,7 +56,7 @@ services:
   # Stores aircraft manuals, checklists, and procedures for context retrieval.
   # ---------------------------------------------------------------------------
   chromadb:
-    image: chromadb/chroma:latest
+    image: chromadb/chroma:1.5.5
     container_name: merlin-chromadb
     ports:
       - "8000:8000"
