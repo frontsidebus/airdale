@@ -78,6 +78,32 @@ class Settings(BaseSettings):
         description="ElevenLabs voice ID for TTS output",
     )
 
+    # --- TTS settings --------------------------------------------------------
+    tts_backend: str = Field(
+        default="elevenlabs",
+        description="TTS backend: 'elevenlabs' (cloud) or 'local' (Kokoro)",
+    )
+    tts_local_url: str = Field(
+        default="http://localhost:8880",
+        description="URL of the local Kokoro TTS server",
+    )
+    tts_voice_id_local: str = Field(
+        default="af_heart",
+        description="Voice ID for local Kokoro TTS",
+    )
+    tts_stability: float = Field(
+        default=0.75,
+        description="ElevenLabs voice stability (0.0-1.0)",
+    )
+    tts_similarity_boost: float = Field(
+        default=0.80,
+        description="ElevenLabs similarity boost (0.0-1.0)",
+    )
+    tts_style: float = Field(
+        default=0.15,
+        description="ElevenLabs style (0.0-1.0, V2+ models only)",
+    )
+
     # --- Screen capture ------------------------------------------------------
     screen_capture_enabled: bool = Field(
         default=False,
@@ -111,8 +137,17 @@ class Settings(BaseSettings):
         return self
 
     @property
+    def tts_configured(self) -> bool:
+        """Whether TTS is configured for the selected backend."""
+        if self.tts_backend == "local":
+            return bool(self.tts_local_url)
+        return bool(self.elevenlabs_api_key and self.elevenlabs_voice_id)
+
+    @property
     def voice_id(self) -> str:
-        """Convenience alias so callers can use settings.voice_id."""
+        """Return the voice ID appropriate for the selected TTS backend."""
+        if self.tts_backend == "local":
+            return self.tts_voice_id_local
         return self.elevenlabs_voice_id
 
 
