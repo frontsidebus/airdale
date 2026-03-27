@@ -49,6 +49,7 @@ class AdapterManager:
         self._consumers: list[ConsumerConnection] = []
         self._stale_timeout = stale_timeout
         self._lock = asyncio.Lock()
+        self._consumer_lock = asyncio.Lock()  # Protects self._consumers
 
     # -------------------------------------------------------------------
     # Adapter management
@@ -107,9 +108,7 @@ class AdapterManager:
         async with self._lock:
             conn = self._adapters.get(adapter_id)
             if conn is None:
-                logger.warning(
-                    "Telemetry from unregistered adapter: %s", adapter_id
-                )
+                logger.warning("Telemetry from unregistered adapter: %s", adapter_id)
                 return
             conn.last_state = envelope
             conn.last_seen = time.monotonic()
@@ -136,21 +135,23 @@ class AdapterManager:
         result = []
         for conn in self._adapters.values():
             age = now - conn.last_seen
-            result.append({
-                "adapter_id": conn.adapter_id,
-                "sim_name": conn.sim_name,
-                "vehicle_type": conn.vehicle_type,
-                "version": conn.version,
-                "connected": conn.last_state.connected
-                if conn.last_state
-                else False,
-                "vehicle_name": conn.last_state.vehicle_name
-                if conn.last_state
-                else "",
-                "frames_received": conn.frames_received,
-                "last_seen_seconds_ago": round(age, 1),
-                "stale": age > self._stale_timeout,
-            })
+            result.append(
+                {
+                    "adapter_id": conn.adapter_id,
+                    "sim_name": conn.sim_name,
+                    "vehicle_type": conn.vehicle_type,
+                    "version": conn.version,
+                    "connected": conn.last_state.connected
+                    if conn.last_state
+                    else False,
+                    "vehicle_name": conn.last_state.vehicle_name
+                    if conn.last_state
+                    else "",
+                    "frames_received": conn.frames_received,
+                    "last_seen_seconds_ago": round(age, 1),
+                    "stale": age > self._stale_timeout,
+                }
+            )
         return result
 
     def get_current_state(self) -> TelemetryEnvelope | None:
@@ -193,21 +194,21 @@ class AdapterManager:
     # Consumer management
     # -------------------------------------------------------------------
 
-    def add_consumer(self, ws: WebSocket) -> ConsumerConnection:
+    async def add_consumer(self, ws: WebSocket) -> ConsumerConnection:
         """Register a new consumer connection."""
         conn = ConsumerConnection(websocket=ws)
-        self._consumers.append(conn)
-        logger.info(
-            "Consumer connected [total: %d]", len(self._consumers)
-        )
+        async with self._consumer_lock:
+            self._consumers.append(conn)
+        logger.info("Consumer connected [total: %d]", len(self._consumers))
         return conn
 
-    def remove_consumer(self, conn: ConsumerConnection) -> None:
+    async def remove_consumer(self, conn: ConsumerConnection) -> None:
         """Remove a consumer connection."""
-        try:
-            self._consumers.remove(conn)
-        except ValueError:
-            pass
+        async with self._consumer_lock:
+            try:
+                self._consumers.remove(conn)
+            except ValueError:
+                pass
         logger.info(
             "Consumer disconnected (sent %d msgs) [remaining: %d]",
             conn.messages_sent,
@@ -228,47 +229,45 @@ class AdapterManager:
     # Broadcasting
     # -------------------------------------------------------------------
 
-    async def _broadcast_to_consumers(
-        self, envelope: TelemetryEnvelope
-    ) -> None:
+    async def _broadcast_to_consumers(self, envelope: TelemetryEnvelope) -> None:
         """Send telemetry to all connected consumers."""
-        if not self._consumers:
-            return
+        async with self._consumer_lock:
+            if not self._consumers:
+                return
 
-        # Convert to legacy SimState format for backward compat
-        full_data = envelope.to_legacy_simstate()
-        # Also include envelope metadata for new consumers
-        full_data["adapter_id"] = envelope.adapter_id
-        full_data["sim_name"] = envelope.sim_name
-        full_data["vehicle_type"] = envelope.vehicle_type
+            # Convert to legacy SimState format for backward compat
+            full_data = envelope.to_legacy_simstate()
+            # Also include envelope metadata for new consumers
+            full_data["adapter_id"] = envelope.adapter_id
+            full_data["sim_name"] = envelope.sim_name
+            full_data["vehicle_type"] = envelope.vehicle_type
 
-        full_json: str | None = None
-        dead_consumers: list[ConsumerConnection] = []
+            full_json: str | None = None
+            dead_consumers: list[ConsumerConnection] = []
 
-        for consumer in self._consumers:
-            try:
-                if consumer.subscribed_fields:
-                    filtered = self._filter_state(
-                        full_data, consumer.subscribed_fields
-                    )
-                    await consumer.websocket.send_text(
-                        json.dumps(filtered)
-                    )
-                else:
-                    if full_json is None:
-                        full_json = json.dumps(full_data)
-                    await consumer.websocket.send_text(full_json)
-                consumer.messages_sent += 1
-            except Exception:
-                dead_consumers.append(consumer)
+            for consumer in self._consumers:
+                try:
+                    if consumer.subscribed_fields:
+                        filtered = self._filter_state(
+                            full_data, consumer.subscribed_fields
+                        )
+                        await consumer.websocket.send_text(json.dumps(filtered))
+                    else:
+                        if full_json is None:
+                            full_json = json.dumps(full_data)
+                        await consumer.websocket.send_text(full_json)
+                    consumer.messages_sent += 1
+                except Exception:
+                    dead_consumers.append(consumer)
 
-        for consumer in dead_consumers:
-            self.remove_consumer(consumer)
+            for consumer in dead_consumers:
+                try:
+                    self._consumers.remove(consumer)
+                except ValueError:
+                    pass
 
     @staticmethod
-    def _filter_state(
-        data: dict[str, Any], fields: list[str]
-    ) -> dict[str, Any]:
+    def _filter_state(data: dict[str, Any], fields: list[str]) -> dict[str, Any]:
         """Filter telemetry to only requested top-level fields."""
         result: dict[str, Any] = {
             "timestamp": data.get("timestamp"),
