@@ -530,15 +530,6 @@ All configuration is managed through environment variables loaded by `pydantic-s
 | `CLAUDE_MAX_TOKENS` | No | `4096` | Maximum tokens per response |
 | `CLAUDE_TEMPERATURE` | No | `0.7` | Response temperature (0.0-1.0) |
 
-### SimConnect Bridge
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `SIMCONNECT_WS_HOST` | No | `localhost` | Bridge WebSocket host |
-| `SIMCONNECT_WS_PORT` | No | `8765` | Bridge WebSocket port |
-| `SIMCONNECT_BRIDGE_URL` | No | `ws://localhost:8080` | Full bridge WebSocket URL (used by orchestrator) |
-| `SIMCONNECT_POLL_INTERVAL_MS` | No | `100` | Telemetry polling interval |
-
 ### Voice Pipeline -- STT
 
 | Variable | Required | Default | Description |

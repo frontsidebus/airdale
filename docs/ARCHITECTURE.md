@@ -113,7 +113,7 @@ MSFS 2024
   -> Fires StateUpdated event
   -> TelemetryWebSocketServer serializes to JSON (snake_case)
   -> Broadcasts to all connected WebSocket clients
-  -> SimConnectClient (Python) receives via websockets library
+  -> TelemetryClient (Python) receives via websockets library
   -> Delta detection: only fires callbacks when values actually change
   -> Deserializes into Pydantic SimState model
   -> FlightPhaseDetector evaluates telemetry, updates phase (with hysteresis)
@@ -257,7 +257,7 @@ Barge-in: new user input cancels in-flight Claude stream + TTS immediately
 
 ### 8. Delta Detection for Telemetry
 
-**Decision:** The `SimConnectClient` tracks previous state and only fires update callbacks when telemetry values actually change.
+**Decision:** The `TelemetryClient` tracks previous state and only fires update callbacks when telemetry values actually change.
 
 **Rationale:** At sim-frame rate, most telemetry frames are identical to the previous frame (especially for slowly-changing parameters). Delta detection reduces unnecessary downstream processing, logging, and WebSocket traffic to browser clients.
 

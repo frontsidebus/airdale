@@ -123,8 +123,6 @@ services:
       - WHISPER_URL=http://whisper:8000
       - CHROMADB_URL=http://chromadb:8000
       - TELEMETRY_SERVICE_URL=ws://telemetry-service:8080/ws/telemetry
-      # Legacy fallback (still works via telemetry service)
-      - SIMCONNECT_BRIDGE_URL=ws://telemetry-service:8080/ws/telemetry
     restart: unless-stopped
     networks:
       - merlin
