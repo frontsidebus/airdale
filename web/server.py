@@ -231,7 +231,7 @@ async def lifespan(app: FastAPI):
     if _tts_client and not _tts_client.is_closed:
         await _tts_client.aclose()
     if _whisper_client is not None:
-        _whisper_client.close()
+        await _whisper_client.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +288,7 @@ async def get_status():
     whisper_ok = False
     if _whisper_client is not None:
         try:
-            whisper_ok = await asyncio.to_thread(_whisper_client.is_available)
+            whisper_ok = await _whisper_client.is_available()
         except Exception:
             pass
 
@@ -986,9 +986,7 @@ async def _transcribe_with_confidence(
         logger.error("WhisperClient not initialized")
         return "", 0.0
     try:
-        result = await asyncio.to_thread(
-            _whisper_client.transcribe_with_confidence, audio_bytes
-        )
+        result = await _whisper_client.transcribe_with_confidence(audio_bytes)
         return result.text, result.confidence
     except WhisperClientError as exc:
         logger.error("Whisper transcription failed: %s", exc)

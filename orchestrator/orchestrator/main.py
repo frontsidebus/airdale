@@ -163,7 +163,7 @@ class Orchestrator:
         await self._capture_manager.stop()
         if self._sim_connected:
             await self._sim_client.disconnect()
-        self._whisper_client.close()
+        await self._whisper_client.aclose()
         logger.info("MERLIN orchestrator shut down")
 
     # -------------------------------------------------------------------
@@ -173,7 +173,7 @@ class Orchestrator:
     async def _check_whisper_health(self) -> None:
         """Probe Whisper endpoint and update health status."""
         try:
-            available = await asyncio.to_thread(self._whisper_client.is_available)
+            available = await self._whisper_client.is_available()
             if available:
                 self._whisper_available = True
                 self._health.update(

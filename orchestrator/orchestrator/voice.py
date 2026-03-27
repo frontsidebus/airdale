@@ -193,8 +193,7 @@ class VoiceInput:
         wav_bytes = samples_to_wav_bytes(audio, self._sample_rate, self._channels)
 
         try:
-            # WhisperClient uses sync httpx; run in a thread to avoid blocking
-            text = await asyncio.to_thread(self._whisper_client.transcribe, wav_bytes)
+            text = await self._whisper_client.transcribe(wav_bytes)
             logger.info("Transcribed: %s", text)
             return text
         except WhisperClientError as exc:
