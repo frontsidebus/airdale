@@ -38,6 +38,7 @@ from orchestrator.config import load_settings  # noqa: E402
 from orchestrator.context_store import ContextStore  # noqa: E402
 from orchestrator.flight_phase import FlightPhaseDetector  # noqa: E402
 from orchestrator.sim_client import SimState, TelemetryClient  # noqa: E402
+from orchestrator.tts import TTSClient, create_tts_client  # noqa: E402
 from orchestrator.tts_preprocessor import preprocess_for_tts  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -80,16 +81,8 @@ _POST_SPEECH_PAUSE_SECS = 0.3
 # Persistent HTTP clients (connection pooling)
 # ---------------------------------------------------------------------------
 
-# Shared httpx client for TTS REST fallback (avoid creating per-request)
-_tts_client: httpx.AsyncClient | None = None
-
-
-async def _get_tts_client() -> httpx.AsyncClient:
-    global _tts_client
-    if _tts_client is None or _tts_client.is_closed:
-        _tts_client = httpx.AsyncClient(timeout=30.0)
-    return _tts_client
-
+# TTSClient instance (created during lifespan from config)
+_tts_client_instance: TTSClient | None = None
 
 # Shared httpx client for Whisper (connection pooling)
 _whisper_client: httpx.AsyncClient | None = None
@@ -122,38 +115,19 @@ _CACHEABLE_PHRASES = [
 ]
 
 
-async def _prepopulate_tts_cache() -> None:
+async def _prepopulate_tts_cache(tts: TTSClient) -> None:
     """Pre-generate TTS audio for common short phrases at startup."""
-    if not settings.elevenlabs_api_key or not settings.voice_id:
-        return
-
-    client = await _get_tts_client()
     for phrase in _CACHEABLE_PHRASES:
         sanitized = preprocess_for_tts(phrase)
         if not sanitized or sanitized in _TTS_CACHE:
             continue
         try:
-            resp = await client.post(
-                f"https://api.elevenlabs.io/v1/text-to-speech/"
-                f"{settings.voice_id}/stream",
-                headers={
-                    "xi-api-key": settings.elevenlabs_api_key,
-                    "Content-Type": "application/json",
-                    "Accept": "audio/mpeg",
-                },
-                json={
-                    "text": sanitized,
-                    "model_id": settings.elevenlabs_model_id,
-                    "voice_settings": {
-                        "stability": 0.75,
-                        "similarity_boost": 0.80,
-                        "style": 0.15,
-                    },
-                },
+            _TTS_CACHE[sanitized] = await tts.synthesize(sanitized)
+            logger.info(
+                "Cached TTS phrase: '%s' (%d bytes)",
+                sanitized,
+                len(_TTS_CACHE[sanitized]),
             )
-            resp.raise_for_status()
-            _TTS_CACHE[sanitized] = resp.content
-            logger.info("Cached TTS phrase: '%s' (%d bytes)", sanitized, len(resp.content))
         except Exception as exc:
             logger.debug("Failed to cache TTS phrase '%s': %s", sanitized, exc)
 
@@ -166,7 +140,7 @@ async def _prepopulate_tts_cache() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global sim_client, claude_client, context_store, phase_detector
-    global _sim_connected
+    global _sim_connected, _tts_client_instance
 
     logger.info("Starting MERLIN web server")
 
@@ -215,8 +189,11 @@ async def lifespan(app: FastAPI):
         temperature=settings.claude_temperature,
     )
 
+    # Create the shared TTSClient from config
+    _tts_client_instance = create_tts_client(settings)
+
     # Pre-populate TTS cache in the background (non-blocking)
-    _cache_task = asyncio.create_task(_prepopulate_tts_cache())
+    _cache_task = asyncio.create_task(_prepopulate_tts_cache(_tts_client_instance))
     _cache_task.add_done_callback(
         lambda t: logger.error("TTS cache prepopulation failed: %s", t.exception())
         if t.exception()
@@ -231,9 +208,9 @@ async def lifespan(app: FastAPI):
     if _sim_connected and sim_client is not None:
         await sim_client.disconnect()
 
-    # Close persistent HTTP clients
-    if _tts_client and not _tts_client.is_closed:
-        await _tts_client.aclose()
+    # Close persistent clients
+    if _tts_client_instance is not None:
+        await _tts_client_instance.aclose()
     if _whisper_client and not _whisper_client.is_closed:
         await _whisper_client.aclose()
 
@@ -313,9 +290,7 @@ async def get_status():
             context_store.document_count if context_store else 0
         ),
         "whisper_available": whisper_ok,
-        "elevenlabs_configured": bool(
-            settings.elevenlabs_api_key and settings.voice_id
-        ),
+        "elevenlabs_configured": settings.tts_configured,
         "claude_model": settings.claude_model,
         "telemetry_service_url": settings.telemetry_service_url,
     }
@@ -365,42 +340,25 @@ async def transcribe_audio(file: UploadFile):
 
 @app.post("/api/tts")
 async def text_to_speech(request: TTSRequest):
-    """Convert text to speech via ElevenLabs and return MP3 audio."""
-    if not settings.elevenlabs_api_key or not settings.voice_id:
+    """Convert text to speech via the configured TTS backend and return audio."""
+    if _tts_client_instance is None:
         return Response(
-            content=json.dumps({"error": "ElevenLabs not configured"}),
+            content=json.dumps({"error": "TTS not configured"}),
             status_code=503,
             media_type="application/json",
         )
 
     # Check TTS cache first
     clean = preprocess_for_tts(request.text)
+    content_type = _tts_client_instance.audio_content_type
     if clean in _TTS_CACHE:
-        return Response(content=_TTS_CACHE[clean], media_type="audio/mpeg")
+        return Response(content=_TTS_CACHE[clean], media_type=content_type)
 
     try:
-        client = await _get_tts_client()
-        resp = await client.post(
-            f"https://api.elevenlabs.io/v1/text-to-speech/{settings.voice_id}",
-            headers={
-                "xi-api-key": settings.elevenlabs_api_key,
-                "Content-Type": "application/json",
-                "Accept": "audio/mpeg",
-            },
-            json={
-                "text": clean,
-                "model_id": settings.elevenlabs_model_id,
-                "voice_settings": {
-                    "stability": 0.75,
-                    "similarity_boost": 0.80,
-                    "style": 0.15,
-                },
-            },
-        )
-        resp.raise_for_status()
-        return Response(content=resp.content, media_type="audio/mpeg")
-    except httpx.HTTPError as exc:
-        logger.error("ElevenLabs TTS failed: %s", exc)
+        audio = await _tts_client_instance.synthesize(clean)
+        return Response(content=audio, media_type=content_type)
+    except Exception as exc:
+        logger.error("TTS synthesis failed: %s", exc)
         return Response(
             content=json.dumps({"error": f"TTS failed: {exc}"}),
             status_code=502,
@@ -795,24 +753,12 @@ async def _stream_response(
     REST fallback. This runs as a task so it can be cancelled when the
     user barges in.
     """
-    tts_enabled = bool(settings.elevenlabs_api_key and settings.voice_id)
+    tts_enabled = _tts_client_instance is not None
     sentence_buffer = ""
     full_response = ""
 
     # TTS queue ensures audio chunks are sent in order
     tts_queue: asyncio.Queue[str | None] = asyncio.Queue()
-
-    # Pre-warm ElevenLabs TLS connection in the background
-    if tts_enabled:
-
-        async def _warmup_tts() -> None:
-            try:
-                client = await _get_tts_client()
-                await client.head("https://api.elevenlabs.io/v1/voices")
-            except Exception:
-                pass
-
-        asyncio.create_task(_warmup_tts())
 
     # Use WebSocket streaming TTS sender
     if tts_enabled:
@@ -927,7 +873,7 @@ def _split_at_sentence(text: str) -> tuple[str, str]:
 
 
 async def _send_tts_chunk_rest(ws: WebSocket, text: str) -> None:
-    """Synthesize a sentence via REST and send audio over WebSocket.
+    """Synthesize a sentence via TTSClient and send audio over WebSocket.
 
     This is the REST-based fallback used when WebSocket TTS is unavailable.
     """
@@ -944,33 +890,16 @@ async def _send_tts_chunk_rest(ws: WebSocket, text: str) -> None:
         await ws.send_bytes(_TTS_CACHE[clean_text])
         return
 
+    if _tts_client_instance is None:
+        return
+
     try:
-        client = await _get_tts_client()
-        resp = await client.post(
-            f"https://api.elevenlabs.io/v1/text-to-speech/"
-            f"{settings.voice_id}/stream",
-            headers={
-                "xi-api-key": settings.elevenlabs_api_key,
-                "Content-Type": "application/json",
-                "Accept": "audio/mpeg",
-            },
-            json={
-                "text": clean_text,
-                "model_id": settings.elevenlabs_model_id,
-                "voice_settings": {
-                    "stability": 0.75,
-                    "similarity_boost": 0.80,
-                    "style": 0.15,
-                },
-            },
-        )
-        resp.raise_for_status()
-        # Send audio as binary WebSocket frame -- browser will play it
+        audio = await _tts_client_instance.synthesize(clean_text)
         await ws.send_json({
             "type": "tts_audio",
-            "size": len(resp.content),
+            "size": len(audio),
         })
-        await ws.send_bytes(resp.content)
+        await ws.send_bytes(audio)
     except Exception as exc:
         logger.warning("TTS chunk failed: %s", exc)
 
