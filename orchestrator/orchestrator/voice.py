@@ -1,4 +1,4 @@
-"""Voice pipeline: microphone input with Whisper STT and ElevenLabs TTS.
+"""Voice pipeline: microphone input with Whisper STT and TTS playback.
 
 Includes audio preprocessing, aviation-vocabulary-biased transcription,
 confidence scoring, and cancellable TTS playback for barge-in support.
@@ -20,6 +20,7 @@ from .audio_processing import (
     preprocess_audio,
     samples_to_wav_bytes,
 )
+from .tts import TTSClient
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +224,7 @@ class VoiceInput:
 
 
 class VoiceOutput:
-    """ElevenLabs TTS with streaming playback via ffmpeg for MP3 decoding.
+    """TTS playback via TTSClient with streaming ffmpeg MP3 decoding.
 
     Supports cancellation for barge-in: call cancel() to stop the current
     playback immediately when the user starts speaking.
@@ -231,14 +232,10 @@ class VoiceOutput:
 
     def __init__(
         self,
-        api_key: str,
-        voice_id: str,
-        model_id: str = "eleven_multilingual_v2",
+        tts_client: TTSClient,
         sample_rate: int = 24000,
     ) -> None:
-        self._api_key = api_key
-        self._voice_id = voice_id
-        self._model_id = model_id
+        self._tts = tts_client
         self._sample_rate = sample_rate
         self._cancelled = False
         self._playing = False
@@ -267,10 +264,6 @@ class VoiceOutput:
 
     async def speak(self, text: str) -> None:
         """Convert text to speech and play through default audio output."""
-        if not self._api_key or not self._voice_id:
-            logger.warning("TTS not configured (missing api_key or voice_id)")
-            return
-
         if not text.strip():
             return
 
@@ -284,10 +277,6 @@ class VoiceOutput:
 
         Respects cancellation: stops synthesizing and playing if cancel() is called.
         """
-        if not self._api_key or not self._voice_id:
-            logger.warning("TTS not configured, skipping speech output")
-            return
-
         self.reset()
         buffer = ""
         sentence_endings = ".!?\n"
@@ -319,34 +308,12 @@ class VoiceOutput:
                 await self._play_mp3(mp3_data)
 
     async def _synthesize(self, text: str) -> bytes | None:
-        """Call ElevenLabs API and return MP3 audio bytes."""
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}"
-        headers = {
-            "xi-api-key": self._api_key,
-            "Content-Type": "application/json",
-            "Accept": "audio/mpeg",
-        }
-        payload = {
-            "text": text,
-            "model_id": self._model_id,
-            "voice_settings": {
-                "stability": 0.5,
-                "similarity_boost": 0.75,
-                "style": 0.3,
-            },
-        }
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                resp = await client.post(url, headers=headers, json=payload)
-                resp.raise_for_status()
-                logger.info(
-                    "TTS synthesized %d bytes for: %s", len(resp.content), text[:60]
-                )
-                return resp.content
-            except httpx.HTTPError as e:
-                logger.warning("TTS synthesis failed: %s", e)
-                return None
+        """Synthesize text via the TTSClient and return audio bytes."""
+        try:
+            return await self._tts.synthesize(text)
+        except Exception as e:
+            logger.warning("TTS synthesis failed: %s", e)
+            return None
 
     async def _play_mp3(self, mp3_data: bytes) -> None:
         """Decode MP3 via ffmpeg subprocess and play as PCM through sounddevice."""
