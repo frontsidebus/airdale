@@ -12,8 +12,6 @@ import logging
 import signal
 from typing import Any
 
-import httpx
-
 from .claude_client import ClaudeClient
 from .config import Settings, load_settings
 from .context_store import ContextStore
@@ -25,8 +23,8 @@ from .sim_client import (
     SimState,
     TelemetryClient,
 )
-from .tts import create_tts_client
 from .voice import InputMode, VoiceInput, VoiceOutput
+from .whisper_client import WhisperClient
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +51,18 @@ class Orchestrator:
             fps=settings.screen_capture_fps,
             enabled=settings.screen_capture_enabled,
         )
+        self._whisper_client = WhisperClient(
+            base_url=settings.whisper_url,
+            model=settings.whisper_model,
+        )
         self._voice_input = VoiceInput(
-            whisper_url=settings.whisper_url,
+            whisper_client=self._whisper_client,
             mode=InputMode.PUSH_TO_TALK,
         )
-        self._tts_client = create_tts_client(settings)
-        self._voice_output = VoiceOutput(tts_client=self._tts_client)
+        self._voice_output = VoiceOutput(
+            api_key=settings.elevenlabs_api_key,
+            voice_id=settings.voice_id,
+        )
         self._claude = ClaudeClient(
             api_key=settings.anthropic_api_key,
             model=settings.claude_model,
@@ -71,7 +75,9 @@ class Orchestrator:
         )
         self._running = False
         self._sim_connected = False
-        self._tts_enabled = settings.tts_configured
+        self._tts_enabled = bool(
+            settings.elevenlabs_api_key and settings.voice_id
+        )
 
         # Health monitoring
         self._health = HealthMonitor()
@@ -157,7 +163,7 @@ class Orchestrator:
         await self._capture_manager.stop()
         if self._sim_connected:
             await self._sim_client.disconnect()
-        await self._tts_client.aclose()
+        self._whisper_client.close()
         logger.info("MERLIN orchestrator shut down")
 
     # -------------------------------------------------------------------
@@ -167,22 +173,19 @@ class Orchestrator:
     async def _check_whisper_health(self) -> None:
         """Probe Whisper endpoint and update health status."""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(
-                    f"{self._settings.whisper_url}/docs"
+            available = await asyncio.to_thread(self._whisper_client.is_available)
+            if available:
+                self._whisper_available = True
+                self._health.update(
+                    "whisper", True, "Responding"
                 )
-                if resp.status_code == 200:
-                    self._whisper_available = True
-                    self._health.update(
-                        "whisper", True, "Responding"
-                    )
-                else:
-                    self._whisper_available = False
-                    self._health.update(
-                        "whisper",
-                        False,
-                        f"HTTP {resp.status_code}; voice input degraded",
-                    )
+            else:
+                self._whisper_available = False
+                self._health.update(
+                    "whisper",
+                    False,
+                    "Health check failed; voice input degraded",
+                )
         except Exception as exc:
             self._whisper_available = False
             self._health.update(
