@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from telemetry.adapter_manager import AdapterManager, ConsumerConnection
+from telemetry.adapter_manager import AdapterManager
 from telemetry.schema import Position, TelemetryEnvelope
 
 
@@ -24,9 +24,7 @@ class TestAdapterRegistration:
     async def test_register_adapter(self):
         mgr = AdapterManager()
         ws = _mock_ws()
-        ack = await mgr.register_adapter(
-            ws, "msfs-1", "msfs2024", "aircraft"
-        )
+        ack = await mgr.register_adapter(ws, "msfs-1", "msfs2024", "aircraft")
         assert ack.accepted is True
         assert ack.adapter_id == "msfs-1"
         assert mgr.adapter_count == 1
@@ -89,10 +87,8 @@ class TestConsumerBroadcast:
         ws_adapter = _mock_ws()
         ws_consumer = _mock_ws()
 
-        await mgr.register_adapter(
-            ws_adapter, "msfs-1", "msfs2024", "aircraft"
-        )
-        consumer = mgr.add_consumer(ws_consumer)
+        await mgr.register_adapter(ws_adapter, "msfs-1", "msfs2024", "aircraft")
+        consumer = await mgr.add_consumer(ws_consumer)
 
         envelope = TelemetryEnvelope(
             adapter_id="msfs-1",
@@ -112,10 +108,8 @@ class TestConsumerBroadcast:
         ws_adapter = _mock_ws()
         ws_consumer = _mock_ws()
 
-        await mgr.register_adapter(
-            ws_adapter, "msfs-1", "msfs2024", "aircraft"
-        )
-        consumer = mgr.add_consumer(ws_consumer)
+        await mgr.register_adapter(ws_adapter, "msfs-1", "msfs2024", "aircraft")
+        consumer = await mgr.add_consumer(ws_consumer)
         mgr.set_consumer_subscription(consumer, ["position"])
 
         envelope = TelemetryEnvelope(
@@ -128,6 +122,7 @@ class TestConsumerBroadcast:
 
         ws_consumer.send_text.assert_called_once()
         import json
+
         sent_data = json.loads(ws_consumer.send_text.call_args[0][0])
         assert "position" in sent_data
         assert "speeds" not in sent_data

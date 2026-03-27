@@ -37,7 +37,6 @@ def tmp_settings(tmp_path: Path, mock_simconnect_server: MockSimConnectServer) -
     """Settings that point to the mock server and temp storage."""
     return Settings(
         anthropic_api_key="sk-ant-test-fake-key",
-        simconnect_bridge_url=mock_simconnect_server.url,
         chromadb_path=str(tmp_path / "chromadb"),
         whisper_url="http://localhost:9999",  # not used in text mode
         claude_model="claude-sonnet-4-20250514",

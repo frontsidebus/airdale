@@ -46,7 +46,6 @@ def mock_env_vars(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
         "ELEVENLABS_API_KEY": "el-test-key",
         "ELEVENLABS_VOICE_ID": "test-voice-id",
         "ELEVENLABS_MODEL_ID": "eleven_multilingual_v2",
-        "SIMCONNECT_BRIDGE_URL": "ws://localhost:9999",
         "WHISPER_MODEL": "tiny",
         "WHISPER_URL": "http://localhost:9090",
         "SCREEN_CAPTURE_ENABLED": "false",

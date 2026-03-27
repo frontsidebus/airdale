@@ -58,20 +58,6 @@ class Settings(BaseSettings):
         description="Full telemetry service WebSocket URL (constructed if empty)",
     )
 
-    # --- Legacy SimConnect bridge (deprecated, kept for backward compat) -----
-    simconnect_ws_host: str = Field(
-        default="localhost",
-        description="(Deprecated) WebSocket host for direct SimConnect bridge",
-    )
-    simconnect_ws_port: int = Field(
-        default=8080,
-        description="(Deprecated) WebSocket port for direct SimConnect bridge",
-    )
-    simconnect_bridge_url: str = Field(
-        default="",
-        description="(Deprecated) Full WebSocket URL for direct bridge connection",
-    )
-
     # --- Whisper STT ---------------------------------------------------------
     whisper_model: str = Field(
         default="medium",
@@ -121,11 +107,6 @@ class Settings(BaseSettings):
             self.telemetry_service_url = (
                 f"ws://{self.telemetry_service_host}"
                 f":{self.telemetry_service_port}/ws/telemetry"
-            )
-        # Legacy: construct bridge URL for backward compat
-        if not self.simconnect_bridge_url:
-            self.simconnect_bridge_url = (
-                f"ws://{self.simconnect_ws_host}:{self.simconnect_ws_port}"
             )
         return self
 

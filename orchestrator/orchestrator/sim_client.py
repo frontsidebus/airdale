@@ -520,7 +520,3 @@ class TelemetryClient:
             await self._reconnect()
             if self._connection_state != ConnectionState.CONNECTED:
                 break  # reconnect gave up
-
-
-# Backward compatibility alias
-SimConnectClient = TelemetryClient

@@ -12,11 +12,6 @@ from orchestrator.config import Settings, load_settings
 class TestSettingsDefaults:
     """Verify default values when only required fields are provided."""
 
-    def test_default_simconnect_url(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("SIMCONNECT_BRIDGE_URL", raising=False)
-        s = Settings(anthropic_api_key="sk-test")
-        assert s.simconnect_bridge_url == "ws://localhost:8080"
-
     def test_default_whisper_model(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("WHISPER_MODEL", raising=False)
         s = Settings(anthropic_api_key="sk-test")
@@ -65,10 +60,6 @@ class TestSettingsDefaults:
 
 class TestSettingsEnvOverrides:
     """Verify that environment variables override defaults."""
-
-    def test_env_overrides_simconnect_url(self, mock_env_vars: dict[str, str]) -> None:
-        s = Settings()
-        assert s.simconnect_bridge_url == "ws://localhost:9999"
 
     def test_env_overrides_whisper_model(self, mock_env_vars: dict[str, str]) -> None:
         s = Settings()

@@ -20,7 +20,6 @@ from .adapter_protocol import (
     parse_consumer_message,
 )
 from .config import TelemetryServiceSettings, load_settings
-from .schema import TelemetryEnvelope
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +184,7 @@ async def ws_telemetry(ws: WebSocket):
     heartbeat messages.
     """
     await ws.accept()
-    consumer = manager.add_consumer(ws)
+    consumer = await manager.add_consumer(ws)
 
     try:
         while True:
@@ -213,9 +212,7 @@ async def ws_telemetry(ws: WebSocket):
             if msg.type == "subscribe":
                 fields = msg.fields if msg.fields else None
                 manager.set_consumer_subscription(consumer, fields)
-                ack = ServiceSubscribeAck(
-                    fields=msg.fields or ["all"]
-                )
+                ack = ServiceSubscribeAck(fields=msg.fields or ["all"])
                 await ws.send_text(ack.model_dump_json())
 
             elif msg.type == "get_state":
@@ -246,4 +243,4 @@ async def ws_telemetry(ws: WebSocket):
     except Exception as exc:
         logger.warning("Consumer connection error: %s", exc)
     finally:
-        manager.remove_consumer(consumer)
+        await manager.remove_consumer(consumer)
