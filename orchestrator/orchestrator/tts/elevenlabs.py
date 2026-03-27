@@ -14,6 +14,7 @@ class ElevenLabsClient:
     """TTS client that calls the ElevenLabs REST API.
 
     Satisfies the ``TTSClient`` protocol defined in ``base.py``.
+    Uses a persistent ``httpx.AsyncClient`` to avoid per-call TCP overhead.
     """
 
     def __init__(
@@ -21,10 +22,17 @@ class ElevenLabsClient:
         api_key: str,
         voice_id: str,
         model_id: str = "eleven_multilingual_v2",
+        stability: float = 0.75,
+        similarity_boost: float = 0.80,
+        style: float = 0.15,
     ) -> None:
         self._api_key = api_key
         self._voice_id = voice_id
         self._model_id = model_id
+        self._stability = stability
+        self._similarity_boost = similarity_boost
+        self._style = style
+        self._http = httpx.AsyncClient(timeout=30.0)
 
     # -- TTSClient protocol ---------------------------------------------------
 
@@ -44,21 +52,20 @@ class ElevenLabsClient:
             "text": text,
             "model_id": self._model_id,
             "voice_settings": {
-                "stability": 0.75,
-                "similarity_boost": 0.80,
-                "style": 0.15,
+                "stability": self._stability,
+                "similarity_boost": self._similarity_boost,
+                "style": self._style,
             },
         }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
-            logger.info(
-                "ElevenLabs synthesized %d bytes for: %s",
-                len(resp.content),
-                text[:60],
-            )
-            return resp.content
+        resp = await self._http.post(url, headers=headers, json=payload)
+        resp.raise_for_status()
+        logger.info(
+            "ElevenLabs synthesized %d bytes for: %s",
+            len(resp.content),
+            text[:60],
+        )
+        return resp.content
 
     async def synthesize_stream(self, text: str) -> AsyncIterator[bytes]:
         """Stream audio from ElevenLabs REST endpoint in chunks."""
@@ -72,16 +79,17 @@ class ElevenLabsClient:
             "text": text,
             "model_id": self._model_id,
             "voice_settings": {
-                "stability": 0.75,
-                "similarity_boost": 0.80,
-                "style": 0.15,
+                "stability": self._stability,
+                "similarity_boost": self._similarity_boost,
+                "style": self._style,
             },
         }
 
-        async with (
-            httpx.AsyncClient(timeout=30.0) as client,
-            client.stream("POST", url, headers=headers, json=payload) as resp,
-        ):
+        async with self._http.stream("POST", url, headers=headers, json=payload) as resp:
             resp.raise_for_status()
             async for chunk in resp.aiter_bytes(chunk_size=4096):
                 yield chunk
+
+    async def aclose(self) -> None:
+        """Release the persistent HTTP client."""
+        await self._http.aclose()

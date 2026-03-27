@@ -7,7 +7,7 @@ ElevenLabsClient, KokoroClient, and protocol compliance.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -141,21 +141,18 @@ class TestElevenLabsClient:
                 "POST", "https://api.elevenlabs.io/v1/text-to-speech/test-voice-id/stream"
             ),
         )
-        with patch("orchestrator.tts.elevenlabs.httpx.AsyncClient") as mock_cls:
-            mock_http = AsyncMock()
-            mock_http.post = AsyncMock(return_value=mock_response)
-            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-            mock_http.__aexit__ = AsyncMock(return_value=None)
-            mock_cls.return_value = mock_http
+        mock_http = AsyncMock()
+        mock_http.post = AsyncMock(return_value=mock_response)
+        client._http = mock_http
 
-            result = await client.synthesize("Roger, Captain.")
-            assert result == b"fake-mp3-audio-data"
+        result = await client.synthesize("Roger, Captain.")
+        assert result == b"fake-mp3-audio-data"
 
-            # Verify the correct URL was called
-            call_args = mock_http.post.call_args
-            url = call_args[0][0]
-            assert "api.elevenlabs.io" in url
-            assert "test-voice-id" in url
+        # Verify the correct URL was called
+        call_args = mock_http.post.call_args
+        url = call_args[0][0]
+        assert "api.elevenlabs.io" in url
+        assert "test-voice-id" in url
 
     @pytest.mark.asyncio
     async def test_synthesize_http_error(self, client: Any) -> None:
@@ -163,15 +160,12 @@ class TestElevenLabsClient:
         mock_response._request = httpx.Request(
             "POST", "https://api.elevenlabs.io/v1/text-to-speech/test-voice-id/stream"
         )
-        with patch("orchestrator.tts.elevenlabs.httpx.AsyncClient") as mock_cls:
-            mock_http = AsyncMock()
-            mock_http.post = AsyncMock(return_value=mock_response)
-            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-            mock_http.__aexit__ = AsyncMock(return_value=None)
-            mock_cls.return_value = mock_http
+        mock_http = AsyncMock()
+        mock_http.post = AsyncMock(return_value=mock_response)
+        client._http = mock_http
 
-            with pytest.raises(httpx.HTTPStatusError):
-                await client.synthesize("Roger.")
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.synthesize("Roger.")
 
 
 # ===========================================================================
@@ -202,40 +196,34 @@ class TestKokoroClient:
             content=fake_wav,
             request=httpx.Request("POST", "http://localhost:9091/tts"),
         )
-        with patch("orchestrator.tts.kokoro.httpx.AsyncClient") as mock_cls:
-            mock_http = AsyncMock()
-            mock_http.post = AsyncMock(return_value=mock_response)
-            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-            mock_http.__aexit__ = AsyncMock(return_value=None)
-            mock_cls.return_value = mock_http
+        mock_http = AsyncMock()
+        mock_http.post = AsyncMock(return_value=mock_response)
+        client._http = mock_http
 
-            result = await client.synthesize("Roger, Captain.")
-            assert result == fake_wav
+        result = await client.synthesize("Roger, Captain.")
+        assert result == fake_wav
 
-            # Verify the correct URL was called
-            call_args = mock_http.post.call_args
-            url = call_args[0][0]
-            assert "localhost:9091" in url
-            assert "/tts" in url
+        # Verify the correct URL was called
+        call_args = mock_http.post.call_args
+        url = call_args[0][0]
+        assert "localhost:9091" in url
+        assert "/tts" in url
 
-            # Verify the payload
-            payload = call_args[1]["json"]
-            assert payload["text"] == "Roger, Captain."
-            assert payload["voice_id"] == "af_heart"
+        # Verify the payload
+        payload = call_args[1]["json"]
+        assert payload["text"] == "Roger, Captain."
+        assert payload["voice_id"] == "af_heart"
 
     @pytest.mark.asyncio
     async def test_synthesize_http_error(self, client: Any) -> None:
         mock_response = httpx.Response(status_code=503, content=b"Service Unavailable")
         mock_response._request = httpx.Request("POST", "http://localhost:9091/tts")
-        with patch("orchestrator.tts.kokoro.httpx.AsyncClient") as mock_cls:
-            mock_http = AsyncMock()
-            mock_http.post = AsyncMock(return_value=mock_response)
-            mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-            mock_http.__aexit__ = AsyncMock(return_value=None)
-            mock_cls.return_value = mock_http
+        mock_http = AsyncMock()
+        mock_http.post = AsyncMock(return_value=mock_response)
+        client._http = mock_http
 
-            with pytest.raises(httpx.HTTPStatusError):
-                await client.synthesize("Roger.")
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.synthesize("Roger.")
 
     def test_base_url_trailing_slash_stripped(self) -> None:
         from orchestrator.tts.kokoro import KokoroClient

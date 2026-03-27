@@ -54,6 +54,9 @@ def create_tts_client(settings: Settings) -> TTSClient:
             api_key=settings.elevenlabs_api_key,
             voice_id=settings.elevenlabs_voice_id,
             model_id=settings.elevenlabs_model_id,
+            stability=settings.tts_stability,
+            similarity_boost=settings.tts_similarity_boost,
+            style=settings.tts_style,
         )
 
     if backend == "local":

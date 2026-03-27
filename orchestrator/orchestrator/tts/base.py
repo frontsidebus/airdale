@@ -30,3 +30,7 @@ class TTSClient(Protocol):
         # Make the protocol method a valid async iterator stub
         if False:  # pragma: no cover
             yield  # type: ignore[misc]
+
+    async def aclose(self) -> None:
+        """Release resources held by the client (e.g. persistent HTTP connections)."""
+        ...
