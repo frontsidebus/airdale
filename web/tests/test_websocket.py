@@ -18,9 +18,8 @@ import json
 from dataclasses import dataclass
 from unittest.mock import patch
 
-import pytest
-
 import httpx
+import pytest
 from httpx_ws import aconnect_ws
 from httpx_ws.transport import ASGIWebSocketTransport
 
