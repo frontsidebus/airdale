@@ -47,6 +47,7 @@ from orchestrator.context_store import ContextStore  # noqa: E402
 from orchestrator.flight_phase import FlightPhaseDetector  # noqa: E402
 from orchestrator.sim_client import SimState, TelemetryClient  # noqa: E402
 from orchestrator.tts_preprocessor import preprocess_for_tts  # noqa: E402
+from orchestrator.whisper_client import WhisperClient  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -102,7 +103,7 @@ class AppState:
     claude_client: ClaudeClient | None = None
     context_store: ContextStore | None = None
     phase_detector: FlightPhaseDetector | None = None
-    whisper_client: httpx.AsyncClient | None = None
+    whisper_client: WhisperClient | None = None
     tts_client: httpx.AsyncClient | None = None
     tts_cache: dict[str, bytes] = field(default_factory=dict)
     sim_connected: bool = False
@@ -209,8 +210,8 @@ async def lifespan(app: FastAPI):
 
         state.sim_client.subscribe(_on_state)
 
-    # Whisper HTTP client (connection pooling)
-    state.whisper_client = httpx.AsyncClient(timeout=30.0)
+    # Whisper client (unified async client from Phase 3)
+    state.whisper_client = WhisperClient(base_url=settings.whisper_url)
 
     # Claude client
     state.claude_client = ClaudeClient(
@@ -250,7 +251,7 @@ async def lifespan(app: FastAPI):
     # Close persistent HTTP clients
     if state.tts_client and not state.tts_client.is_closed:
         await state.tts_client.aclose()
-    if state.whisper_client and not state.whisper_client.is_closed:
+    if state.whisper_client is not None:
         await state.whisper_client.aclose()
 
 
@@ -308,10 +309,7 @@ async def get_status(state: AppState = Depends(get_app_state)):
     whisper_ok = False
     try:
         if state.whisper_client is not None:
-            resp = await state.whisper_client.get(
-                f"{state.settings.whisper_url}/health"
-            )
-            whisper_ok = resp.status_code < 500
+            whisper_ok = await state.whisper_client.is_available()
     except Exception:
         pass
 
@@ -1032,54 +1030,16 @@ async def _transcribe_with_confidence(
     *,
     state: AppState,
 ) -> tuple[str, float]:
-    """Send audio to Whisper with aviation prompt and return (text, confidence).
-
-    Uses verbose_json output to extract per-segment confidence scoring.
-    Uses the shared Whisper client for connection pooling.
-    """
+    """Transcribe audio via the unified WhisperClient and return (text, confidence)."""
     try:
         if state.whisper_client is None:
             logger.error("Whisper client not initialized")
             return "", 0.0
-        resp = await state.whisper_client.post(
-            f"{state.settings.whisper_url}/v1/audio/transcriptions",
-            files={
-                "file": (filename, audio_bytes, mime_type),
-            },
-            data={
-                "model": state.settings.whisper_model,
-                "language": "en",
-                "response_format": "verbose_json",
-                "prompt": AVIATION_PROMPT,
-            },
+        result = await state.whisper_client.transcribe_with_confidence(
+            audio_bytes, filename=filename, mime_type=mime_type,
         )
-        resp.raise_for_status()
-        # Whisper may return plain text instead of JSON for some inputs
-        try:
-            data = resp.json()
-        except Exception:
-            text = resp.text.strip()
-            logger.warning(
-                "Whisper returned plain text instead of JSON: %s",
-                text[:80],
-            )
-            return text, 0.5
-        text = data.get("text", "").strip()
-
-        # Calculate confidence from segment avg_logprob
-        segments = data.get("segments", [])
-        if segments:
-            logprobs = [s.get("avg_logprob", -1.0) for s in segments]
-            avg_logprob = sum(logprobs) / len(logprobs)
-            confidence = min(1.0, max(0.0, math.exp(avg_logprob)))
-        else:
-            confidence = 0.5
-
-        logger.info("Transcribed (confidence=%.2f): %s", confidence, text[:80])
-        return text, confidence
-    except httpx.HTTPError as exc:
-        logger.error("Whisper transcription HTTP error: %s", exc)
-        return "", 0.0
+        logger.info("Transcribed (confidence=%.2f): %s", result.confidence, result.text[:80])
+        return result.text, result.confidence
     except Exception as exc:
         logger.error("Whisper transcription failed: %s", exc)
         return "", 0.0
