@@ -75,9 +75,7 @@ class Orchestrator:
         )
         self._running = False
         self._sim_connected = False
-        self._tts_enabled = bool(
-            settings.elevenlabs_api_key and settings.voice_id
-        )
+        self._tts_enabled = bool(settings.elevenlabs_api_key and settings.voice_id)
 
         # Health monitoring
         self._health = HealthMonitor()
@@ -99,9 +97,7 @@ class Orchestrator:
                 await self._sim_client.connect()
                 self._sim_connected = True
                 self._sim_client.subscribe(self._on_state_update)
-                self._health.update(
-                    "simconnect_bridge", True, "Connected"
-                )
+                self._health.update("simconnect_bridge", True, "Connected")
             except Exception:
                 logger.warning(
                     "Could not connect to telemetry service at %s; "
@@ -114,20 +110,14 @@ class Orchestrator:
                     "Connection failed; text-only mode",
                 )
         else:
-            logger.info(
-                "Text-only mode: skipping telemetry service connection"
-            )
-            self._health.update(
-                "simconnect_bridge", False, "Skipped (text-only mode)"
-            )
+            logger.info("Text-only mode: skipping telemetry service connection")
+            self._health.update("simconnect_bridge", False, "Skipped (text-only mode)")
 
         # Update ChromaDB health from context store availability
         if self._context_store.available:
             self._health.update("chromadb", True, "Connected")
         else:
-            self._health.update(
-                "chromadb", False, "Unavailable; RAG disabled"
-            )
+            self._health.update("chromadb", False, "Unavailable; RAG disabled")
 
         # Whisper health check
         await self._check_whisper_health()
@@ -140,21 +130,12 @@ class Orchestrator:
         self._running = True
         logger.info("MERLIN is ready.")
 
-        mode_label = (
-            "text-only" if not self._sim_connected else "sim-connected"
-        )
+        mode_label = "text-only" if not self._sim_connected else "sim-connected"
         tts_label = "TTS enabled" if self._tts_enabled else "TTS disabled"
 
-        print(
-            f"\n=== MERLIN AI Co-Pilot ({mode_label}, {tts_label}) ==="
-        )
-        print(
-            "Type your message, or use /voice to toggle voice input."
-        )
-        print(
-            "Commands: /voice, /vad, /ptt, /capture, /tts, "
-            "/clear, /status, /health, /quit\n"
-        )
+        print(f"\n=== MERLIN AI Co-Pilot ({mode_label}, {tts_label}) ===")
+        print("Type your message, or use /voice to toggle voice input.")
+        print("Commands: /voice, /vad, /ptt, /capture, /tts, /clear, /status, /health, /quit\n")
 
         await self._conversation_loop()
 
@@ -176,9 +157,7 @@ class Orchestrator:
             available = await self._whisper_client.is_available()
             if available:
                 self._whisper_available = True
-                self._health.update(
-                    "whisper", True, "Responding"
-                )
+                self._health.update("whisper", True, "Responding")
             else:
                 self._whisper_available = False
                 self._health.update(
@@ -200,13 +179,9 @@ class Orchestrator:
         if cs == ConnectionState.CONNECTED:
             self._health.update("simconnect_bridge", True, "Connected")
         elif cs == ConnectionState.RECONNECTING:
-            self._health.update(
-                "simconnect_bridge", False, "Reconnecting..."
-            )
+            self._health.update("simconnect_bridge", False, "Reconnecting...")
         else:
-            self._health.update(
-                "simconnect_bridge", False, "Disconnected"
-            )
+            self._health.update("simconnect_bridge", False, "Disconnected")
 
     def get_health_summary(self) -> dict[str, Any]:
         """Return health summary for all subsystems."""
@@ -231,10 +206,7 @@ class Orchestrator:
                     # Graceful degradation: if Whisper is down, fall
                     # back to text input automatically.
                     if not self._whisper_available:
-                        print(
-                            "[Whisper unavailable -- "
-                            "falling back to text input]"
-                        )
+                        print("[Whisper unavailable -- falling back to text input]")
                         use_voice = False
                         continue
 
@@ -242,9 +214,7 @@ class Orchestrator:
                     try:
                         user_text = await self._voice_input.listen()
                     except Exception:
-                        logger.warning(
-                            "Voice input failed; switching to text mode"
-                        )
+                        logger.warning("Voice input failed; switching to text mode")
                         self._whisper_available = False
                         self._health.update(
                             "whisper",
@@ -252,10 +222,7 @@ class Orchestrator:
                             "Listen failed; text-only fallback",
                         )
                         use_voice = False
-                        print(
-                            "[Voice input failed -- "
-                            "switched to text mode]"
-                        )
+                        print("[Voice input failed -- switched to text mode]")
                         continue
                     if user_text:
                         print(f"You: {user_text}")
@@ -263,10 +230,8 @@ class Orchestrator:
                         continue
                 else:
                     try:
-                        user_text = (
-                            await asyncio.get_running_loop().run_in_executor(
-                                None, lambda: input("Captain> ")
-                            )
+                        user_text = await asyncio.get_running_loop().run_in_executor(
+                            None, lambda: input("Captain> ")
                         )
                     except EOFError:
                         break
@@ -290,9 +255,7 @@ class Orchestrator:
                 # Optionally grab screen capture for vision
                 image_b64 = None
                 if self._capture_manager.enabled:
-                    image_b64 = (
-                        await self._capture_manager.get_frame_base64()
-                    )
+                    image_b64 = await self._capture_manager.get_frame_base64()
 
                 # Stream Claude response
                 print("MERLIN: ", end="", flush=True)
@@ -309,32 +272,22 @@ class Orchestrator:
                     self._health.update("claude_api", True, "OK")
                 except Exception as exc:
                     logger.exception("Claude API error")
-                    self._health.update(
-                        "claude_api", False, f"Error: {exc}"
-                    )
-                    print(
-                        "\n[Claude API error -- "
-                        "check logs for details.]"
-                    )
+                    self._health.update("claude_api", False, f"Error: {exc}")
+                    print("\n[Claude API error -- check logs for details.]")
                     continue
 
                 print()  # newline after response
 
                 # TTS output (non-blocking)
                 if self._tts_enabled and full_response:
-                    task = asyncio.create_task(
-                        self._voice_output.speak(full_response)
-                    )
+                    task = asyncio.create_task(self._voice_output.speak(full_response))
                     task.add_done_callback(self._on_tts_done)
 
             except KeyboardInterrupt:
                 print("\nUse /quit to exit.")
             except Exception:
                 logger.exception("Error in conversation loop")
-                print(
-                    "\n[MERLIN encountered an error. "
-                    "Check logs for details.]"
-                )
+                print("\n[MERLIN encountered an error. Check logs for details.]")
 
     @staticmethod
     def _on_tts_done(task: asyncio.Task[None]) -> None:
@@ -355,9 +308,7 @@ class Orchestrator:
                 state.flight_phase = detected_phase
                 return state
             # Bridge disconnected/reconnecting -- return stale state
-            logger.debug(
-                "Bridge is %s; using last-known state", cs.value
-            )
+            logger.debug("Bridge is %s; using last-known state", cs.value)
             return self._sim_client.state
         return SimState()
 
@@ -411,11 +362,7 @@ class Orchestrator:
                 status = "OK" if info["healthy"] else "DEGRADED"
                 age = info["age_seconds"]
                 msg = info["message"]
-                age_str = (
-                    f" (last seen {age}s ago)"
-                    if age != float("inf")
-                    else ""
-                )
+                age_str = f" (last seen {age}s ago)" if age != float("inf") else ""
                 print(f"  {name}: {status} -- {msg}{age_str}")
             print()
             return True
@@ -427,15 +374,9 @@ class Orchestrator:
                 stats = self._sim_client.stats
                 if cs == ConnectionState.CONNECTED:
                     state = self._sim_client.state
-                    print(
-                        f"SimConnect: {cs.value} | "
-                        f"{state.telemetry_summary()}"
-                    )
+                    print(f"SimConnect: {cs.value} | {state.telemetry_summary()}")
                 else:
-                    print(
-                        f"SimConnect: {cs.value} "
-                        f"(reconnects: {stats['reconnect_count']})"
-                    )
+                    print(f"SimConnect: {cs.value} (reconnects: {stats['reconnect_count']})")
                 print(
                     f"  Messages received: {stats['messages_received']}"
                     f" | Last msg: {stats['last_message_age_s']}s ago"
@@ -443,21 +384,12 @@ class Orchestrator:
             else:
                 print("SimConnect: Not connected (text-only mode)")
             print(
-                f"Context store: "
-                f"{'available' if self._context_store.available else 'unavailable'}"
+                f"Context store: {'available' if self._context_store.available else 'unavailable'}"
             )
             print(f"Docs in store: {self._context_store.document_count}")
-            print(
-                f"TTS: {'enabled' if self._tts_enabled else 'disabled'}"
-            )
-            print(
-                f"Screen capture: "
-                f"{'on' if self._capture_manager.enabled else 'off'}"
-            )
-            print(
-                f"Whisper: "
-                f"{'available' if self._whisper_available else 'unavailable'}"
-            )
+            print(f"TTS: {'enabled' if self._tts_enabled else 'disabled'}")
+            print(f"Screen capture: {'on' if self._capture_manager.enabled else 'off'}")
+            print(f"Whisper: {'available' if self._whisper_available else 'unavailable'}")
             return True
 
         print(f"Unknown command: {cmd}")
@@ -470,9 +402,7 @@ class Orchestrator:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="MERLIN AI Co-Pilot Orchestrator"
-    )
+    parser = argparse.ArgumentParser(description="MERLIN AI Co-Pilot Orchestrator")
     parser.add_argument(
         "--text-only",
         action="store_true",

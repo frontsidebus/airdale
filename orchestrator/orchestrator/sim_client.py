@@ -211,9 +211,7 @@ class HealthMonitor:
         """Register a subsystem for health tracking."""
         self._subsystems[name] = SubsystemHealth(name=name)
 
-    def update(
-        self, name: str, healthy: bool, message: str = ""
-    ) -> None:
+    def update(self, name: str, healthy: bool, message: str = "") -> None:
         """Update the health status of a subsystem."""
         if name not in self._subsystems:
             self.register(name)
@@ -378,15 +376,11 @@ class TelemetryClient:
                 # Send a ping to verify the connection is alive
                 if self._ws is not None:
                     try:
-                        pong = await asyncio.wait_for(
-                            self._ws.ping(), timeout=5.0
-                        )
+                        pong = await asyncio.wait_for(self._ws.ping(), timeout=5.0)
                         await asyncio.wait_for(pong, timeout=5.0)
                         logger.debug("Ping/pong succeeded; connection alive")
                     except Exception:
-                        logger.warning(
-                            "Ping failed; triggering reconnect"
-                        )
+                        logger.warning("Ping failed; triggering reconnect")
                         if self._ws is not None:
                             await self._ws.close()
                         break
@@ -420,9 +414,7 @@ class TelemetryClient:
                     self._reconnect_count,
                 )
                 # Restart heartbeat
-                self._heartbeat_task = asyncio.create_task(
-                    self._heartbeat_loop()
-                )
+                self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
                 return
             except Exception as exc:
                 logger.warning(
@@ -467,9 +459,7 @@ class TelemetryClient:
                             # JSON is identical to the last one received. This
                             # avoids unnecessary Pydantic validation + callback
                             # overhead when the sim is paused or on the ground.
-                            msg_str = message if isinstance(
-                                message, str
-                            ) else message.decode()
+                            msg_str = message if isinstance(message, str) else message.decode()
                             if msg_str == self._last_state_json:
                                 continue
                             self._last_state_json = msg_str
@@ -484,9 +474,7 @@ class TelemetryClient:
                                 try:
                                     await cb(self._state)
                                 except Exception:
-                                    logger.exception(
-                                        "Error in state subscriber callback"
-                                    )
+                                    logger.exception("Error in state subscriber callback")
                         elif "type" in data:
                             # Informational response (e.g. state_response).
                             logger.debug(
@@ -494,14 +482,10 @@ class TelemetryClient:
                                 data.get("type"),
                             )
                         else:
-                            logger.debug(
-                                "Ignoring unrecognised service message"
-                            )
+                            logger.debug("Ignoring unrecognised service message")
 
                     except json.JSONDecodeError:
-                        logger.warning(
-                            "Received invalid JSON from telemetry service"
-                        )
+                        logger.warning("Received invalid JSON from telemetry service")
             except websockets.ConnectionClosed:
                 logger.warning("Telemetry service connection closed")
             except asyncio.CancelledError:

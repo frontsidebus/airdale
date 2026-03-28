@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from orchestrator.config import Settings, load_settings
@@ -12,47 +10,65 @@ from orchestrator.config import Settings, load_settings
 class TestSettingsDefaults:
     """Verify default values when only required fields are provided."""
 
-    def test_default_whisper_model(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_default_whisper_model(
+        self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("WHISPER_MODEL", raising=False)
         s = Settings(anthropic_api_key="sk-test")
         assert s.whisper_model == "large-v3-turbo"
 
-    def test_default_whisper_url(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_default_whisper_url(
+        self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("WHISPER_URL", raising=False)
         s = Settings(anthropic_api_key="sk-test")
         assert s.whisper_url == "http://localhost:9090"
 
-    def test_default_screen_capture_disabled(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_default_screen_capture_disabled(
+        self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("SCREEN_CAPTURE_ENABLED", raising=False)
         s = Settings(anthropic_api_key="sk-test")
         assert s.screen_capture_enabled is False
 
-    def test_default_screen_capture_fps(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_default_screen_capture_fps(
+        self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("SCREEN_CAPTURE_FPS", raising=False)
         s = Settings(anthropic_api_key="sk-test")
         assert s.screen_capture_fps == 1
 
-    def test_default_claude_model(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_default_claude_model(
+        self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("CLAUDE_MODEL", raising=False)
         s = Settings(anthropic_api_key="sk-test")
         assert s.claude_model == "claude-sonnet-4-20250514"
 
-    def test_default_chromadb_url(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_default_chromadb_url(
+        self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("CHROMADB_URL", raising=False)
         s = Settings(anthropic_api_key="sk-test")
         assert s.chromadb_url == "http://localhost:8000"
 
-    def test_default_elevenlabs_key_empty(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_default_elevenlabs_key_empty(
+        self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
         s = Settings(anthropic_api_key="sk-test")
         assert s.elevenlabs_api_key == ""
 
-    def test_default_voice_id_empty(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_default_voice_id_empty(
+        self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("ELEVENLABS_VOICE_ID", raising=False)
         s = Settings(anthropic_api_key="sk-test")
         assert s.voice_id == ""
 
-    def test_default_claude_temperature(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_default_claude_temperature(
+        self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("CLAUDE_TEMPERATURE", raising=False)
         s = Settings(anthropic_api_key="sk-test")
         assert s.claude_temperature == 0.7
@@ -81,7 +97,9 @@ class TestSettingsEnvOverrides:
         s = Settings()
         assert s.anthropic_api_key == "sk-ant-test-key-000"
 
-    def test_env_overrides_claude_temperature(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_env_overrides_claude_temperature(
+        self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CLAUDE_TEMPERATURE", "0.3")
         s = Settings()
         assert s.claude_temperature == 0.3
@@ -92,23 +110,30 @@ class TestSettingsValidation:
 
     def test_missing_anthropic_key_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Prevent loading real .env file
-        monkeypatch.setattr("orchestrator.config.Settings.model_config", {
-            "env_file": "",
-            "env_file_encoding": "utf-8",
-            "extra": "ignore",
-        })
+        monkeypatch.setattr(
+            "orchestrator.config.Settings.model_config",
+            {
+                "env_file": "",
+                "env_file_encoding": "utf-8",
+                "extra": "ignore",
+            },
+        )
         # Clear all potentially set env vars
         for key in ("ANTHROPIC_API_KEY",):
             monkeypatch.delenv(key, raising=False)
         with pytest.raises(Exception):
             Settings()
 
-    def test_screen_capture_enabled_parses_true(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_screen_capture_enabled_parses_true(
+        self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("SCREEN_CAPTURE_ENABLED", "true")
         s = Settings()
         assert s.screen_capture_enabled is True
 
-    def test_screen_capture_enabled_parses_one(self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_screen_capture_enabled_parses_one(
+        self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("SCREEN_CAPTURE_ENABLED", "1")
         s = Settings()
         assert s.screen_capture_enabled is True

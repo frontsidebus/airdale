@@ -11,8 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from orchestrator.sim_client import (
-    Attitude,
-    AutopilotState,
     ConnectionState,
     EngineData,
     Engines,
@@ -22,13 +20,10 @@ from orchestrator.sim_client import (
     HealthMonitor,
     Position,
     RadioState,
-    TelemetryClient,
     SimState,
-    Speeds,
     SubsystemHealth,
-    SurfaceState,
+    TelemetryClient,
 )
-
 
 # ---------------------------------------------------------------------------
 # SimState model parsing
@@ -38,9 +33,7 @@ from orchestrator.sim_client import (
 class TestSimStateParsing:
     """Test that SimState correctly parses from JSON / dict payloads."""
 
-    def test_parse_full_payload(
-        self, sample_bridge_broadcast: dict[str, Any]
-    ) -> None:
+    def test_parse_full_payload(self, sample_bridge_broadcast: dict[str, Any]) -> None:
         state = SimState.model_validate(sample_bridge_broadcast)
         assert state.aircraft == "Cessna 172 Skyhawk"
         assert state.position.altitude_msl == 6500
@@ -85,9 +78,7 @@ class TestSimStateParsing:
             ],
         )
         assert len(engines.active_engines) == 2
-        assert engines.active_engines[1].fuel_flow_gph == pytest.approx(
-            8.5
-        )
+        assert engines.active_engines[1].fuel_flow_gph == pytest.approx(8.5)
 
     def test_parse_flight_phase_enum(self) -> None:
         state = SimState.model_validate({"flight_phase": "APPROACH"})
@@ -121,54 +112,38 @@ class TestSimStateParsing:
 class TestSimStateTelemetrySummary:
     """Test the telemetry_summary() output format."""
 
-    def test_on_ground_excludes_ground_speed(
-        self, sim_state_parked: SimState
-    ) -> None:
+    def test_on_ground_excludes_ground_speed(self, sim_state_parked: SimState) -> None:
         summary = sim_state_parked.telemetry_summary()
         assert "GS:" not in summary
         assert "Phase: PREFLIGHT" in summary
 
-    def test_airborne_includes_ground_speed(
-        self, sim_state_cruise: SimState
-    ) -> None:
+    def test_airborne_includes_ground_speed(self, sim_state_cruise: SimState) -> None:
         summary = sim_state_cruise.telemetry_summary()
         assert "GS:" in summary
         assert "135kt" in summary
 
-    def test_autopilot_on_shows_ap_flag(
-        self, sim_state_cruise: SimState
-    ) -> None:
+    def test_autopilot_on_shows_ap_flag(self, sim_state_cruise: SimState) -> None:
         summary = sim_state_cruise.telemetry_summary()
         assert "AP:ON" in summary
 
-    def test_autopilot_off_hides_ap_flag(
-        self, sim_state_parked: SimState
-    ) -> None:
+    def test_autopilot_off_hides_ap_flag(self, sim_state_parked: SimState) -> None:
         summary = sim_state_parked.telemetry_summary()
         assert "AP:ON" not in summary
 
-    def test_summary_contains_altitude(
-        self, sim_state_cruise: SimState
-    ) -> None:
+    def test_summary_contains_altitude(self, sim_state_cruise: SimState) -> None:
         summary = sim_state_cruise.telemetry_summary()
         assert "Alt: 6500ft" in summary
 
-    def test_summary_contains_ias(
-        self, sim_state_cruise: SimState
-    ) -> None:
+    def test_summary_contains_ias(self, sim_state_cruise: SimState) -> None:
         summary = sim_state_cruise.telemetry_summary()
         assert "IAS: 120kt" in summary
 
-    def test_summary_contains_heading(
-        self, sim_state_cruise: SimState
-    ) -> None:
+    def test_summary_contains_heading(self, sim_state_cruise: SimState) -> None:
         summary = sim_state_cruise.telemetry_summary()
         # heading_magnetic is 42
         assert "HDG: 42" in summary
 
-    def test_summary_contains_vertical_speed(
-        self, sim_state_descent: SimState
-    ) -> None:
+    def test_summary_contains_vertical_speed(self, sim_state_descent: SimState) -> None:
         summary = sim_state_descent.telemetry_summary()
         assert "VS: -500fpm" in summary
 
@@ -202,9 +177,7 @@ class TestTelemetryClient:
         ):
             await client.connect()
             assert client._listen_task is not None
-            assert (
-                client.connection_state == ConnectionState.CONNECTED
-            )
+            assert client.connection_state == ConnectionState.CONNECTED
             await client.disconnect()
 
     @pytest.mark.asyncio
@@ -221,10 +194,7 @@ class TestTelemetryClient:
             await client.disconnect()
             mock_ws.close.assert_awaited_once()
             assert client._ws is None
-            assert (
-                client.connection_state
-                == ConnectionState.DISCONNECTED
-            )
+            assert client.connection_state == ConnectionState.DISCONNECTED
 
     @pytest.mark.asyncio
     async def test_get_state_returns_cached_state(self) -> None:
@@ -237,9 +207,7 @@ class TestTelemetryClient:
     async def test_subscribe_callback_called_on_broadcast(
         self, sample_bridge_broadcast: dict[str, Any]
     ) -> None:
-        client = TelemetryClient(
-            "ws://localhost:8080", auto_reconnect=False
-        )
+        client = TelemetryClient("ws://localhost:8080", auto_reconnect=False)
         callback = AsyncMock()
         client.subscribe(callback)
 
@@ -261,9 +229,7 @@ class TestTelemetryClient:
 
     @pytest.mark.asyncio
     async def test_listen_loop_ignores_invalid_json(self) -> None:
-        client = TelemetryClient(
-            "ws://localhost:8080", auto_reconnect=False
-        )
+        client = TelemetryClient("ws://localhost:8080", auto_reconnect=False)
         callback = AsyncMock()
         client.subscribe(callback)
 
@@ -280,16 +246,12 @@ class TestTelemetryClient:
     @pytest.mark.asyncio
     async def test_listen_loop_ignores_typed_messages(self) -> None:
         """Messages with a 'type' field but no 'position' are ignored."""
-        client = TelemetryClient(
-            "ws://localhost:8080", auto_reconnect=False
-        )
+        client = TelemetryClient("ws://localhost:8080", auto_reconnect=False)
         callback = AsyncMock()
         client.subscribe(callback)
 
         async def fake_aiter():
-            yield json.dumps(
-                {"type": "state_response", "message": "OK"}
-            )
+            yield json.dumps({"type": "state_response", "message": "OK"})
 
         mock_ws = AsyncMock()
         mock_ws.__aiter__ = lambda self: fake_aiter()
@@ -302,9 +264,7 @@ class TestTelemetryClient:
     async def test_subscriber_exception_does_not_crash_loop(
         self, sample_bridge_broadcast: dict[str, Any]
     ) -> None:
-        client = TelemetryClient(
-            "ws://localhost:8080", auto_reconnect=False
-        )
+        client = TelemetryClient("ws://localhost:8080", auto_reconnect=False)
         bad_callback = AsyncMock(side_effect=RuntimeError("boom"))
         good_callback = AsyncMock()
         client.subscribe(bad_callback)
@@ -329,9 +289,7 @@ class TestTelemetryClient:
         self, sample_bridge_broadcast: dict[str, Any]
     ) -> None:
         """The listen loop should preserve the current flight_phase."""
-        client = TelemetryClient(
-            "ws://localhost:8080", auto_reconnect=False
-        )
+        client = TelemetryClient("ws://localhost:8080", auto_reconnect=False)
         client._state.flight_phase = FlightPhase.CRUISE
 
         message = json.dumps(sample_bridge_broadcast)
@@ -379,9 +337,7 @@ class TestConnectionState:
             return_value=mock_ws,
         ):
             await client.connect()
-            assert (
-                client.connection_state == ConnectionState.CONNECTED
-            )
+            assert client.connection_state == ConnectionState.CONNECTED
             await client.disconnect()
 
     @pytest.mark.asyncio
@@ -396,18 +352,13 @@ class TestConnectionState:
         ):
             with pytest.raises(ConnectionRefusedError):
                 await client.connect()
-            assert (
-                client.connection_state
-                == ConnectionState.DISCONNECTED
-            )
+            assert client.connection_state == ConnectionState.DISCONNECTED
 
     @pytest.mark.asyncio
     async def test_messages_received_incremented(
         self, sample_bridge_broadcast: dict[str, Any]
     ) -> None:
-        client = TelemetryClient(
-            "ws://localhost:8080", auto_reconnect=False
-        )
+        client = TelemetryClient("ws://localhost:8080", auto_reconnect=False)
         message = json.dumps(sample_bridge_broadcast)
 
         async def fake_aiter():
@@ -458,9 +409,7 @@ class TestReconnection:
             client.RECONNECT_MAX_DELAY = 0.02
             await client._reconnect()
             assert client._reconnect_count >= 1
-            assert (
-                client.connection_state == ConnectionState.CONNECTED
-            )
+            assert client.connection_state == ConnectionState.CONNECTED
 
         # Clean up
         client._auto_reconnect = False
@@ -473,13 +422,9 @@ class TestReconnection:
 
     @pytest.mark.asyncio
     async def test_reconnect_disabled_does_nothing(self) -> None:
-        client = TelemetryClient(
-            "ws://localhost:8080", auto_reconnect=False
-        )
+        client = TelemetryClient("ws://localhost:8080", auto_reconnect=False)
         await client._reconnect()
-        assert (
-            client.connection_state == ConnectionState.DISCONNECTED
-        )
+        assert client.connection_state == ConnectionState.DISCONNECTED
         assert client._reconnect_count == 0
 
     @pytest.mark.asyncio
@@ -581,9 +526,7 @@ class TestDeltaDetection:
     async def test_duplicate_messages_skip_callback(
         self, sample_bridge_broadcast: dict[str, Any]
     ) -> None:
-        client = TelemetryClient(
-            "ws://localhost:8080", auto_reconnect=False
-        )
+        client = TelemetryClient("ws://localhost:8080", auto_reconnect=False)
         callback = AsyncMock()
         client.subscribe(callback)
 
@@ -607,9 +550,7 @@ class TestDeltaDetection:
     async def test_changed_messages_trigger_callback(
         self, sample_bridge_broadcast: dict[str, Any]
     ) -> None:
-        client = TelemetryClient(
-            "ws://localhost:8080", auto_reconnect=False
-        )
+        client = TelemetryClient("ws://localhost:8080", auto_reconnect=False)
         callback = AsyncMock()
         client.subscribe(callback)
 
@@ -712,21 +653,19 @@ class TestGracefulDegradation:
     @pytest.mark.asyncio
     async def test_connect_failure_is_recoverable(self) -> None:
         """After a connect failure, the client should remain usable."""
-        client = TelemetryClient(
-            "ws://localhost:8080", auto_reconnect=False
-        )
-        with patch(
-            "orchestrator.sim_client.websockets.connect",
-            new_callable=AsyncMock,
-            side_effect=ConnectionRefusedError("refused"),
+        client = TelemetryClient("ws://localhost:8080", auto_reconnect=False)
+        with (
+            patch(
+                "orchestrator.sim_client.websockets.connect",
+                new_callable=AsyncMock,
+                side_effect=ConnectionRefusedError("refused"),
+            ),
+            pytest.raises(ConnectionRefusedError),
         ):
-            with pytest.raises(ConnectionRefusedError):
-                await client.connect()
+            await client.connect()
 
         # Client should still be in a usable state
-        assert (
-            client.connection_state == ConnectionState.DISCONNECTED
-        )
+        assert client.connection_state == ConnectionState.DISCONNECTED
         state = await client.get_state()
         assert state is not None
 

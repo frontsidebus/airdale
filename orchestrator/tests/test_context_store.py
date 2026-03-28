@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import tempfile
-from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from orchestrator.context_store import PHASE_TOPICS, ContextStore
 from orchestrator.sim_client import FlightPhase, SimState
-
 
 # ---------------------------------------------------------------------------
 # Text splitting
@@ -84,7 +80,9 @@ class TestDocumentIngestion:
     """Test ingest_document with a mocked ChromaDB collection."""
 
     @pytest.mark.asyncio
-    async def test_ingest_creates_chunks_and_upserts(self, mock_chromadb_collection: MagicMock) -> None:
+    async def test_ingest_creates_chunks_and_upserts(
+        self, mock_chromadb_collection: MagicMock
+    ) -> None:
         with patch("orchestrator.context_store.chromadb.HttpClient") as mock_client_cls:
             mock_client = MagicMock()
             mock_client.heartbeat.return_value = 1
@@ -129,7 +127,9 @@ class TestDocumentIngestion:
             assert "source" in meta
 
     @pytest.mark.asyncio
-    async def test_ingest_empty_file_returns_zero(self, mock_chromadb_collection: MagicMock) -> None:
+    async def test_ingest_empty_file_returns_zero(
+        self, mock_chromadb_collection: MagicMock
+    ) -> None:
         with patch("orchestrator.context_store.chromadb.HttpClient") as mock_client_cls:
             mock_client = MagicMock()
             mock_client.heartbeat.return_value = 1
@@ -156,7 +156,9 @@ class TestQuery:
     """Test the query method with mocked collection."""
 
     @pytest.mark.asyncio
-    async def test_query_returns_formatted_results(self, mock_chromadb_collection: MagicMock) -> None:
+    async def test_query_returns_formatted_results(
+        self, mock_chromadb_collection: MagicMock
+    ) -> None:
         with patch("orchestrator.context_store.chromadb.HttpClient") as mock_client_cls:
             mock_client = MagicMock()
             mock_client.heartbeat.return_value = 1

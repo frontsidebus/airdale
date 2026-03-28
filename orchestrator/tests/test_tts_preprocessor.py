@@ -6,7 +6,6 @@ import pytest
 
 from orchestrator.tts_preprocessor import preprocess_for_tts
 
-
 # ---------------------------------------------------------------------------
 # Flight levels
 # ---------------------------------------------------------------------------

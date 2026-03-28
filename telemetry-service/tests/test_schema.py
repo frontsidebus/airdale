@@ -4,13 +4,10 @@ from __future__ import annotations
 
 from telemetry.schema import (
     AircraftExtensions,
-    AutopilotState,
     Engines,
     EngineData,
     FuelState,
     Position,
-    RadioState,
-    SurfaceState,
     TelemetryEnvelope,
 )
 
@@ -74,9 +71,7 @@ class TestTelemetryEnvelope:
     def test_with_aircraft_extensions(self):
         """Test the convenience method for setting aircraft extensions."""
         env = TelemetryEnvelope(adapter_id="test")
-        ext = AircraftExtensions(
-            fuel=FuelState(total_gallons=50.0)
-        )
+        ext = AircraftExtensions(fuel=FuelState(total_gallons=50.0))
         env.with_aircraft_extensions(ext)
         assert "aircraft" in env.extensions
         restored_ext = env.aircraft

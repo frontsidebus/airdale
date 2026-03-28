@@ -15,7 +15,6 @@ import asyncio
 import base64
 import json
 import logging
-import math
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -38,7 +37,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from orchestrator.audio_processing import (
-    AVIATION_PROMPT,
     convert_webm_to_wav_normalized,
 )
 from orchestrator.claude_client import ClaudeClient  # noqa: E402
@@ -1036,9 +1034,13 @@ async def _transcribe_with_confidence(
             logger.error("Whisper client not initialized")
             return "", 0.0
         result = await state.whisper_client.transcribe_with_confidence(
-            audio_bytes, filename=filename, mime_type=mime_type,
+            audio_bytes,
+            filename=filename,
+            mime_type=mime_type,
         )
-        logger.info("Transcribed (confidence=%.2f): %s", result.confidence, result.text[:80])
+        logger.info(
+            "Transcribed (confidence=%.2f): %s", result.confidence, result.text[:80]
+        )
         return result.text, result.confidence
     except Exception as exc:
         logger.error("Whisper transcription failed: %s", exc)

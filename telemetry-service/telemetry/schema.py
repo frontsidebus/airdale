@@ -135,9 +135,7 @@ class TelemetryEnvelope(BaseModel):
     # Vehicle-specific extensions keyed by type
     extensions: dict[str, Any] = Field(default_factory=dict)
 
-    def with_aircraft_extensions(
-        self, ext: AircraftExtensions
-    ) -> TelemetryEnvelope:
+    def with_aircraft_extensions(self, ext: AircraftExtensions) -> TelemetryEnvelope:
         """Convenience to set aircraft extensions."""
         self.extensions["aircraft"] = ext.model_dump(exclude_none=True)
         return self

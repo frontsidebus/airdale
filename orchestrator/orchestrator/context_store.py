@@ -121,9 +121,7 @@ class ContextStore:
                 metadata={"hnsw:space": "cosine"},
             )
             self._available = True
-            logger.info(
-                "Connected to ChromaDB at %s (collection: merlin_docs)", chromadb_url
-            )
+            logger.info("Connected to ChromaDB at %s (collection: merlin_docs)", chromadb_url)
         except Exception as exc:
             logger.warning(
                 "ChromaDB unavailable at %s (%s); context store disabled. "
@@ -248,9 +246,7 @@ class ContextStore:
                     distances,
                     strict=False,
                 ):
-                    docs.append(
-                        {"content": doc, "metadata": meta, "distance": dist}
-                    )
+                    docs.append({"content": doc, "metadata": meta, "distance": dist})
 
             # Store in cache
             self._cache.put(text, n_results, filters, docs)
@@ -286,9 +282,7 @@ class ContextStore:
             if aircraft_results:
                 return aircraft_results
 
-        return await self.query(
-            query_text, n_results=n_results, phase=phase
-        )
+        return await self.query(query_text, n_results=n_results, phase=phase)
 
     @staticmethod
     def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:

@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from orchestrator.claude_client import (
-    MERLIN_PERSONA,
     STOP_SEQUENCES,
     TOOL_DEFINITIONS,
     ClaudeClient,
@@ -21,7 +20,6 @@ from orchestrator.sim_client import (
     FlightPhase,
     SimState,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -295,7 +293,10 @@ class TestSystemPromptBuilding:
     ) -> None:
         state = SimState(
             autopilot=AutopilotState(
-                master=True, heading=270, altitude=6500, vertical_speed=-500,
+                master=True,
+                heading=270,
+                altitude=6500,
+                vertical_speed=-500,
             )
         )
         blocks = claude_client._build_system_prompt(state, [])
@@ -316,8 +317,11 @@ class TestSystemPromptBuilding:
     def test_prompt_includes_weather(self, claude_client: ClaudeClient) -> None:
         state = SimState(
             environment=Environment(
-                wind_speed_kts=12, wind_direction=270, visibility_sm=10,
-                temperature_c=20, barometer_inhg=30.12,
+                wind_speed_kts=12,
+                wind_direction=270,
+                visibility_sm=10,
+                temperature_c=20,
+                barometer_inhg=30.12,
             ),
         )
         blocks = claude_client._build_system_prompt(state, [])
@@ -348,10 +352,7 @@ class TestSystemPromptBuilding:
         self,
         claude_client: ClaudeClient,
     ) -> None:
-        docs = [
-            {"content": f"Doc {i}", "metadata": {"source": f"src{i}.pdf"}}
-            for i in range(5)
-        ]
+        docs = [{"content": f"Doc {i}", "metadata": {"source": f"src{i}.pdf"}} for i in range(5)]
         blocks = claude_client._build_system_prompt(SimState(), docs)
         prompt = self._blocks_text(blocks)
         assert "src0.pdf" in prompt
@@ -444,9 +445,7 @@ class TestConversationManagement:
         claude_client: ClaudeClient,
     ) -> None:
         claude_client._max_history = 5
-        claude_client._conversation = [
-            {"role": "user", "content": f"msg {i}"} for i in range(20)
-        ]
+        claude_client._conversation = [{"role": "user", "content": f"msg {i}"} for i in range(20)]
         claude_client._trim_history()
         assert len(claude_client._conversation) == 10  # 5 * 2
 
@@ -474,9 +473,7 @@ class TestConversationManagement:
     ) -> None:
         """With max_history=10, trim at >20 messages."""
         client = claude_client_custom_tokens
-        client._conversation = [
-            {"role": "user", "content": f"msg {i}"} for i in range(30)
-        ]
+        client._conversation = [{"role": "user", "content": f"msg {i}"} for i in range(30)]
         client._trim_history()
         assert len(client._conversation) == 20  # 10 * 2
 
@@ -531,9 +528,7 @@ class TestToolExecution:
             "orchestrator.claude_client.get_sim_state",
             side_effect=RuntimeError("sim offline"),
         ):
-            result = await claude_client._execute_tool(
-                "get_sim_state", {}, SimState()
-            )
+            result = await claude_client._execute_tool("get_sim_state", {}, SimState())
             assert "error" in result
             assert "sim offline" in result["error"]
 
@@ -550,9 +545,7 @@ class TestToolExecution:
             new_callable=AsyncMock,
             return_value={"aircraft": "Test Aircraft"},
         ) as mock_fn:
-            result = await claude_client._execute_tool(
-                "get_sim_state", {}, SimState()
-            )
+            result = await claude_client._execute_tool("get_sim_state", {}, SimState())
             mock_fn.assert_awaited_once()
             assert result["aircraft"] == "Test Aircraft"
 

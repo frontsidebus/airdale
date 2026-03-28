@@ -11,8 +11,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # _split_at_sentence tests

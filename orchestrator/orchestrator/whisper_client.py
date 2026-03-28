@@ -226,7 +226,11 @@ class WhisperClient:
         lang = language or self.language
         url = f"{self.base_url}/v1/audio/transcriptions"
         data, files = self._build_form_data(
-            audio_bytes, "verbose_json", lang, filename=filename, mime_type=mime_type,
+            audio_bytes,
+            "verbose_json",
+            lang,
+            filename=filename,
+            mime_type=mime_type,
         )
 
         last_error: Exception | None = None

@@ -9,15 +9,14 @@ import pytest
 
 from orchestrator.audio_processing import AVIATION_PROMPT
 from orchestrator.whisper_client import (
-    TranscriptionResult,
-    WhisperClient,
-    WhisperClientError,
     _DEFAULT_MODEL,
     _DEFAULT_WHISPER_URL,
     _MAX_RETRIES,
     _RETRY_BACKOFF,
+    TranscriptionResult,
+    WhisperClient,
+    WhisperClientError,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -443,9 +442,7 @@ class TestRetryOn5xx:
 
         whisper_client._client = AsyncMock(spec=httpx.AsyncClient)
         whisper_client._client.post.side_effect = [
-            httpx.HTTPStatusError(
-                "500", request=MagicMock(), response=mock_err_response
-            ),
+            httpx.HTTPStatusError("500", request=MagicMock(), response=mock_err_response),
             mock_ok_response,
         ]
 

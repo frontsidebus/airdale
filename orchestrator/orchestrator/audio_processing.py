@@ -220,17 +220,13 @@ class SileroVAD:
         """Load the Silero VAD ONNX model via torch.hub (cached after first download)."""
         import torch
 
-        model, utils = torch.hub.load(
-            "snakers4/silero-vad", "silero_vad", onnx=True
-        )
+        model, utils = torch.hub.load("snakers4/silero-vad", "silero_vad", onnx=True)
         self._model = model
         # utils returns (get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks)
         self._get_speech_timestamps = utils[0]
         logger.info("Silero VAD model loaded successfully")
 
-    def speech_probability(
-        self, audio_chunk: np.ndarray, sample_rate: int = 16000
-    ) -> float:
+    def speech_probability(self, audio_chunk: np.ndarray, sample_rate: int = 16000) -> float:
         """Return speech probability (0.0-1.0) for an audio chunk.
 
         Args:
@@ -336,11 +332,18 @@ async def convert_webm_to_wav_normalized(webm_bytes: bytes) -> bytes:
     """
     # Use ffmpeg to convert to raw PCM first
     proc = await asyncio.create_subprocess_exec(
-        "ffmpeg", "-y", "-i", "pipe:0",
-        "-ar", str(TARGET_SAMPLE_RATE),
-        "-ac", "1",
-        "-f", "s16le",
-        "-acodec", "pcm_s16le",
+        "ffmpeg",
+        "-y",
+        "-i",
+        "pipe:0",
+        "-ar",
+        str(TARGET_SAMPLE_RATE),
+        "-ac",
+        "1",
+        "-f",
+        "s16le",
+        "-acodec",
+        "pcm_s16le",
         "pipe:1",
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
