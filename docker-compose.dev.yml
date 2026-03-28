@@ -33,11 +33,13 @@ services:
 
   orchestrator:
     build:
-      context: ./orchestrator
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: orchestrator/Dockerfile
     # Mount source code for hot-reload during development
     volumes:
-      - ./orchestrator/orchestrator:/app/orchestrator:ro
+      - ./orchestrator/orchestrator:/app/orchestrator/orchestrator:ro
+      - ./web:/app/web:ro
+      - ./data:/app/data:ro
     environment:
       - LOG_LEVEL=DEBUG
       - PYTHONDONTWRITEBYTECODE=1

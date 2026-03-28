@@ -15,27 +15,39 @@ import asyncio
 import base64
 import json
 import logging
+import math
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import httpx
 import websockets as ws_lib
-from fastapi import FastAPI, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from orchestrator.audio_processing import convert_webm_to_wav_normalized
-from orchestrator.whisper_client import WhisperClient, WhisperClientError
+from orchestrator.audio_processing import (
+    AVIATION_PROMPT,
+    convert_webm_to_wav_normalized,
+)
 from orchestrator.claude_client import ClaudeClient  # noqa: E402
 from orchestrator.config import load_settings  # noqa: E402
 from orchestrator.context_store import ContextStore  # noqa: E402
 from orchestrator.flight_phase import FlightPhaseDetector  # noqa: E402
 from orchestrator.sim_client import SimState, TelemetryClient  # noqa: E402
 from orchestrator.tts_preprocessor import preprocess_for_tts  # noqa: E402
+from orchestrator.whisper_client import WhisperClient  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -50,21 +62,7 @@ logger = logging.getLogger("merlin.web")
 # Shared application state (initialised in lifespan)
 # ---------------------------------------------------------------------------
 settings = load_settings()
-logging.getLogger().setLevel(
-    getattr(logging, settings.log_level.upper(), logging.INFO)
-)
-
-sim_client: TelemetryClient | None = None
-claude_client: ClaudeClient | None = None
-context_store: ContextStore | None = None
-phase_detector: FlightPhaseDetector | None = None
-
-# Track whether we have a live connection to the SimConnect bridge
-_sim_connected: bool = False
-
-# Lightweight bridge liveness tracking -- updated by ws_telemetry proxy
-_bridge_last_seen: float = 0.0
-_bridge_connected: bool = False
+logging.getLogger().setLevel(getattr(logging, settings.log_level.upper(), logging.INFO))
 
 # Confidence threshold: transcriptions below this trigger a retry or warning
 _LOW_CONFIDENCE_THRESHOLD = 0.4
@@ -72,31 +70,10 @@ _LOW_CONFIDENCE_THRESHOLD = 0.4
 # Brief pause (seconds) after MERLIN finishes speaking before accepting input
 _POST_SPEECH_PAUSE_SECS = 0.3
 
-
-# ---------------------------------------------------------------------------
-# Persistent HTTP clients (connection pooling)
-# ---------------------------------------------------------------------------
-
-# Shared httpx client for TTS REST fallback (avoid creating per-request)
-_tts_client: httpx.AsyncClient | None = None
-
-
-async def _get_tts_client() -> httpx.AsyncClient:
-    global _tts_client
-    if _tts_client is None or _tts_client.is_closed:
-        _tts_client = httpx.AsyncClient(timeout=30.0)
-    return _tts_client
-
-
-# Shared WhisperClient for STT (connection pooling + retry logic)
-_whisper_client: WhisperClient | None = None
-
-
 # ---------------------------------------------------------------------------
 # TTS phrase cache -- pre-populated at startup for common MERLIN phrases
 # ---------------------------------------------------------------------------
 
-_TTS_CACHE: dict[str, bytes] = {}
 _CACHEABLE_PHRASES = [
     "Roger.",
     "Roger, Captain.",
@@ -112,28 +89,67 @@ _CACHEABLE_PHRASES = [
 ]
 
 
-async def _prepopulate_tts_cache() -> None:
+# ---------------------------------------------------------------------------
+# AppState: typed container for all mutable shared state
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AppState:
+    """Mutable shared state for the MERLIN web server."""
+
+    settings: Any  # Settings from orchestrator.config
+    sim_client: TelemetryClient | None = None
+    claude_client: ClaudeClient | None = None
+    context_store: ContextStore | None = None
+    phase_detector: FlightPhaseDetector | None = None
+    whisper_client: WhisperClient | None = None
+    tts_client: httpx.AsyncClient | None = None
+    tts_cache: dict[str, bytes] = field(default_factory=dict)
+    sim_connected: bool = False
+    bridge_last_seen: float = 0.0
+    bridge_connected: bool = False
+
+
+def get_app_state(request: Request) -> AppState:
+    """FastAPI dependency: extract AppState from app.state (HTTP routes)."""
+    return request.app.state.app_state
+
+
+def get_ws_app_state(ws: WebSocket) -> AppState:
+    """FastAPI dependency: extract AppState from app.state (WebSocket routes)."""
+    return ws.app.state.app_state
+
+
+# ---------------------------------------------------------------------------
+# TTS cache prepopulation
+# ---------------------------------------------------------------------------
+
+
+async def _prepopulate_tts_cache(state: AppState) -> None:
     """Pre-generate TTS audio for common short phrases at startup."""
-    if not settings.elevenlabs_api_key or not settings.voice_id:
+    if not state.settings.elevenlabs_api_key or not state.settings.voice_id:
         return
 
-    client = await _get_tts_client()
+    if state.tts_client is None:
+        return
+
     for phrase in _CACHEABLE_PHRASES:
         sanitized = preprocess_for_tts(phrase)
-        if not sanitized or sanitized in _TTS_CACHE:
+        if not sanitized or sanitized in state.tts_cache:
             continue
         try:
-            resp = await client.post(
+            resp = await state.tts_client.post(
                 f"https://api.elevenlabs.io/v1/text-to-speech/"
-                f"{settings.voice_id}/stream",
+                f"{state.settings.voice_id}/stream",
                 headers={
-                    "xi-api-key": settings.elevenlabs_api_key,
+                    "xi-api-key": state.settings.elevenlabs_api_key,
                     "Content-Type": "application/json",
                     "Accept": "audio/mpeg",
                 },
                 json={
                     "text": sanitized,
-                    "model_id": settings.elevenlabs_model_id,
+                    "model_id": state.settings.elevenlabs_model_id,
                     "voice_settings": {
                         "stability": 0.75,
                         "similarity_boost": 0.80,
@@ -142,8 +158,10 @@ async def _prepopulate_tts_cache() -> None:
                 },
             )
             resp.raise_for_status()
-            _TTS_CACHE[sanitized] = resp.content
-            logger.info("Cached TTS phrase: '%s' (%d bytes)", sanitized, len(resp.content))
+            state.tts_cache[sanitized] = resp.content
+            logger.info(
+                "Cached TTS phrase: '%s' (%d bytes)", sanitized, len(resp.content)
+            )
         except Exception as exc:
             logger.debug("Failed to cache TTS phrase '%s': %s", sanitized, exc)
 
@@ -155,25 +173,24 @@ async def _prepopulate_tts_cache() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global sim_client, claude_client, context_store, phase_detector
-    global _sim_connected, _whisper_client
-
     logger.info("Starting MERLIN web server")
 
+    state = AppState(settings=settings)
+
     # Context store (ChromaDB) -- degrades gracefully if unavailable
-    context_store = ContextStore(chromadb_url=settings.chromadb_url)
+    state.context_store = ContextStore(chromadb_url=settings.chromadb_url)
 
     # Telemetry client
-    sim_client = TelemetryClient(url=settings.telemetry_service_url)
+    state.sim_client = TelemetryClient(url=settings.telemetry_service_url)
     try:
-        await sim_client.connect()
-        _sim_connected = True
+        await state.sim_client.connect()
+        state.sim_connected = True
         logger.info(
             "Telemetry service connected at %s",
             settings.telemetry_service_url,
         )
     except Exception as exc:
-        _sim_connected = False
+        state.sim_connected = False
         logger.warning(
             "Telemetry service unavailable at %s (%s); telemetry will be offline",
             settings.telemetry_service_url,
@@ -181,57 +198,61 @@ async def lifespan(app: FastAPI):
         )
 
     # Flight phase detector
-    phase_detector = FlightPhaseDetector()
+    state.phase_detector = FlightPhaseDetector()
 
     # Register the phase detector as a subscriber when connected
-    if _sim_connected and sim_client is not None:
+    if state.sim_connected and state.sim_client is not None:
 
-        async def _on_state(state: SimState) -> None:
-            assert phase_detector is not None
-            detected = phase_detector.update(state)
-            state.flight_phase = detected
+        async def _on_state(sim_state: SimState) -> None:
+            assert state.phase_detector is not None
+            detected = state.phase_detector.update(sim_state)
+            sim_state.flight_phase = detected
 
-        sim_client.subscribe(_on_state)
+        state.sim_client.subscribe(_on_state)
 
-    # Whisper client (shared across all transcription routes)
-    _whisper_client = WhisperClient(
-        base_url=settings.whisper_url,
-        model=settings.whisper_model,
-    )
+    # Whisper client (unified async client from Phase 3)
+    state.whisper_client = WhisperClient(base_url=settings.whisper_url)
 
     # Claude client
-    claude_client = ClaudeClient(
+    state.claude_client = ClaudeClient(
         api_key=settings.anthropic_api_key,
         model=settings.claude_model,
-        sim_client=sim_client,
-        context_store=context_store,
+        sim_client=state.sim_client,
+        context_store=state.context_store,
         max_tokens=settings.claude_max_tokens,
         max_tokens_briefing=settings.claude_max_tokens_briefing,
         max_history=settings.claude_max_history,
         temperature=settings.claude_temperature,
     )
 
+    # TTS HTTP client (connection pooling)
+    state.tts_client = httpx.AsyncClient(timeout=30.0)
+
     # Pre-populate TTS cache in the background (non-blocking)
-    _cache_task = asyncio.create_task(_prepopulate_tts_cache())
+    _cache_task = asyncio.create_task(_prepopulate_tts_cache(state))
     _cache_task.add_done_callback(
-        lambda t: logger.error("TTS cache prepopulation failed: %s", t.exception())
-        if t.exception()
-        else None
+        lambda t: (
+            logger.error("TTS cache prepopulation failed: %s", t.exception())
+            if t.exception()
+            else None
+        )
     )
+
+    app.state.app_state = state
 
     logger.info("MERLIN web server ready on port 3838")
     yield
 
     # Shutdown
     logger.info("Shutting down MERLIN web server")
-    if _sim_connected and sim_client is not None:
-        await sim_client.disconnect()
+    if state.sim_connected and state.sim_client is not None:
+        await state.sim_client.disconnect()
 
     # Close persistent HTTP clients
-    if _tts_client and not _tts_client.is_closed:
-        await _tts_client.aclose()
-    if _whisper_client is not None:
-        await _whisper_client.aclose()
+    if state.tts_client and not state.tts_client.is_closed:
+        await state.tts_client.aclose()
+    if state.whisper_client is not None:
+        await state.whisper_client.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -283,41 +304,40 @@ async def index():
 
 
 @app.get("/api/status")
-async def get_status():
+async def get_status(state: AppState = Depends(get_app_state)):
     """Return health status of all subsystems."""
     whisper_ok = False
-    if _whisper_client is not None:
-        try:
-            whisper_ok = await _whisper_client.is_available()
-        except Exception:
-            pass
+    try:
+        if state.whisper_client is not None:
+            whisper_ok = await state.whisper_client.is_available()
+    except Exception:
+        pass
 
-    chromadb_ok = context_store.available if context_store else False
+    chromadb_ok = state.context_store.available if state.context_store else False
 
     # Bridge is considered connected if telemetry was received recently
     # (updated by ws_telemetry proxy), OR the startup connection succeeded.
     bridge_ok = (
-        (_bridge_connected and (time.monotonic() - _bridge_last_seen) < 10.0)
-        or _sim_connected
-    )
+        state.bridge_connected and (time.monotonic() - state.bridge_last_seen) < 10.0
+    ) or state.sim_connected
 
     return {
         "sim_connected": bridge_ok,
         "chromadb_available": chromadb_ok,
         "chromadb_documents": (
-            context_store.document_count if context_store else 0
+            state.context_store.document_count if state.context_store else 0
         ),
         "whisper_available": whisper_ok,
         "elevenlabs_configured": bool(
-            settings.elevenlabs_api_key and settings.voice_id
+            state.settings.elevenlabs_api_key and state.settings.voice_id
         ),
-        "claude_model": settings.claude_model,
-        "telemetry_service_url": settings.telemetry_service_url,
+        "claude_model": state.settings.claude_model,
+        "telemetry_service_url": state.settings.telemetry_service_url,
     }
 
 
 @app.post("/api/transcribe")
-async def transcribe_audio(file: UploadFile):
+async def transcribe_audio(file: UploadFile, state: AppState = Depends(get_app_state)):
     """Transcribe uploaded audio via the Whisper Docker service.
 
     Accepts webm or wav from the browser MediaRecorder. Sends webm directly
@@ -334,15 +354,17 @@ async def transcribe_audio(file: UploadFile):
     if is_webm:
         # Try sending webm directly (Whisper accepts it with encode=true)
         text, confidence = await _transcribe_with_confidence(
-            audio_bytes, filename="audio.webm", mime_type="audio/webm"
+            audio_bytes, filename="audio.webm", mime_type="audio/webm", state=state
         )
         # Fallback: convert to wav if direct approach fails
         if not text and confidence == 0.0:
             logger.info("Direct webm transcription failed, falling back to ffmpeg")
             audio_bytes = await convert_webm_to_wav_normalized(audio_bytes)
-            text, confidence = await _transcribe_with_confidence(audio_bytes)
+            text, confidence = await _transcribe_with_confidence(
+                audio_bytes, state=state
+            )
     else:
-        text, confidence = await _transcribe_with_confidence(audio_bytes)
+        text, confidence = await _transcribe_with_confidence(audio_bytes, state=state)
 
     result: dict[str, Any] = {"text": text, "confidence": confidence}
 
@@ -359,9 +381,9 @@ async def transcribe_audio(file: UploadFile):
 
 
 @app.post("/api/tts")
-async def text_to_speech(request: TTSRequest):
+async def text_to_speech(request: TTSRequest, state: AppState = Depends(get_app_state)):
     """Convert text to speech via ElevenLabs and return MP3 audio."""
-    if not settings.elevenlabs_api_key or not settings.voice_id:
+    if not state.settings.elevenlabs_api_key or not state.settings.voice_id:
         return Response(
             content=json.dumps({"error": "ElevenLabs not configured"}),
             status_code=503,
@@ -370,21 +392,27 @@ async def text_to_speech(request: TTSRequest):
 
     # Check TTS cache first
     clean = preprocess_for_tts(request.text)
-    if clean in _TTS_CACHE:
-        return Response(content=_TTS_CACHE[clean], media_type="audio/mpeg")
+    if clean in state.tts_cache:
+        return Response(content=state.tts_cache[clean], media_type="audio/mpeg")
+
+    if state.tts_client is None:
+        return Response(
+            content=json.dumps({"error": "TTS client not initialized"}),
+            status_code=503,
+            media_type="application/json",
+        )
 
     try:
-        client = await _get_tts_client()
-        resp = await client.post(
-            f"https://api.elevenlabs.io/v1/text-to-speech/{settings.voice_id}",
+        resp = await state.tts_client.post(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{state.settings.voice_id}",
             headers={
-                "xi-api-key": settings.elevenlabs_api_key,
+                "xi-api-key": state.settings.elevenlabs_api_key,
                 "Content-Type": "application/json",
                 "Accept": "audio/mpeg",
             },
             json={
                 "text": clean,
-                "model_id": settings.elevenlabs_model_id,
+                "model_id": state.settings.elevenlabs_model_id,
                 "voice_settings": {
                     "stability": 0.75,
                     "similarity_boost": 0.80,
@@ -409,18 +437,17 @@ async def text_to_speech(request: TTSRequest):
 
 
 @app.websocket("/ws/telemetry")
-async def ws_telemetry(ws: WebSocket):
+async def ws_telemetry(ws: WebSocket, state: AppState = Depends(get_ws_app_state)):
     """Stream simulator telemetry to the browser.
 
     Connects (or reconnects) to the SimConnect bridge on demand and
     proxies telemetry as JSON. Falls back to polling if the bridge
     subscriber model isn't active.
     """
-    global _bridge_last_seen, _bridge_connected
     await ws.accept()
     logger.info("Telemetry WebSocket client connected")
 
-    telemetry_url = settings.telemetry_service_url
+    telemetry_url = state.settings.telemetry_service_url
 
     try:
         while True:
@@ -442,21 +469,23 @@ async def ws_telemetry(ws: WebSocket):
                             data = json.loads(raw_msg)
                             # Use the bridge's SimConnect status, not WS status
                             sim_active = data.get("connected", False)
-                            _bridge_last_seen = time.monotonic()
-                            _bridge_connected = sim_active
+                            state.bridge_last_seen = time.monotonic()
+                            state.bridge_connected = sim_active
                             # Detect flight phase
-                            if phase_detector and "position" in data:
+                            if state.phase_detector and "position" in data:
                                 try:
-                                    state = SimState.model_validate(data)
-                                    fp = phase_detector.update(state)
+                                    sim_state = SimState.model_validate(data)
+                                    fp = state.phase_detector.update(sim_state)
                                     data["flight_phase"] = fp.value
                                 except Exception:
                                     pass
-                            await ws.send_json({
-                                "type": "telemetry",
-                                "connected": sim_active,
-                                "data": data,
-                            })
+                            await ws.send_json(
+                                {
+                                    "type": "telemetry",
+                                    "connected": sim_active,
+                                    "data": data,
+                                }
+                            )
                         except json.JSONDecodeError:
                             pass
 
@@ -464,12 +493,14 @@ async def ws_telemetry(ws: WebSocket):
                 logger.debug(
                     "Telemetry service not available (%s), retrying in 3s", exc
                 )
-                await ws.send_json({
-                    "type": "telemetry",
-                    "connected": False,
-                    "flight_phase": "PREFLIGHT",
-                    "data": None,
-                })
+                await ws.send_json(
+                    {
+                        "type": "telemetry",
+                        "connected": False,
+                        "flight_phase": "PREFLIGHT",
+                        "data": None,
+                    }
+                )
                 await asyncio.sleep(3.0)
 
     except WebSocketDisconnect:
@@ -484,7 +515,7 @@ async def ws_telemetry(ws: WebSocket):
 
 
 @app.websocket("/ws/chat")
-async def ws_chat(ws: WebSocket):
+async def ws_chat(ws: WebSocket, state: AppState = Depends(get_ws_app_state)):
     """Chat with MERLIN, with barge-in interruption support.
 
     Receives JSON messages or binary audio data.
@@ -548,26 +579,29 @@ async def ws_chat(ws: WebSocket):
                 # Barge-in: cancel current response if one is active
                 await _cancel_active_response()
 
-                user_text, confidence = (
-                    await _transcribe_audio_bytes_with_confidence(
-                        audio_bytes,
-                        pending_audio_mime or "audio/webm",
-                    )
+                user_text, confidence = await _transcribe_audio_bytes_with_confidence(
+                    audio_bytes,
+                    pending_audio_mime or "audio/webm",
+                    state,
                 )
                 pending_audio_mime = None
 
                 if not user_text:
-                    await ws.send_json({
-                        "type": "error",
-                        "content": "Could not transcribe audio",
-                    })
+                    await ws.send_json(
+                        {
+                            "type": "error",
+                            "content": "Could not transcribe audio",
+                        }
+                    )
                     continue
 
-                await ws.send_json({
-                    "type": "transcription",
-                    "text": user_text,
-                    "confidence": round(confidence, 2),
-                })
+                await ws.send_json(
+                    {
+                        "type": "transcription",
+                        "text": user_text,
+                        "confidence": round(confidence, 2),
+                    }
+                )
 
                 # If confidence is very low, retry once with the raw audio
                 if confidence < _LOW_CONFIDENCE_THRESHOLD and user_text:
@@ -582,10 +616,12 @@ async def ws_chat(ws: WebSocket):
                 try:
                     msg = json.loads(raw)
                 except json.JSONDecodeError:
-                    await ws.send_json({
-                        "type": "error",
-                        "content": "Invalid JSON",
-                    })
+                    await ws.send_json(
+                        {
+                            "type": "error",
+                            "content": "Invalid JSON",
+                        }
+                    )
                     continue
 
                 # Handle audio_start marker (next message will be binary)
@@ -602,10 +638,12 @@ async def ws_chat(ws: WebSocket):
 
                 user_text = msg.get("text", "")
                 if not user_text:
-                    await ws.send_json({
-                        "type": "error",
-                        "content": "No text provided",
-                    })
+                    await ws.send_json(
+                        {
+                            "type": "error",
+                            "content": "No text provided",
+                        }
+                    )
                     continue
 
                 # Barge-in: cancel if user sends text while MERLIN responding
@@ -619,7 +657,7 @@ async def ws_chat(ws: WebSocket):
 
             # Launch response streaming as a cancellable task
             active_response_task = asyncio.create_task(
-                _stream_response(ws, user_text, interrupt_event)
+                _stream_response(ws, user_text, interrupt_event, state)
             )
 
     except WebSocketDisconnect:
@@ -639,6 +677,7 @@ async def _tts_websocket_stream(
     ws: WebSocket,
     tts_queue: asyncio.Queue[str | None],
     interrupt: asyncio.Event,
+    state: AppState,
 ) -> None:
     """Stream TTS via ElevenLabs WebSocket API.
 
@@ -646,9 +685,9 @@ async def _tts_websocket_stream(
     chunks through it, and forwards audio chunks to the browser as they
     arrive. Falls back to REST-based TTS if the WebSocket approach fails.
     """
-    voice_id = settings.voice_id
-    model_id = settings.elevenlabs_model_id
-    api_key = settings.elevenlabs_api_key
+    voice_id = state.settings.voice_id
+    model_id = state.settings.elevenlabs_model_id
+    api_key = state.settings.elevenlabs_api_key
     ws_url = (
         f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
         f"/stream-input?model_id={model_id}&output_format=mp3_44100_128"
@@ -657,15 +696,19 @@ async def _tts_websocket_stream(
     try:
         async with ws_lib.connect(ws_url) as tts_ws:
             # Send initial config
-            await tts_ws.send(json.dumps({
-                "text": " ",
-                "voice_settings": {
-                    "stability": 0.75,
-                    "similarity_boost": 0.80,
-                    "style": 0.15,
-                },
-                "xi_api_key": api_key,
-            }))
+            await tts_ws.send(
+                json.dumps(
+                    {
+                        "text": " ",
+                        "voice_settings": {
+                            "stability": 0.75,
+                            "similarity_boost": 0.80,
+                            "style": 0.15,
+                        },
+                        "xi_api_key": api_key,
+                    }
+                )
+            )
 
             # Task to receive audio chunks from ElevenLabs
             audio_done = asyncio.Event()
@@ -678,10 +721,12 @@ async def _tts_websocket_stream(
                             break
                         if isinstance(msg, bytes):
                             # Binary audio chunk
-                            await ws.send_json({
-                                "type": "tts_audio",
-                                "size": len(msg),
-                            })
+                            await ws.send_json(
+                                {
+                                    "type": "tts_audio",
+                                    "size": len(msg),
+                                }
+                            )
                             await ws.send_bytes(msg)
                         elif isinstance(msg, str):
                             data = json.loads(msg)
@@ -692,10 +737,12 @@ async def _tts_websocket_stream(
                             if audio_b64:
                                 audio_chunk = base64.b64decode(audio_b64)
                                 if audio_chunk:
-                                    await ws.send_json({
-                                        "type": "tts_audio",
-                                        "size": len(audio_chunk),
-                                    })
+                                    await ws.send_json(
+                                        {
+                                            "type": "tts_audio",
+                                            "size": len(audio_chunk),
+                                        }
+                                    )
                                     await ws.send_bytes(audio_chunk)
                 except Exception as exc:
                     logger.debug("TTS WS receive error: %s", exc)
@@ -709,9 +756,7 @@ async def _tts_websocket_stream(
                 if interrupt.is_set():
                     break
                 try:
-                    sentence = await asyncio.wait_for(
-                        tts_queue.get(), timeout=0.1
-                    )
+                    sentence = await asyncio.wait_for(tts_queue.get(), timeout=0.1)
                 except asyncio.TimeoutError:
                     continue
                 if sentence is None:
@@ -724,18 +769,24 @@ async def _tts_websocket_stream(
                     continue
 
                 # Check cache before sending over WebSocket
-                if clean_text in _TTS_CACHE:
-                    await ws.send_json({
-                        "type": "tts_audio",
-                        "size": len(_TTS_CACHE[clean_text]),
-                    })
-                    await ws.send_bytes(_TTS_CACHE[clean_text])
+                if clean_text in state.tts_cache:
+                    await ws.send_json(
+                        {
+                            "type": "tts_audio",
+                            "size": len(state.tts_cache[clean_text]),
+                        }
+                    )
+                    await ws.send_bytes(state.tts_cache[clean_text])
                     continue
 
-                await tts_ws.send(json.dumps({
-                    "text": clean_text + " ",
-                    "try_trigger_generation": True,
-                }))
+                await tts_ws.send(
+                    json.dumps(
+                        {
+                            "text": clean_text + " ",
+                            "try_trigger_generation": True,
+                        }
+                    )
+                )
 
             # Send flush signal to indicate end of input
             try:
@@ -754,35 +805,35 @@ async def _tts_websocket_stream(
             "ElevenLabs WebSocket TTS failed (%s), falling back to REST", exc
         )
         # Fallback: drain the queue and use REST-based TTS
-        await _tts_rest_fallback(ws, tts_queue, interrupt)
+        await _tts_rest_fallback(ws, tts_queue, interrupt, state)
 
 
 async def _tts_rest_fallback(
     ws: WebSocket,
     tts_queue: asyncio.Queue[str | None],
     interrupt: asyncio.Event,
+    state: AppState,
 ) -> None:
     """REST-based TTS fallback -- processes remaining items in tts_queue."""
     while True:
         if interrupt.is_set():
             break
         try:
-            sentence = await asyncio.wait_for(
-                tts_queue.get(), timeout=0.1
-            )
+            sentence = await asyncio.wait_for(tts_queue.get(), timeout=0.1)
         except asyncio.TimeoutError:
             continue
         if sentence is None:
             break
         if interrupt.is_set():
             break
-        await _send_tts_chunk_rest(ws, sentence)
+        await _send_tts_chunk_rest(ws, sentence, state)
 
 
 async def _stream_response(
     ws: WebSocket,
     user_text: str,
     interrupt: asyncio.Event,
+    state: AppState,
 ) -> None:
     """Stream Claude response with TTS. Cancellable via interrupt event.
 
@@ -790,7 +841,7 @@ async def _stream_response(
     REST fallback. This runs as a task so it can be cancelled when the
     user barges in.
     """
-    tts_enabled = bool(settings.elevenlabs_api_key and settings.voice_id)
+    tts_enabled = bool(state.settings.elevenlabs_api_key and state.settings.voice_id)
     sentence_buffer = ""
     full_response = ""
 
@@ -802,8 +853,8 @@ async def _stream_response(
 
         async def _warmup_tts() -> None:
             try:
-                client = await _get_tts_client()
-                await client.head("https://api.elevenlabs.io/v1/voices")
+                if state.tts_client is not None:
+                    await state.tts_client.head("https://api.elevenlabs.io/v1/voices")
             except Exception:
                 pass
 
@@ -812,22 +863,22 @@ async def _stream_response(
     # Use WebSocket streaming TTS sender
     if tts_enabled:
         tts_task: asyncio.Task[None] | None = asyncio.create_task(
-            _tts_websocket_stream(ws, tts_queue, interrupt)
+            _tts_websocket_stream(ws, tts_queue, interrupt, state)
         )
     else:
         tts_task = None
 
     try:
-        assert claude_client is not None
+        assert state.claude_client is not None
         # Pass current sim state so Claude has telemetry context
         current_sim_state = None
-        if _sim_connected and sim_client is not None:
-            current_sim_state = sim_client.state
-            if phase_detector:
-                detected = phase_detector.update(current_sim_state)
+        if state.sim_connected and state.sim_client is not None:
+            current_sim_state = state.sim_client.state
+            if state.phase_detector:
+                detected = state.phase_detector.update(current_sim_state)
                 current_sim_state.flight_phase = detected
 
-        async for chunk in claude_client.chat(
+        async for chunk in state.claude_client.chat(
             user_text, sim_state=current_sim_state
         ):
             if interrupt.is_set():
@@ -854,10 +905,12 @@ async def _stream_response(
         raise
     except Exception as exc:
         logger.exception("Claude chat error")
-        await ws.send_json({
-            "type": "error",
-            "content": f"Chat error: {exc}",
-        })
+        await ws.send_json(
+            {
+                "type": "error",
+                "content": f"Chat error: {exc}",
+            }
+        )
     finally:
         # Flush any remaining text before sending poison pill
         if tts_task and sentence_buffer.strip() and not interrupt.is_set():
@@ -896,19 +949,13 @@ def _split_at_sentence(text: str) -> tuple[str, str]:
     """
     # First try: sentence-ending punctuation (.!?) followed by space or end
     for i in range(len(text) - 1, -1, -1):
-        if text[i] in ".!?" and (
-            i + 1 >= len(text) or text[i + 1] in " \n"
-        ):
+        if text[i] in ".!?" and (i + 1 >= len(text) or text[i + 1] in " \n"):
             return text[: i + 1].strip(), text[i + 1 :].lstrip()
 
     # Fallback for long buffers: split at clause boundaries (, ; :)
     if len(text) > 50:
         for i in range(len(text) - 1, -1, -1):
-            if (
-                text[i] in ",;:"
-                and i + 1 < len(text)
-                and text[i + 1] == " "
-            ):
+            if text[i] in ",;:" and i + 1 < len(text) and text[i + 1] == " ":
                 return text[: i + 1].strip(), text[i + 1 :].lstrip()
 
     # Force-split very long buffers with no punctuation at all
@@ -921,7 +968,7 @@ def _split_at_sentence(text: str) -> tuple[str, str]:
     return "", text  # No boundary found yet -- keep buffering
 
 
-async def _send_tts_chunk_rest(ws: WebSocket, text: str) -> None:
+async def _send_tts_chunk_rest(ws: WebSocket, text: str, state: AppState) -> None:
     """Synthesize a sentence via REST and send audio over WebSocket.
 
     This is the REST-based fallback used when WebSocket TTS is unavailable.
@@ -931,27 +978,31 @@ async def _send_tts_chunk_rest(ws: WebSocket, text: str) -> None:
         return
 
     # Check TTS cache first
-    if clean_text in _TTS_CACHE:
-        await ws.send_json({
-            "type": "tts_audio",
-            "size": len(_TTS_CACHE[clean_text]),
-        })
-        await ws.send_bytes(_TTS_CACHE[clean_text])
+    if clean_text in state.tts_cache:
+        await ws.send_json(
+            {
+                "type": "tts_audio",
+                "size": len(state.tts_cache[clean_text]),
+            }
+        )
+        await ws.send_bytes(state.tts_cache[clean_text])
+        return
+
+    if state.tts_client is None:
         return
 
     try:
-        client = await _get_tts_client()
-        resp = await client.post(
+        resp = await state.tts_client.post(
             f"https://api.elevenlabs.io/v1/text-to-speech/"
-            f"{settings.voice_id}/stream",
+            f"{state.settings.voice_id}/stream",
             headers={
-                "xi-api-key": settings.elevenlabs_api_key,
+                "xi-api-key": state.settings.elevenlabs_api_key,
                 "Content-Type": "application/json",
                 "Accept": "audio/mpeg",
             },
             json={
                 "text": clean_text,
-                "model_id": settings.elevenlabs_model_id,
+                "model_id": state.settings.elevenlabs_model_id,
                 "voice_settings": {
                     "stability": 0.75,
                     "similarity_boost": 0.80,
@@ -961,10 +1012,12 @@ async def _send_tts_chunk_rest(ws: WebSocket, text: str) -> None:
         )
         resp.raise_for_status()
         # Send audio as binary WebSocket frame -- browser will play it
-        await ws.send_json({
-            "type": "tts_audio",
-            "size": len(resp.content),
-        })
+        await ws.send_json(
+            {
+                "type": "tts_audio",
+                "size": len(resp.content),
+            }
+        )
         await ws.send_bytes(resp.content)
     except Exception as exc:
         logger.warning("TTS chunk failed: %s", exc)
@@ -974,23 +1027,19 @@ async def _transcribe_with_confidence(
     audio_bytes: bytes,
     filename: str = "audio.wav",
     mime_type: str = "audio/wav",
+    *,
+    state: AppState,
 ) -> tuple[str, float]:
-    """Send audio to Whisper and return (text, confidence).
-
-    Delegates to the shared WhisperClient which handles retries, confidence
-    scoring, and aviation vocabulary prompting. The filename/mime_type params
-    are kept for API compatibility; the WhisperClient sends as audio.wav
-    internally (Whisper auto-detects format).
-    """
-    if _whisper_client is None:
-        logger.error("WhisperClient not initialized")
-        return "", 0.0
+    """Transcribe audio via the unified WhisperClient and return (text, confidence)."""
     try:
-        result = await _whisper_client.transcribe_with_confidence(audio_bytes)
+        if state.whisper_client is None:
+            logger.error("Whisper client not initialized")
+            return "", 0.0
+        result = await state.whisper_client.transcribe_with_confidence(
+            audio_bytes, filename=filename, mime_type=mime_type,
+        )
+        logger.info("Transcribed (confidence=%.2f): %s", result.confidence, result.text[:80])
         return result.text, result.confidence
-    except WhisperClientError as exc:
-        logger.error("Whisper transcription failed: %s", exc)
-        return "", 0.0
     except Exception as exc:
         logger.error("Whisper transcription failed: %s", exc)
         return "", 0.0
@@ -998,7 +1047,8 @@ async def _transcribe_with_confidence(
 
 async def _transcribe_audio_bytes_with_confidence(
     audio_bytes: bytes,
-    mime_type: str = "audio/webm",
+    mime_type: str,
+    state: AppState,
 ) -> tuple[str, float]:
     """Transcribe browser audio with confidence. Sends webm directly to
     Whisper and falls back to ffmpeg conversion if that fails.
@@ -1006,15 +1056,16 @@ async def _transcribe_audio_bytes_with_confidence(
     if "webm" in mime_type or "ogg" in mime_type:
         # Try sending webm/ogg directly -- Whisper handles it with encode=true
         text, confidence = await _transcribe_with_confidence(
-            audio_bytes, filename="audio.webm", mime_type="audio/webm"
+            audio_bytes,
+            filename="audio.webm",
+            mime_type="audio/webm",
+            state=state,
         )
         if text or confidence > 0.0:
             return text, confidence
 
         # Fallback: convert to wav via ffmpeg
-        logger.info(
-            "Direct webm transcription failed, falling back to ffmpeg"
-        )
+        logger.info("Direct webm transcription failed, falling back to ffmpeg")
         audio_bytes = await convert_webm_to_wav_normalized(audio_bytes)
 
-    return await _transcribe_with_confidence(audio_bytes)
+    return await _transcribe_with_confidence(audio_bytes, state=state)

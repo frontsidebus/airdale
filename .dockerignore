@@ -1,0 +1,42 @@
+# Git
+.git
+.gitignore
+
+# Planning and docs (not needed in container)
+.planning
+.claude
+docs
+CLAUDE.md
+README.md
+*.md
+
+# Python artifacts
+__pycache__
+*.pyc
+*.pyo
+.venv
+*.egg-info
+.pytest_cache
+.ruff_cache
+
+# IDE
+.vscode
+.idea
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+adapters/msfs/bin
+adapters/msfs/obj
+
+# Tools and scripts (not needed in container)
+tools/
+scripts/
+tests/

@@ -79,6 +79,8 @@ class WhisperClient:
         audio_bytes: bytes,
         response_format: str,
         language: str | None,
+        filename: str = "audio.wav",
+        mime_type: str = "audio/wav",
     ) -> tuple[dict[str, str], dict[str, tuple[str, bytes, str]]]:
         """Build multipart form fields and files for /v1/audio/transcriptions."""
         data: dict[str, str] = {
@@ -90,7 +92,7 @@ class WhisperClient:
         if self.initial_prompt:
             data["prompt"] = self.initial_prompt
 
-        files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
+        files = {"file": (filename, audio_bytes, mime_type)}
         return data, files
 
     def _parse_verbose_response(self, data: dict[str, Any]) -> TranscriptionResult:
@@ -202,6 +204,8 @@ class WhisperClient:
         audio_bytes: bytes,
         *,
         language: str | None = None,
+        filename: str = "audio.wav",
+        mime_type: str = "audio/wav",
     ) -> TranscriptionResult:
         """Transcribe audio and return result with confidence scoring.
 
@@ -221,7 +225,9 @@ class WhisperClient:
         """
         lang = language or self.language
         url = f"{self.base_url}/v1/audio/transcriptions"
-        data, files = self._build_form_data(audio_bytes, "verbose_json", lang)
+        data, files = self._build_form_data(
+            audio_bytes, "verbose_json", lang, filename=filename, mime_type=mime_type,
+        )
 
         last_error: Exception | None = None
         for attempt in range(1, _MAX_RETRIES + 1):
