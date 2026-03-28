@@ -111,8 +111,13 @@ class AppState:
 
 
 def get_app_state(request: Request) -> AppState:
-    """FastAPI dependency: extract AppState from app.state."""
+    """FastAPI dependency: extract AppState from app.state (HTTP routes)."""
     return request.app.state.app_state
+
+
+def get_ws_app_state(ws: WebSocket) -> AppState:
+    """FastAPI dependency: extract AppState from app.state (WebSocket routes)."""
+    return ws.app.state.app_state
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +439,7 @@ async def text_to_speech(request: TTSRequest, state: AppState = Depends(get_app_
 
 
 @app.websocket("/ws/telemetry")
-async def ws_telemetry(ws: WebSocket, state: AppState = Depends(get_app_state)):
+async def ws_telemetry(ws: WebSocket, state: AppState = Depends(get_ws_app_state)):
     """Stream simulator telemetry to the browser.
 
     Connects (or reconnects) to the SimConnect bridge on demand and
@@ -512,7 +517,7 @@ async def ws_telemetry(ws: WebSocket, state: AppState = Depends(get_app_state)):
 
 
 @app.websocket("/ws/chat")
-async def ws_chat(ws: WebSocket, state: AppState = Depends(get_app_state)):
+async def ws_chat(ws: WebSocket, state: AppState = Depends(get_ws_app_state)):
     """Chat with MERLIN, with barge-in interruption support.
 
     Receives JSON messages or binary audio data.
