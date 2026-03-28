@@ -12,7 +12,6 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-
 # ---------------------------------------------------------------------------
 # Core models -- shared across all vehicle types
 # ---------------------------------------------------------------------------

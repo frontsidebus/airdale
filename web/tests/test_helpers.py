@@ -11,7 +11,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock
 
-
 # ---------------------------------------------------------------------------
 # _split_at_sentence tests
 # ---------------------------------------------------------------------------
@@ -124,9 +123,7 @@ async def test_transcribe_with_confidence_success(mock_app_state):
         _FakeTranscriptionResult(text="check altimeter", confidence=0.95)
     )
 
-    text, confidence = await srv._transcribe_with_confidence(
-        b"audio-bytes", state=mock_app_state
-    )
+    text, confidence = await srv._transcribe_with_confidence(b"audio-bytes", state=mock_app_state)
 
     assert text == "check altimeter"
     assert confidence == 0.95
@@ -138,9 +135,7 @@ async def test_transcribe_with_confidence_no_client(mock_app_state):
 
     mock_app_state.whisper_client = None
 
-    text, confidence = await srv._transcribe_with_confidence(
-        b"audio-bytes", state=mock_app_state
-    )
+    text, confidence = await srv._transcribe_with_confidence(b"audio-bytes", state=mock_app_state)
 
     assert text == ""
     assert confidence == 0.0
@@ -154,9 +149,7 @@ async def test_transcribe_with_confidence_exception(mock_app_state):
         "connection refused"
     )
 
-    text, confidence = await srv._transcribe_with_confidence(
-        b"audio-bytes", state=mock_app_state
-    )
+    text, confidence = await srv._transcribe_with_confidence(b"audio-bytes", state=mock_app_state)
 
     assert text == ""
     assert confidence == 0.0
@@ -236,9 +229,7 @@ async def test_send_tts_chunk_rest_api_error(mock_app_state):
 
     import web.server as srv
 
-    mock_app_state.tts_client.post = AsyncMock(
-        side_effect=httpx.HTTPError("Connection refused")
-    )
+    mock_app_state.tts_client.post = AsyncMock(side_effect=httpx.HTTPError("Connection refused"))
 
     mock_ws = AsyncMock()
 

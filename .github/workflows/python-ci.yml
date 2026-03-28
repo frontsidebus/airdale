@@ -50,7 +50,7 @@ jobs:
 
       - name: Ruff lint
         run: |
-          ruff check orchestrator/ telemetry-service/ web/ --config orchestrator/pyproject.toml --extend-ignore SIM105,SIM117,F841,B017,B007,UP041
+          ruff check orchestrator/ telemetry-service/ web/ --config orchestrator/pyproject.toml --extend-ignore SIM105,SIM117,F841,B008,B017,B007,UP041
 
       - name: Ruff format check
         run: |

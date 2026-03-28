@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from orchestrator.config import Settings, load_settings
 
 

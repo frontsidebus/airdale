@@ -12,7 +12,6 @@ from pydantic import BaseModel, Field
 
 from .schema import TelemetryEnvelope
 
-
 # ---------------------------------------------------------------------------
 # Adapter → Service messages
 # ---------------------------------------------------------------------------

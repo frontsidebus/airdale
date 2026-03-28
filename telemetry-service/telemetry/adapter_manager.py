@@ -101,9 +101,7 @@ class AdapterManager:
                 removed.frames_received,
             )
 
-    async def update_telemetry(
-        self, adapter_id: str, envelope: TelemetryEnvelope
-    ) -> None:
+    async def update_telemetry(self, adapter_id: str, envelope: TelemetryEnvelope) -> None:
         """Update the latest telemetry from an adapter and broadcast."""
         async with self._lock:
             conn = self._adapters.get(adapter_id)
@@ -141,12 +139,8 @@ class AdapterManager:
                     "sim_name": conn.sim_name,
                     "vehicle_type": conn.vehicle_type,
                     "version": conn.version,
-                    "connected": conn.last_state.connected
-                    if conn.last_state
-                    else False,
-                    "vehicle_name": conn.last_state.vehicle_name
-                    if conn.last_state
-                    else "",
+                    "connected": conn.last_state.connected if conn.last_state else False,
+                    "vehicle_name": conn.last_state.vehicle_name if conn.last_state else "",
                     "frames_received": conn.frames_received,
                     "last_seen_seconds_ago": round(age, 1),
                     "stale": age > self._stale_timeout,
@@ -215,9 +209,7 @@ class AdapterManager:
             len(self._consumers),
         )
 
-    def set_consumer_subscription(
-        self, conn: ConsumerConnection, fields: list[str] | None
-    ) -> None:
+    def set_consumer_subscription(self, conn: ConsumerConnection, fields: list[str] | None) -> None:
         """Set field filter for a consumer."""
         conn.subscribed_fields = fields
         logger.info(
@@ -248,9 +240,7 @@ class AdapterManager:
             for consumer in self._consumers:
                 try:
                     if consumer.subscribed_fields:
-                        filtered = self._filter_state(
-                            full_data, consumer.subscribed_fields
-                        )
+                        filtered = self._filter_state(full_data, consumer.subscribed_fields)
                         await consumer.websocket.send_text(json.dumps(filtered))
                     else:
                         if full_json is None:

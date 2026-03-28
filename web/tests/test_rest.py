@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 from httpx import ASGITransport
 
-
 # ---------------------------------------------------------------------------
 # WTST-07: Status endpoint
 # ---------------------------------------------------------------------------

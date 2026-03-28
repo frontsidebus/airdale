@@ -6,7 +6,6 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
-
 from telemetry.service import app, manager
 
 

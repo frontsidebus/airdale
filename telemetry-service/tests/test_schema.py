@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from telemetry.schema import (
     AircraftExtensions,
-    Engines,
     EngineData,
+    Engines,
     FuelState,
     Position,
     TelemetryEnvelope,

@@ -9,7 +9,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from orchestrator.sim_client import (
     ConnectionState,
     EngineData,
