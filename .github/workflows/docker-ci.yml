@@ -1,0 +1,31 @@
+name: Docker CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/Dockerfile'
+      - 'docker-compose*.yml'
+      - '.dockerignore'
+      - '.github/workflows/docker-ci.yml'
+  pull_request:
+    paths:
+      - '**/Dockerfile'
+      - 'docker-compose*.yml'
+      - '.dockerignore'
+      - '.github/workflows/docker-ci.yml'
+
+jobs:
+  build:
+    name: Validate & Build Docker Images
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate compose config
+        run: docker compose config --quiet
+
+      - name: Build all service images
+        run: docker compose build
