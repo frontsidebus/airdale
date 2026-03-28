@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: milestone
-status: executing
-stopped_at: Phase 6 context gathered
-last_updated: "2026-03-28T20:52:50.739Z"
+status: verifying
+stopped_at: Completed 06-02-PLAN.md
+last_updated: "2026-03-28T22:16:28.325Z"
 last_activity: 2026-03-28
 progress:
   total_phases: 6
-  completed_phases: 4
-  total_plans: 12
-  completed_plans: 11
+  completed_phases: 5
+  total_plans: 14
+  completed_plans: 13
   percent: 0
 ---
 
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-26)
 
 **Core value:** MERLIN's voice and text responses must be fast, high-quality, and contextually accurate during flight
-**Current focus:** Phase 05 — web-server-tests
+**Current focus:** Phase 06 — ci-cd-pipeline
 
 ## Current Position
 
-Phase: 05 (web-server-tests) — EXECUTING
+Phase: 06 (ci-cd-pipeline) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-03-28
 
 Progress: [░░░░░░░░░░] 0%
@@ -62,6 +62,8 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 03 P02 | 4min | 3 tasks | 8 files |
 | Phase 04 P01 | 5min | 2 tasks | 1 files |
 | Phase 05 P01 | 2min | 2 tasks | 5 files |
+| Phase 06-ci-cd-pipeline P01 | 1min | 1 tasks | 1 files |
+| Phase 06 P02 | 1min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -90,6 +92,8 @@ Recent decisions affecting current work:
 - [Phase 04]: AppState dataclass with 11 fields replaces all module-level mutable state in web/server.py
 - [Phase 04]: settings included in AppState for Phase 5 testability; module-level kept for early logging
 - [Phase 05]: Monkeypatch module globals instead of DI overrides since web/server.py uses module-level state
+- [Phase 06-ci-cd-pipeline]: Skipped web pip install -e .[dev] since web has no pyproject.toml; requirements.txt only
+- [Phase 06]: Build only SimConnectBridge.Tests.csproj to avoid SimConnect SDK dependency on CI runners
 
 ### Pending Todos
 
@@ -101,6 +105,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-28T20:52:50.713Z
-Stopped at: Phase 6 context gathered
-Resume file: .planning/phases/06-ci-cd-pipeline/06-CONTEXT.md
+Last session: 2026-03-28T22:16:28.300Z
+Stopped at: Completed 06-02-PLAN.md
+Resume file: None

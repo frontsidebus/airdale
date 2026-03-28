@@ -108,8 +108,8 @@ Plans:
   5. A failing test or lint error blocks PR merge
 **Plans**: 2 plans
 Plans:
-- [ ] 06-01-PLAN.md — Python CI workflow (ruff lint + pytest for orchestrator, telemetry-service, web + integration tests)
-- [ ] 06-02-PLAN.md — .NET CI workflow (dotnet test for MSFS adapter) and Docker CI workflow (compose build verification)
+- [x] 06-01-PLAN.md — Python CI workflow (ruff lint + pytest for orchestrator, telemetry-service, web + integration tests)
+- [x] 06-02-PLAN.md — .NET CI workflow (dotnet test for MSFS adapter) and Docker CI workflow (compose build verification)
 
 ## Progress
 
