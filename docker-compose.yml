@@ -105,8 +105,8 @@ services:
   # ---------------------------------------------------------------------------
   orchestrator:
     build:
-      context: ./orchestrator
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: orchestrator/Dockerfile
     container_name: merlin-orchestrator
     ports:
       - "3838:3838"
