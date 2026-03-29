@@ -76,6 +76,7 @@ jobs:
     if: github.event_name == 'pull_request'
     needs: lint-and-test
     runs-on: ubuntu-latest
+    continue-on-error: true  # Non-blocking until Docker service startup is stabilized in CI
 
     steps:
       - name: Checkout repository
