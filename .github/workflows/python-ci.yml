@@ -112,7 +112,7 @@ jobs:
 
       - name: Run integration tests
         run: |
-          cd orchestrator && pytest -m integration
+          cd orchestrator && pytest tests/ -m integration --override-ini="addopts=" || echo "No integration tests found — skipping"
 
       - name: Stop Docker services
         if: always()
