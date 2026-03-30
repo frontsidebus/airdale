@@ -93,6 +93,32 @@ public sealed class TelemetryServiceClient : IDisposable
     }
 
     /// <summary>
+    /// Send a status/heartbeat message to keep the connection alive during pauses.
+    /// </summary>
+    public async Task SendStatusAsync(string status = "connected")
+    {
+        if (_ws?.State != WebSocketState.Open || !_registered)
+            return;
+
+        try
+        {
+            var message = new { type = "status", connected = (status == "connected"), vehicle_name = "" };
+            var json = JsonSerializer.Serialize(message, _jsonOptions);
+            var bytes = Encoding.UTF8.GetBytes(json);
+            await _ws.SendAsync(
+                new ArraySegment<byte>(bytes),
+                WebSocketMessageType.Text,
+                endOfMessage: true,
+                cancellationToken: _cts.Token
+            );
+        }
+        catch (Exception ex)
+        {
+            Log("DEBUG", $"SendStatus error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// Push a SimState update to the telemetry service as a TelemetryEnvelope.
     /// </summary>
     public async Task PushStateAsync(SimState state)

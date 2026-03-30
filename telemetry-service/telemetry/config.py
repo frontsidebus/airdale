@@ -18,8 +18,8 @@ class TelemetryServiceSettings(BaseSettings):
     consumer_port: int = Field(default=8080, description="Port for consumer WebSocket connections")
     ingest_port: int = Field(default=8081, description="Port for adapter ingest connections")
     stale_adapter_timeout: float = Field(
-        default=15.0,
-        description="Seconds before an adapter is considered stale",
+        default=120.0,
+        description="Seconds before an adapter is considered stale (must exceed sim pause durations)",
     )
     log_level: str = Field(default="INFO", description="Log level")
 

@@ -36,7 +36,7 @@ mkdir -p "$PROJECT_ROOT/logs"
 # --- 1. Docker services (Whisper + ChromaDB) --------------------------------
 if [ -n "$DOCKER" ]; then
     log "Starting Docker services..."
-    $DOCKER compose up -d whisper chromadb 2>/dev/null
+    $DOCKER compose up -d whisper chromadb telemetry-service 2>/dev/null
 
     # Wait for Whisper to be healthy
     log "Waiting for Whisper to load model (this may take a minute on first run)..."
@@ -57,6 +57,13 @@ if [ -n "$DOCKER" ]; then
         ok "ChromaDB ready"
     else
         warn "ChromaDB not responding yet — it should come up shortly"
+    fi
+
+    # Check Telemetry Service
+    if curl -sf http://localhost:8080/api/health >/dev/null 2>&1; then
+        ok "Telemetry service ready"
+    else
+        warn "Telemetry service not responding yet — it should come up shortly"
     fi
 else
     warn "Skipping Docker services (docker not available)"
