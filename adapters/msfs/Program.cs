@@ -53,6 +53,14 @@ using var simConnect = new SimConnectManager(appName, highHz, lowHz);
 // Wire up state updates to telemetry service push
 simConnect.StateUpdated += state => _ = telemetryClient.PushStateAsync(state);
 
+// Wire up inbound commands from telemetry service to SimConnect execution
+telemetryClient.CommandReceived += (commandId, command, value) =>
+{
+    var success = simConnect.ExecuteCommand(command, value);
+    Log("INFO", $"Command {commandId[..Math.Min(8, commandId.Length)]}: {command}={value} -> {(success ? "OK" : "FAIL")}");
+    return success;
+};
+
 simConnect.ConnectionChanged += connected =>
 {
     Log("INFO", $"SimConnect connected: {connected}");

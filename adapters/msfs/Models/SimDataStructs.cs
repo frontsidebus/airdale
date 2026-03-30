@@ -30,11 +30,64 @@ public enum DataRequestId
 /// </summary>
 public enum SimEventId
 {
+    // System events (subscribed via SubscribeToSystemEvent)
     FlightLoaded,
     SimStart,
     SimStop,
     Paused,
     Unpaused,
+
+    // Client events for aircraft control (mapped via MapClientEventToSimEvent)
+    // Flaps
+    FlapsUp,
+    Flaps1,
+    Flaps2,
+    Flaps3,
+    FlapsFull,
+    FlapsSet,
+    FlapsIncr,
+    FlapsDecr,
+    // Gear
+    GearToggle,
+    GearUp,
+    GearDown,
+    // Autopilot
+    ApMaster,
+    ApHeadingHold,
+    HeadingBugSet,
+    ApAltHold,
+    ApAltVarSet,
+    ApVsHold,
+    ApVsVarSet,
+    ApAirspeedHold,
+    ApAirspeedSet,
+    ApNavHold,
+    ApApproachHold,
+    // Throttle / mixture / prop
+    ThrottleSet,
+    Throttle1Set,
+    Throttle2Set,
+    MixtureSet,
+    PropellerSet,
+    // Radios
+    ComRadioSetHz,
+    Com2RadioSetHz,
+    NavRadioSetHz,
+    Nav2RadioSetHz,
+    // Instruments / misc
+    BarometerSet,
+    ParkingBrakeToggle,
+    SpoilersToggle,
+    SpoilersSet,
+    ElevatorTrimSet,
+}
+
+/// <summary>
+/// Notification group used for client events sent via TransmitClientEvent.
+/// </summary>
+public enum NotificationGroup
+{
+    Default
 }
 
 // ---------------------------------------------------------------------------

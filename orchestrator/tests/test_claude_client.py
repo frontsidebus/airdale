@@ -109,8 +109,8 @@ class TestToolDefinitions:
         assert "departure" in required
         assert "destination" in required
 
-    def test_five_tools_defined(self) -> None:
-        assert len(TOOL_DEFINITIONS) == 5
+    def test_six_tools_defined(self) -> None:
+        assert len(TOOL_DEFINITIONS) == 6
 
     def test_tool_names_are_unique(self) -> None:
         names = [t["name"] for t in TOOL_DEFINITIONS]

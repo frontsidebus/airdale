@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from collections.abc import Callable, Coroutine
 from enum import StrEnum
 from typing import Any
@@ -283,6 +284,7 @@ class TelemetryClient:
         self._reconnect_count: int = 0
         self._messages_received: int = 0
         self._last_state_json: str = ""  # for delta detection
+        self._pending_commands: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
     @property
     def state(self) -> SimState:
@@ -354,6 +356,47 @@ class TelemetryClient:
 
     def subscribe(self, callback: StateCallback) -> None:
         self._subscribers.append(callback)
+
+    # -------------------------------------------------------------------
+    # Command sending
+    # -------------------------------------------------------------------
+
+    async def send_command(
+        self,
+        command: str,
+        value: int = 0,
+        adapter_id: str = "msfs-adapter",
+        timeout: float = 5.0,
+    ) -> dict[str, Any]:
+        """Send a control command to a sim adapter and wait for acknowledgment."""
+        if self._ws is None or self._connection_state != ConnectionState.CONNECTED:
+            return {"success": False, "error": "Not connected to telemetry service"}
+
+        command_id = str(uuid.uuid4())
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[dict[str, Any]] = loop.create_future()
+        self._pending_commands[command_id] = future
+
+        msg = json.dumps({
+            "type": "command",
+            "command_id": command_id,
+            "adapter_id": adapter_id,
+            "command": command,
+            "value": value,
+        })
+
+        try:
+            await self._ws.send(msg)
+        except Exception as exc:
+            self._pending_commands.pop(command_id, None)
+            return {"success": False, "error": f"Failed to send command: {exc}"}
+
+        try:
+            result = await asyncio.wait_for(future, timeout=timeout)
+            return result
+        except TimeoutError:
+            self._pending_commands.pop(command_id, None)
+            return {"success": False, "error": "Command timed out"}
 
     # -------------------------------------------------------------------
     # Heartbeat monitoring
@@ -487,6 +530,14 @@ class TelemetryClient:
                                     logger.exception(
                                         "Error in state subscriber callback"
                                     )
+                        elif data.get("type") == "command_ack":
+                            cmd_id = data.get("command_id", "")
+                            future = self._pending_commands.pop(cmd_id, None)
+                            if future and not future.done():
+                                future.set_result({
+                                    "success": data.get("success", False),
+                                    "message": data.get("message", ""),
+                                })
                         elif "type" in data:
                             # Informational response (e.g. state_response).
                             logger.debug(

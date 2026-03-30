@@ -64,6 +64,29 @@ class ServiceError(BaseModel):
     message: str
 
 
+class ServiceCommand(BaseModel):
+    """Command forwarded by the service to the target adapter."""
+
+    type: Literal["command"] = "command"
+    command_id: str
+    command: str  # SimConnect event name (e.g. "FLAPS_SET")
+    value: int = 0  # dwData parameter for TransmitClientEvent
+
+
+# ---------------------------------------------------------------------------
+# Adapter → Service messages (command acknowledgments)
+# ---------------------------------------------------------------------------
+
+
+class AdapterCommandAck(BaseModel):
+    """Acknowledgment from adapter after command execution."""
+
+    type: Literal["command_ack"] = "command_ack"
+    command_id: str
+    success: bool
+    message: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Consumer → Service messages (on the /ws/telemetry endpoint)
 # ---------------------------------------------------------------------------
@@ -88,6 +111,16 @@ class ConsumerHeartbeat(BaseModel):
     type: Literal["heartbeat"] = "heartbeat"
 
 
+class ConsumerCommand(BaseModel):
+    """Command from a consumer (orchestrator) to execute on a sim adapter."""
+
+    type: Literal["command"] = "command"
+    command_id: str  # UUID for ack correlation
+    adapter_id: str  # target adapter (e.g. "msfs-adapter")
+    command: str  # SimConnect event name (e.g. "FLAPS_SET")
+    value: int = 0  # dwData parameter
+
+
 # ---------------------------------------------------------------------------
 # Service → Consumer messages
 # ---------------------------------------------------------------------------
@@ -110,13 +143,22 @@ class ServiceStateResponse(BaseModel):
     message: str = "Full state will be delivered on next update cycle."
 
 
+class ServiceCommandAck(BaseModel):
+    """Command acknowledgment forwarded to the consumer that issued the command."""
+
+    type: Literal["command_ack"] = "command_ack"
+    command_id: str
+    success: bool
+    message: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Helper to parse incoming messages
 # ---------------------------------------------------------------------------
 
 
 def parse_adapter_message(data: dict[str, Any]) -> (
-    AdapterRegister | AdapterTelemetry | AdapterStatus | None
+    AdapterRegister | AdapterTelemetry | AdapterStatus | AdapterCommandAck | None
 ):
     """Parse a raw JSON dict into a typed adapter message."""
     msg_type = data.get("type")
@@ -126,11 +168,13 @@ def parse_adapter_message(data: dict[str, Any]) -> (
         return AdapterTelemetry.model_validate(data)
     if msg_type == "status":
         return AdapterStatus.model_validate(data)
+    if msg_type == "command_ack":
+        return AdapterCommandAck.model_validate(data)
     return None
 
 
 def parse_consumer_message(data: dict[str, Any]) -> (
-    ConsumerSubscribe | ConsumerGetState | ConsumerHeartbeat | None
+    ConsumerSubscribe | ConsumerGetState | ConsumerHeartbeat | ConsumerCommand | None
 ):
     """Parse a raw JSON dict into a typed consumer message."""
     msg_type = data.get("type")
@@ -140,4 +184,6 @@ def parse_consumer_message(data: dict[str, Any]) -> (
         return ConsumerGetState.model_validate(data)
     if msg_type == "heartbeat":
         return ConsumerHeartbeat.model_validate(data)
+    if msg_type == "command":
+        return ConsumerCommand.model_validate(data)
     return None

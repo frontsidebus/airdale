@@ -25,12 +25,15 @@ from orchestrator.sim_client import (
     SurfaceState,
 )
 from orchestrator.tools import (
+    CRITICAL_COMMANDS,
     DEFAULT_CHECKLISTS,
+    _resolve_command,
     create_flight_plan,
     get_checklist,
     get_sim_state,
     lookup_airport,
     search_manual,
+    set_aircraft_control,
 )
 
 
@@ -415,3 +418,124 @@ class TestCreateFlightPlan:
 
         result = await create_flight_plan("KJFK", "KLAX")
         assert "draft" in result["notes"].lower() or "verify" in result["notes"].lower()
+
+
+# ---------------------------------------------------------------------------
+# _resolve_command
+# ---------------------------------------------------------------------------
+
+
+class TestResolveCommand:
+    """Test the command resolution from human-friendly names to SimConnect events."""
+
+    def test_flaps_up(self) -> None:
+        assert _resolve_command("flaps", "up", None) == ("FLAPS_UP", 0)
+
+    def test_flaps_1(self) -> None:
+        assert _resolve_command("flaps", "1", None) == ("FLAPS_1", 0)
+
+    def test_flaps_2(self) -> None:
+        assert _resolve_command("flaps", "2", None) == ("FLAPS_2", 0)
+
+    def test_flaps_3(self) -> None:
+        assert _resolve_command("flaps", "3", None) == ("FLAPS_3", 0)
+
+    def test_flaps_full(self) -> None:
+        assert _resolve_command("flaps", "full", None) == ("FLAPS_FULL", 0)
+
+    def test_flaps_set_percentage(self) -> None:
+        event, val = _resolve_command("flaps", "set", 50)
+        assert event == "FLAPS_SET"
+        assert val == int(50 * 16383 / 100)
+
+    def test_flaps_set_notch(self) -> None:
+        event, val = _resolve_command("flaps", "set", 2)
+        assert event == "FLAPS_SET"
+        assert val == int(2 * 16383 / 4)
+
+    def test_gear_up(self) -> None:
+        assert _resolve_command("gear", "up", None) == ("GEAR_UP", 0)
+
+    def test_gear_down(self) -> None:
+        assert _resolve_command("gear", "down", None) == ("GEAR_DOWN", 0)
+
+    def test_autopilot_toggle(self) -> None:
+        assert _resolve_command("autopilot", "toggle", None) == ("AP_MASTER", 0)
+
+    def test_autopilot_heading(self) -> None:
+        assert _resolve_command("autopilot", "heading", 270) == ("HEADING_BUG_SET", 270)
+
+    def test_autopilot_altitude(self) -> None:
+        assert _resolve_command("autopilot", "altitude", 5000) == ("AP_ALT_VAR_SET_ENGLISH", 5000)
+
+    def test_autopilot_vs(self) -> None:
+        assert _resolve_command("autopilot", "vertical_speed", -500) == ("AP_VS_VAR_SET_ENGLISH", -500)
+
+    def test_throttle_set(self) -> None:
+        event, val = _resolve_command("throttle", "set", 75)
+        assert event == "THROTTLE_SET"
+        assert val == int(75 * 16383 / 100)
+
+    def test_radio_com1(self) -> None:
+        assert _resolve_command("radio", "com1", 121.5) == ("COM_RADIO_SET_HZ", 121500000)
+
+    def test_radio_nav1(self) -> None:
+        assert _resolve_command("radio", "nav1", 110.5) == ("NAV1_RADIO_SET_HZ", 110500000)
+
+    def test_barometer_set(self) -> None:
+        assert _resolve_command("barometer", "set", 29.92) == ("KOHLSMAN_SET", 2992)
+
+    def test_unknown_system(self) -> None:
+        assert _resolve_command("weapons", "fire", None) == (None, 0)
+
+    def test_unknown_action(self) -> None:
+        assert _resolve_command("flaps", "explode", None) == (None, 0)
+
+
+# ---------------------------------------------------------------------------
+# set_aircraft_control
+# ---------------------------------------------------------------------------
+
+
+class TestSetAircraftControl:
+    """Test the high-level aircraft control command function."""
+
+    @pytest.mark.asyncio
+    async def test_successful_command(self) -> None:
+        mock_client = MagicMock(spec=TelemetryClient)
+        mock_client.send_command = AsyncMock(return_value={"success": True, "message": ""})
+
+        result = await set_aircraft_control(mock_client, "flaps", "2")
+
+        mock_client.send_command.assert_awaited_once_with("FLAPS_2", 0)
+        assert result["command"] == "FLAPS_2"
+        assert result["sim_value"] == 0
+        assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_unknown_control_returns_error(self) -> None:
+        mock_client = MagicMock(spec=TelemetryClient)
+
+        result = await set_aircraft_control(mock_client, "invalid", "boom")
+
+        assert "error" in result
+        mock_client.send_command.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_critical_command_has_safety_note(self) -> None:
+        mock_client = MagicMock(spec=TelemetryClient)
+        mock_client.send_command = AsyncMock(return_value={"success": True, "message": ""})
+
+        result = await set_aircraft_control(mock_client, "gear", "down")
+
+        assert "safety_note" in result
+        assert result["command"] == "GEAR_DOWN"
+
+    @pytest.mark.asyncio
+    async def test_non_critical_command_no_safety_note(self) -> None:
+        mock_client = MagicMock(spec=TelemetryClient)
+        mock_client.send_command = AsyncMock(return_value={"success": True, "message": ""})
+
+        result = await set_aircraft_control(mock_client, "flaps", "2")
+
+        assert "safety_note" not in result

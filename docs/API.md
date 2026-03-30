@@ -474,6 +474,65 @@ Create a basic flight plan between two airports.
 }
 ```
 
+### `set_aircraft_control`
+
+Control an aircraft system in the simulator. Sends commands through the telemetry service to the sim adapter, which executes them via SimConnect.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `system` | string | Yes | Aircraft system: `flaps`, `gear`, `autopilot`, `throttle`, `radio`, `barometer`, `trim`, `parking_brake`, `spoilers`, `mixture`, `propeller` |
+| `action` | string | Yes | Action to perform (system-dependent, see below) |
+| `value` | number | No | Numeric value when needed (units depend on system) |
+
+**Actions by system:**
+
+| System | Actions | Value |
+|---|---|---|
+| `flaps` | `up`, `full`, `1`/`10`, `2`/`20`, `3`/`30`, `set`, `incr`, `decr` | Percentage (0-100) or notch (1-4) for `set` |
+| `gear` | `up`, `down`, `toggle` | -- |
+| `autopilot` | `on`, `off`, `heading`, `heading_hold`, `altitude`, `altitude_hold`, `vertical_speed`, `vs_hold`, `speed`, `speed_hold`, `nav`, `approach` | Degrees, feet, fpm, or knots |
+| `throttle` | `set` | Percentage (0-100) |
+| `radio` | `com1`, `com2`, `nav1`, `nav2` | Frequency in MHz (e.g. 121.5) |
+| `barometer` | `set` | inHg (e.g. 29.92) |
+| `trim` | `set` | Raw value (-16383 to +16383) |
+| `parking_brake` | (any) | -- |
+| `spoilers` | `toggle`, `set` | Percentage (0-100) for `set` |
+| `mixture` | `set` | Percentage (0-100) |
+| `propeller` | `set` | Percentage (0-100) |
+
+**Returns (success):**
+
+```json
+{
+  "success": true,
+  "message": "",
+  "command": "FLAPS_2",
+  "sim_value": 0
+}
+```
+
+**Returns (critical command):**
+
+```json
+{
+  "success": true,
+  "message": "",
+  "command": "GEAR_DOWN",
+  "sim_value": 0,
+  "safety_note": "Critical system change executed"
+}
+```
+
+**Returns (error):**
+
+```json
+{
+  "error": "Unknown control: system=invalid, action=foo"
+}
+```
+
 ---
 
 ## Context Store Query Interface

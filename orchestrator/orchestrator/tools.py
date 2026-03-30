@@ -10,6 +10,143 @@ import httpx
 from .context_store import ContextStore
 from .sim_client import FlightPhase, TelemetryClient
 
+# ---------------------------------------------------------------------------
+# Aircraft control commands
+# ---------------------------------------------------------------------------
+
+# Commands that affect critical systems — Claude should confirm with the pilot
+CRITICAL_COMMANDS = {
+    "GEAR_UP",
+    "GEAR_DOWN",
+    "GEAR_TOGGLE",
+    "AP_MASTER",
+    "PARKING_BRAKES",
+}
+
+
+def _resolve_command(
+    system: str, action: str, value: float | None
+) -> tuple[str | None, int]:
+    """Translate human-friendly system/action/value to (SimConnect event, dwData)."""
+    system = system.lower()
+    action = action.lower()
+
+    if system == "flaps":
+        if action == "set" and value is not None:
+            # Accept notch (0-4) or percentage (0-100)
+            if value <= 4:
+                return "FLAPS_SET", int(value * 16383 / 4)
+            return "FLAPS_SET", int(value * 16383 / 100)
+        if action in ("up", "retract"):
+            return "FLAPS_UP", 0
+        if action in ("full", "down"):
+            return "FLAPS_FULL", 0
+        if action == "1" or action == "10":
+            return "FLAPS_1", 0
+        if action == "2" or action == "20":
+            return "FLAPS_2", 0
+        if action == "3" or action == "30":
+            return "FLAPS_3", 0
+        if action in ("incr", "increase"):
+            return "FLAPS_INCR", 0
+        if action in ("decr", "decrease"):
+            return "FLAPS_DECR", 0
+
+    elif system == "gear":
+        if action in ("up", "retract"):
+            return "GEAR_UP", 0
+        if action in ("down", "extend"):
+            return "GEAR_DOWN", 0
+        if action == "toggle":
+            return "GEAR_TOGGLE", 0
+
+    elif system == "autopilot":
+        if action in ("on", "off", "toggle"):
+            return "AP_MASTER", 0
+        if action == "heading" and value is not None:
+            return "HEADING_BUG_SET", int(value)
+        if action == "heading_hold":
+            return "AP_HDG_HOLD", 0
+        if action == "altitude" and value is not None:
+            return "AP_ALT_VAR_SET_ENGLISH", int(value)
+        if action == "altitude_hold":
+            return "AP_ALT_HOLD", 0
+        if action == "vertical_speed" and value is not None:
+            return "AP_VS_VAR_SET_ENGLISH", int(value)
+        if action == "vs_hold":
+            return "AP_VS_HOLD", 0
+        if action == "speed" and value is not None:
+            return "AP_SPD_VAR_SET", int(value)
+        if action == "speed_hold":
+            return "AP_AIRSPEED_HOLD", 0
+        if action == "nav":
+            return "AP_NAV1_HOLD", 0
+        if action == "approach":
+            return "AP_APR_HOLD", 0
+
+    elif system == "throttle":
+        if action == "set" and value is not None:
+            return "THROTTLE_SET", int(value * 16383 / 100)
+
+    elif system == "radio":
+        if action == "com1" and value is not None:
+            return "COM_RADIO_SET_HZ", int(value * 1_000_000)
+        if action == "com2" and value is not None:
+            return "COM2_RADIO_SET_HZ", int(value * 1_000_000)
+        if action == "nav1" and value is not None:
+            return "NAV1_RADIO_SET_HZ", int(value * 1_000_000)
+        if action == "nav2" and value is not None:
+            return "NAV2_RADIO_SET_HZ", int(value * 1_000_000)
+
+    elif system == "barometer":
+        if action == "set" and value is not None:
+            return "KOHLSMAN_SET", int(value * 100)
+
+    elif system == "trim":
+        if action == "set" and value is not None:
+            return "ELEVATOR_TRIM_SET", int(value)
+
+    elif system == "parking_brake":
+        return "PARKING_BRAKES", 0
+
+    elif system == "spoilers":
+        if action == "toggle":
+            return "SPOILERS_TOGGLE", 0
+        if action == "set" and value is not None:
+            return "SPOILERS_SET", int(value * 16383 / 100)
+
+    elif system == "mixture":
+        if action == "set" and value is not None:
+            return "MIXTURE_SET", int(value * 16383 / 100)
+
+    elif system == "propeller":
+        if action == "set" and value is not None:
+            return "PROP_PITCH_SET", int(value * 16383 / 100)
+
+    return None, 0
+
+
+async def set_aircraft_control(
+    sim_client: TelemetryClient,
+    system: str,
+    action: str,
+    value: float | None = None,
+) -> dict[str, Any]:
+    """Execute a sim control command via the telemetry service."""
+    command, sim_value = _resolve_command(system, action, value)
+
+    if command is None:
+        return {"error": f"Unknown control: system={system}, action={action}"}
+
+    result = await sim_client.send_command(command, sim_value)
+    result["command"] = command
+    result["sim_value"] = sim_value
+
+    if command in CRITICAL_COMMANDS:
+        result["safety_note"] = "Critical system change executed"
+
+    return result
+
 logger = logging.getLogger(__name__)
 
 # Phase-appropriate checklists (simplified defaults; real ones come from the context store)

@@ -88,6 +88,7 @@ public sealed class SimConnectManager : IDisposable
             _simConnect.OnRecvEvent += OnRecvEvent;
 
             RegisterDataDefinitions();
+            RegisterClientEvents();
             SubscribeSystemEvents();
 
             // Start a dedicated thread that waits on the event handle and pumps
@@ -231,6 +232,118 @@ public sealed class SimConnectManager : IDisposable
     {
         var ts = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
         Console.WriteLine($"{ts} [{level}] SimConnect: {message}");
+    }
+
+    // -----------------------------------------------------------------------
+    //  Command Execution (SimConnect write path)
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Maps SimConnect event name strings (e.g. "FLAPS_SET") to enum values
+    /// for use with TransmitClientEvent.
+    /// </summary>
+    private static readonly Dictionary<string, SimEventId> CommandMap =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            // Flaps
+            ["FLAPS_UP"] = SimEventId.FlapsUp,
+            ["FLAPS_1"] = SimEventId.Flaps1,
+            ["FLAPS_2"] = SimEventId.Flaps2,
+            ["FLAPS_3"] = SimEventId.Flaps3,
+            ["FLAPS_FULL"] = SimEventId.FlapsFull,
+            ["FLAPS_SET"] = SimEventId.FlapsSet,
+            ["FLAPS_INCR"] = SimEventId.FlapsIncr,
+            ["FLAPS_DECR"] = SimEventId.FlapsDecr,
+            // Gear
+            ["GEAR_TOGGLE"] = SimEventId.GearToggle,
+            ["GEAR_UP"] = SimEventId.GearUp,
+            ["GEAR_DOWN"] = SimEventId.GearDown,
+            // Autopilot
+            ["AP_MASTER"] = SimEventId.ApMaster,
+            ["AP_HDG_HOLD"] = SimEventId.ApHeadingHold,
+            ["HEADING_BUG_SET"] = SimEventId.HeadingBugSet,
+            ["AP_ALT_HOLD"] = SimEventId.ApAltHold,
+            ["AP_ALT_VAR_SET_ENGLISH"] = SimEventId.ApAltVarSet,
+            ["AP_VS_HOLD"] = SimEventId.ApVsHold,
+            ["AP_VS_VAR_SET_ENGLISH"] = SimEventId.ApVsVarSet,
+            ["AP_AIRSPEED_HOLD"] = SimEventId.ApAirspeedHold,
+            ["AP_SPD_VAR_SET"] = SimEventId.ApAirspeedSet,
+            ["AP_NAV1_HOLD"] = SimEventId.ApNavHold,
+            ["AP_APR_HOLD"] = SimEventId.ApApproachHold,
+            // Throttle / mixture / prop
+            ["THROTTLE_SET"] = SimEventId.ThrottleSet,
+            ["THROTTLE1_SET"] = SimEventId.Throttle1Set,
+            ["THROTTLE2_SET"] = SimEventId.Throttle2Set,
+            ["MIXTURE_SET"] = SimEventId.MixtureSet,
+            ["PROP_PITCH_SET"] = SimEventId.PropellerSet,
+            // Radios
+            ["COM_RADIO_SET_HZ"] = SimEventId.ComRadioSetHz,
+            ["COM2_RADIO_SET_HZ"] = SimEventId.Com2RadioSetHz,
+            ["NAV1_RADIO_SET_HZ"] = SimEventId.NavRadioSetHz,
+            ["NAV2_RADIO_SET_HZ"] = SimEventId.Nav2RadioSetHz,
+            // Instruments / misc
+            ["KOHLSMAN_SET"] = SimEventId.BarometerSet,
+            ["PARKING_BRAKES"] = SimEventId.ParkingBrakeToggle,
+            ["SPOILERS_TOGGLE"] = SimEventId.SpoilersToggle,
+            ["SPOILERS_SET"] = SimEventId.SpoilersSet,
+            ["ELEVATOR_TRIM_SET"] = SimEventId.ElevatorTrimSet,
+        };
+
+    /// <summary>
+    /// Registers all client events with SimConnect for aircraft control.
+    /// Called once during Connect() after data definitions are registered.
+    /// </summary>
+    private void RegisterClientEvents()
+    {
+        if (_simConnect is null) return;
+
+        Log("INFO", "Registering client events for aircraft control...");
+
+        foreach (var (eventName, eventId) in CommandMap)
+        {
+            _simConnect.MapClientEventToSimEvent(eventId, eventName);
+        }
+
+        Log("INFO", $"{CommandMap.Count} client events registered.");
+    }
+
+    /// <summary>
+    /// Executes a SimConnect control command by event name.
+    /// </summary>
+    /// <param name="command">SimConnect event name (e.g. "FLAPS_SET", "AP_MASTER").</param>
+    /// <param name="value">Event data parameter (e.g. 0-16383 for axis values).</param>
+    /// <returns>True if the command was executed successfully.</returns>
+    public bool ExecuteCommand(string command, uint value = 0)
+    {
+        if (_simConnect is null || !_connected)
+        {
+            Log("WARN", $"Cannot execute command '{command}': not connected");
+            return false;
+        }
+
+        if (!CommandMap.TryGetValue(command, out var eventId))
+        {
+            Log("WARN", $"Unknown command: {command}");
+            return false;
+        }
+
+        try
+        {
+            _simConnect.TransmitClientEvent(
+                SimConnect.SIMCONNECT_OBJECT_ID_USER,
+                eventId,
+                value,
+                NotificationGroup.Default,
+                SIMCONNECT_EVENT_FLAG.GROUPID_IS_PRIORITY
+            );
+            Log("INFO", $"Executed command: {command} (value={value})");
+            return true;
+        }
+        catch (COMException ex)
+        {
+            Log("ERROR", $"Command failed '{command}': 0x{ex.HResult:X8}");
+            return false;
+        }
     }
 
     // -----------------------------------------------------------------------

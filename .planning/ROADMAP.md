@@ -124,3 +124,33 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 4. Web Server Refactor | 0/2 | Planned | - |
 | 5. Web Server Tests | 1/2 | In Progress|  |
 | 6. CI/CD Pipeline | 0/2 | Not started | - |
+
+---
+
+# v1.3 Roadmap: Agent Copilot Control
+
+## Overview
+
+v1.3 adds bidirectional sim control — MERLIN can now execute aircraft commands (flaps, gear, autopilot, radios, throttle, etc.) via voice or text. The foundation is built: SimConnect write path through the adapter, command routing through the telemetry service, and a Claude tool that translates natural language intent to SimConnect events. Future phases will add PID-based automated maneuvers, authority levels, and vision-based cockpit reading.
+
+## Phases
+
+- [x] **Phase 1: Discrete Command Control** — SimConnect event mapping, command protocol, bidirectional routing, Claude tool (COMPLETE — `feat/agent-copilot-control` branch)
+- [ ] **Phase 2: Authority & Safety Layer** — Configurable authority levels (advisory/assisted/full), pilot override detection, watchdog timer, phase-aware command gating
+- [ ] **Phase 3: Automated Maneuvers** — PID control loops for takeoff/landing/go-around, MCP Task pattern for long-running maneuvers, server-side control at 20Hz
+- [ ] **Phase 4: Vision Cockpit Reading** — DXcam screen capture upgrade, Claude vision for instrument reading, third-party aircraft gauge interpretation
+
+## Phase 1 Details (Complete)
+
+**Goal**: MERLIN can execute discrete aircraft control commands via natural language
+**Branch**: `feat/agent-copilot-control`
+**Files modified**: 10 files across adapter (C#), telemetry service (Python), orchestrator (Python)
+
+**What was built:**
+1. Command protocol: `ConsumerCommand` → `ServiceCommand` → `AdapterCommandAck` → `ServiceCommandAck`
+2. Telemetry service routing: bidirectional command forwarding with ack tracking
+3. MSFS adapter: 30+ SimConnect events registered, `ExecuteCommand()` via `TransmitClientEvent`
+4. Orchestrator: `send_command()` with Future-based ack, `set_aircraft_control` Claude tool
+5. Command translation: `_resolve_command()` maps human-friendly params to SimConnect events
+
+**Supported systems**: flaps, gear, autopilot, throttle, radio, barometer, trim, parking brake, spoilers, mixture, propeller
