@@ -31,7 +31,7 @@ log "Stopping MSFS adapter..."
 # Stop Docker services
 if [ -n "$DOCKER" ]; then
     log "Stopping Docker services..."
-    $DOCKER compose stop whisper chromadb 2>/dev/null
+    $DOCKER compose stop whisper chromadb telemetry-service 2>/dev/null
     ok "Docker services stopped"
 else
     log "Docker not available — skipping container shutdown"
