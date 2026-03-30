@@ -63,7 +63,17 @@ simConnect.FlightStateChanged += active =>
     Log("INFO", active
         ? "Flight is active — telemetry streaming"
         : "Flight ended — idling (telemetry paused)");
+    // Send status heartbeat on flight state change to keep connection alive
+    _ = telemetryClient.SendStatusAsync(active ? "connected" : "connected");
 };
+
+// Periodic heartbeat to keep telemetry service connection alive during sim pauses.
+// The telemetry service has a stale adapter timeout — this prevents reaping.
+var heartbeatTimer = new System.Threading.Timer(
+    _ => _ = telemetryClient.SendStatusAsync("connected"),
+    null,
+    TimeSpan.FromSeconds(10),
+    TimeSpan.FromSeconds(30));
 
 // Connect with retry -- the ConnectWithRetryAsync loop now handles
 // MSFS crashes/restarts automatically by re-entering the retry loop
