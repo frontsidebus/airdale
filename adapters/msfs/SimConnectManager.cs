@@ -388,7 +388,32 @@ public sealed class SimConnectManager : IDisposable
                 SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT,
                 0, 0, 0);
 
-            Log("INFO", "Data subscriptions registered (HF=SIM_FRAME, LF=SECOND)");
+            // Request an immediate one-shot snapshot of all data so we get
+            // initial state even when the sim is paused (CHANGED-based subs
+            // won't fire until something actually changes).
+            _simConnect?.RequestDataOnSimObject(
+                DataRequestId.HighFrequency,
+                DataDefinitionId.HighFrequency,
+                SimConnect.SIMCONNECT_OBJECT_ID_USER,
+                SIMCONNECT_PERIOD.ONCE,
+                SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT,
+                0, 0, 0);
+            _simConnect?.RequestDataOnSimObject(
+                DataRequestId.LowFrequency,
+                DataDefinitionId.LowFrequency,
+                SimConnect.SIMCONNECT_OBJECT_ID_USER,
+                SIMCONNECT_PERIOD.ONCE,
+                SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT,
+                0, 0, 0);
+            _simConnect?.RequestDataOnSimObject(
+                DataRequestId.EngineData,
+                DataDefinitionId.EngineData,
+                SimConnect.SIMCONNECT_OBJECT_ID_USER,
+                SIMCONNECT_PERIOD.ONCE,
+                SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT,
+                0, 0, 0);
+
+            Log("INFO", "Data subscriptions registered (HF=SIM_FRAME, LF=SECOND) + initial snapshot requested");
         }
         catch (COMException ex)
         {

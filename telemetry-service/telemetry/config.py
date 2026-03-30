@@ -22,8 +22,8 @@ class TelemetryServiceSettings(BaseSettings):
         default=8081, description="Port for adapter ingest connections"
     )
     stale_adapter_timeout: float = Field(
-        default=15.0,
-        description="Seconds before an adapter is considered stale",
+        default=120.0,
+        description="Seconds before an adapter is considered stale (must exceed sim pause durations)",
     )
     log_level: str = Field(default="INFO", description="Log level")
 
