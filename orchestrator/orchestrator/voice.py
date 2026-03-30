@@ -66,9 +66,7 @@ class VoiceInput:
         frames: list[np.ndarray] = []
         self._recording = True
 
-        def callback(
-            indata: np.ndarray, frame_count: int, time_info: dict, status: int
-        ) -> None:
+        def callback(indata: np.ndarray, frame_count: int, time_info: dict, status: int) -> None:
             if self._recording:
                 frames.append(indata.copy())
 
@@ -119,9 +117,7 @@ class VoiceInput:
         event = asyncio.Event()
         result_audio: list[np.ndarray | None] = [None]
 
-        def callback(
-            indata: np.ndarray, frame_count: int, time_info: dict, status: int
-        ) -> None:
+        def callback(indata: np.ndarray, frame_count: int, time_info: dict, status: int) -> None:
             nonlocal silence_frames, speech_detected
             chunk = indata.copy()
             frames.append(chunk)
@@ -138,9 +134,7 @@ class VoiceInput:
                     silence_frames += 1
                     accumulated_ms = silence_frames * chunk_duration_ms
                     if accumulated_ms >= self._vad._silence_ms:
-                        result_audio[0] = np.concatenate(
-                            frames, axis=0
-                        ).flatten()
+                        result_audio[0] = np.concatenate(frames, axis=0).flatten()
                         event.set()
             else:
                 # RMS fallback
@@ -151,9 +145,7 @@ class VoiceInput:
                 elif speech_detected:
                     silence_frames += 1
                     if silence_frames >= rms_silence_limit:
-                        result_audio[0] = np.concatenate(
-                            frames, axis=0
-                        ).flatten()
+                        result_audio[0] = np.concatenate(frames, axis=0).flatten()
                         event.set()
 
         stream = sd.InputStream(
@@ -168,11 +160,7 @@ class VoiceInput:
         stream.stop()
         stream.close()
 
-        return (
-            result_audio[0]
-            if result_audio[0] is not None
-            else np.array([], dtype=np.float32)
-        )
+        return result_audio[0] if result_audio[0] is not None else np.array([], dtype=np.float32)
 
     async def transcribe(self, audio: np.ndarray) -> str:
         """Transcribe audio via the injected WhisperClient.
@@ -327,9 +315,7 @@ class VoiceOutput:
             try:
                 resp = await client.post(url, headers=headers, json=payload)
                 resp.raise_for_status()
-                logger.info(
-                    "TTS synthesized %d bytes for: %s", len(resp.content), text[:60]
-                )
+                logger.info("TTS synthesized %d bytes for: %s", len(resp.content), text[:60])
                 return resp.content
             except httpx.HTTPError as e:
                 logger.warning("TTS synthesis failed: %s", e)

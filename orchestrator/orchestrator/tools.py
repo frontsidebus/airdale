@@ -211,8 +211,7 @@ async def search_manual(
 
     results = await context_store.query(query, n_results=n_results, filters=filters)
     return [
-        {"content": r["content"], "source": r["metadata"].get("source", "unknown")}
-        for r in results
+        {"content": r["content"], "source": r["metadata"].get("source", "unknown")} for r in results
     ]
 
 

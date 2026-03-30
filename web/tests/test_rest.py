@@ -12,9 +12,7 @@ from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
-import pytest
 from httpx import ASGITransport
-
 
 # ---------------------------------------------------------------------------
 # WTST-07: Status endpoint
@@ -117,7 +115,13 @@ async def test_transcribe_webm_direct(test_app, mock_app_state):
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
             "/api/transcribe",
-            files={"file": ("audio.webm", b"\x1a\x45\xdf\xa3" + b"\x00" * 100, "audio/webm")},
+            files={
+                "file": (
+                    "audio.webm",
+                    b"\x1a\x45\xdf\xa3" + b"\x00" * 100,
+                    "audio/webm",
+                )
+            },
         )
 
     assert resp.status_code == 200
@@ -158,7 +162,10 @@ async def test_tts_cache_miss_calls_client(test_app, mock_app_state):
 
     transport = ASGITransport(app=test_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/api/tts", json={"text": "Climb and maintain flight level three five zero."})
+        resp = await client.post(
+            "/api/tts",
+            json={"text": "Climb and maintain flight level three five zero."},
+        )
 
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "audio/mpeg"

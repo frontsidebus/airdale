@@ -6,7 +6,6 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
-
 from telemetry.service import app, manager
 
 
@@ -45,13 +44,17 @@ class TestIngestWebSocket:
 
         with client.websocket_connect("/ws/ingest") as ws:
             # Send registration
-            ws.send_text(json.dumps({
-                "type": "register",
-                "adapter_id": "test-adapter",
-                "sim_name": "test-sim",
-                "vehicle_type": "aircraft",
-                "version": "1.0",
-            }))
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "register",
+                        "adapter_id": "test-adapter",
+                        "sim_name": "test-sim",
+                        "vehicle_type": "aircraft",
+                        "version": "1.0",
+                    }
+                )
+            )
 
             # Should receive register_ack
             ack = json.loads(ws.receive_text())
@@ -59,23 +62,27 @@ class TestIngestWebSocket:
             assert ack["accepted"] is True
 
             # Send telemetry
-            ws.send_text(json.dumps({
-                "type": "telemetry",
-                "data": {
-                    "adapter_id": "test-adapter",
-                    "sim_name": "test-sim",
-                    "vehicle_type": "aircraft",
-                    "timestamp": "2026-01-01T00:00:00Z",
-                    "connected": True,
-                    "vehicle_name": "Test Aircraft",
-                    "position": {
-                        "latitude": 47.0,
-                        "longitude": -122.0,
-                        "altitude_msl": 5000.0,
-                        "altitude_agl": 4000.0,
-                    },
-                },
-            }))
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "telemetry",
+                        "data": {
+                            "adapter_id": "test-adapter",
+                            "sim_name": "test-sim",
+                            "vehicle_type": "aircraft",
+                            "timestamp": "2026-01-01T00:00:00Z",
+                            "connected": True,
+                            "vehicle_name": "Test Aircraft",
+                            "position": {
+                                "latitude": 47.0,
+                                "longitude": -122.0,
+                                "altitude_msl": 5000.0,
+                                "altitude_agl": 4000.0,
+                            },
+                        },
+                    }
+                )
+            )
 
         # After disconnect, adapter should be cleaned up
         assert manager.adapter_count == 0
@@ -110,10 +117,14 @@ class TestConsumerWebSocket:
         client = TestClient(app)
 
         with client.websocket_connect("/ws/telemetry") as ws:
-            ws.send_text(json.dumps({
-                "type": "subscribe",
-                "fields": ["position", "speeds"],
-            }))
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "subscribe",
+                        "fields": ["position", "speeds"],
+                    }
+                )
+            )
             resp = json.loads(ws.receive_text())
             assert resp["type"] == "subscribe_ack"
             assert resp["fields"] == ["position", "speeds"]
