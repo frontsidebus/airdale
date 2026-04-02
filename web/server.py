@@ -690,7 +690,7 @@ async def _tts_websocket_stream(
     api_key = state.settings.elevenlabs_api_key
     ws_url = (
         f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-        f"/stream-input?model_id={model_id}&output_format=mp3_44100_128"
+        f"/stream-input?model_id={model_id}&output_format=mp3_22050_32"
     )
 
     try:
@@ -953,15 +953,15 @@ def _split_at_sentence(text: str) -> tuple[str, str]:
             return text[: i + 1].strip(), text[i + 1 :].lstrip()
 
     # Fallback for long buffers: split at clause boundaries (, ; :)
-    if len(text) > 50:
+    if len(text) > 30:
         for i in range(len(text) - 1, -1, -1):
             if text[i] in ",;:" and i + 1 < len(text) and text[i + 1] == " ":
                 return text[: i + 1].strip(), text[i + 1 :].lstrip()
 
     # Force-split very long buffers with no punctuation at all
-    if len(text) > 200:
+    if len(text) > 100:
         # Split at last space
-        last_space = text.rfind(" ", 0, 180)
+        last_space = text.rfind(" ", 0, 80)
         if last_space > 0:
             return text[:last_space].strip(), text[last_space:].lstrip()
 
