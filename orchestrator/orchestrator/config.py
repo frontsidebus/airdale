@@ -40,8 +40,36 @@ class Settings(BaseSettings):
         description="Max message pairs to retain in conversation history",
     )
     claude_temperature: float = Field(
-        default=0.7,
-        description="Temperature for Claude responses (0.0-1.0, lower = more deterministic)",
+        default=0.3,
+        description="Default temperature for Claude responses (overridden by dynamic phase logic)",
+    )
+
+    # --- Claude model routing ---
+    claude_model_fast: str = Field(
+        default="claude-haiku-4-5-20251001",
+        description="Fast/cheap model for short acknowledgments and simple queries",
+    )
+    claude_temp_critical: float = Field(
+        default=0.1,
+        description="Temperature for critical flight phases (takeoff, approach, landing)",
+    )
+    claude_temp_normal: float = Field(
+        default=0.3,
+        description="Temperature for normal flight phases (climb, descent, taxi)",
+    )
+    claude_temp_relaxed: float = Field(
+        default=0.5,
+        description="Temperature for relaxed phases (preflight, cruise, landed)",
+    )
+
+    # --- Conversation summary ---
+    claude_summary_interval: int = Field(
+        default=10,
+        description="Summarize conversation history every N turns",
+    )
+    claude_summary_max_tokens: int = Field(
+        default=256,
+        description="Max tokens for conversation summary generation",
     )
 
     # --- Telemetry service ---------------------------------------------------
