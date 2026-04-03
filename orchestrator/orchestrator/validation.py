@@ -50,8 +50,8 @@ class AircraftLimits:
     max_gross_weight: float = 0.0  # lbs
     fuel_capacity_gal: float = 0.0  # gallons
 
-    # Common aliases
-    aliases: dict[str, str] = field(default_factory=dict)
+    # Common aliases for aircraft name matching
+    aliases: set[str] = field(default_factory=set)
 
 
 # Pre-populated database for common sim aircraft

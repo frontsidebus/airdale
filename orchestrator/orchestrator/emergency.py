@@ -334,7 +334,8 @@ class EmergencyDetector:
         if not prev_engines or not curr_engines:
             return None
 
-        for i, (prev_eng, curr_eng) in enumerate(zip(prev_engines, curr_engines, strict=True)):
+        # Use strict=False: engine counts can differ briefly during sim loading
+        for i, (prev_eng, curr_eng) in enumerate(zip(prev_engines, curr_engines, strict=False)):
             if prev_eng.rpm > t.engine_rpm_min and curr_eng.rpm <= t.engine_rpm_min:
                 return {"engine_index": i, "prev_rpm": prev_eng.rpm, "curr_rpm": curr_eng.rpm}
         return None
