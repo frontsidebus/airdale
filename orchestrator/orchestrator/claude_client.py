@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -283,9 +284,17 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "system": {
                     "type": "string",
                     "enum": [
-                        "flaps", "gear", "autopilot", "throttle", "radio",
-                        "barometer", "trim", "parking_brake", "spoilers",
-                        "mixture", "propeller",
+                        "flaps",
+                        "gear",
+                        "autopilot",
+                        "throttle",
+                        "radio",
+                        "barometer",
+                        "trim",
+                        "parking_brake",
+                        "spoilers",
+                        "mixture",
+                        "propeller",
                     ],
                     "description": "The aircraft system to control",
                 },
@@ -529,44 +538,67 @@ class ClaudeClient:
                 )
             self._conversation.append({"role": "user", "content": tool_results})
 
+    # Timeout configuration per tool category (seconds)
+    _TOOL_TIMEOUTS: dict[str, float] = {
+        "get_sim_state": 2.0,
+        "lookup_airport": 10.0,
+        "search_manual": 5.0,
+        "get_checklist": 5.0,
+        "create_flight_plan": 10.0,
+        "set_aircraft_control": 5.0,
+    }
+    _DEFAULT_TOOL_TIMEOUT: float = 5.0
+
     async def _execute_tool(self, name: str, args: dict[str, Any], sim_state: SimState) -> Any:
         logger.info("Executing tool: %s(%s)", name, args)
+        timeout = self._TOOL_TIMEOUTS.get(name, self._DEFAULT_TOOL_TIMEOUT)
         try:
-            if name == "get_sim_state":
-                return await get_sim_state(self._sim_client)
-            elif name == "lookup_airport":
-                return await lookup_airport(args["identifier"])
-            elif name == "search_manual":
-                return await search_manual(
-                    args["query"],
-                    self._context_store,
-                    aircraft_type=sim_state.aircraft,
-                )
-            elif name == "get_checklist":
-                return await get_checklist(
-                    args["phase"],
-                    self._context_store,
-                    aircraft_type=sim_state.aircraft,
-                )
-            elif name == "create_flight_plan":
-                return await create_flight_plan(
-                    args["departure"],
-                    args["destination"],
-                    altitude=args.get("altitude", 5000),
-                    route=args.get("route", ""),
-                )
-            elif name == "set_aircraft_control":
-                return await set_aircraft_control(
-                    self._sim_client,
-                    args["system"],
-                    args["action"],
-                    value=args.get("value"),
-                )
-            else:
-                return {"error": f"Unknown tool: {name}"}
+            result = await asyncio.wait_for(
+                self._dispatch_tool(name, args, sim_state),
+                timeout=timeout,
+            )
+            return result
+        except TimeoutError:
+            logger.warning("Tool %s timed out after %.1fs", name, timeout)
+            return {"error": f"Tool '{name}' timed out after {timeout:.0f} seconds"}
         except Exception as e:
             logger.exception("Tool execution failed: %s", name)
             return {"error": str(e)}
+
+    async def _dispatch_tool(self, name: str, args: dict[str, Any], sim_state: SimState) -> Any:
+        """Route tool call to the appropriate handler."""
+        if name == "get_sim_state":
+            return await get_sim_state(self._sim_client)
+        elif name == "lookup_airport":
+            return await lookup_airport(args["identifier"])
+        elif name == "search_manual":
+            return await search_manual(
+                args["query"],
+                self._context_store,
+                aircraft_type=sim_state.aircraft,
+            )
+        elif name == "get_checklist":
+            return await get_checklist(
+                args["phase"],
+                self._context_store,
+                aircraft_type=sim_state.aircraft,
+            )
+        elif name == "create_flight_plan":
+            return await create_flight_plan(
+                args["departure"],
+                args["destination"],
+                altitude=args.get("altitude", 5000),
+                route=args.get("route", ""),
+            )
+        elif name == "set_aircraft_control":
+            return await set_aircraft_control(
+                self._sim_client,
+                args["system"],
+                args["action"],
+                value=args.get("value"),
+            )
+        else:
+            return {"error": f"Unknown tool: {name}"}
 
     def clear_history(self) -> None:
         self._conversation.clear()
