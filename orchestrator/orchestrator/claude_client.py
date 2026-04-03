@@ -139,13 +139,25 @@ _SHORT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^(yes|no|yep|nope|yeah)\b", re.I),
 ]
 
+# Patterns indicating an emergency or urgent situation.
+_EMERGENCY_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"\b(mayday|pan\s*pan|emergency|declare)\b", re.I),
+    re.compile(r"\b(engine\s+(fire|failure|out)|fire\s+in)\b", re.I),
+    re.compile(r"\b(smoke|decompress|ditching|crash)\b", re.I),
+    re.compile(r"\b(terrain|pull\s+up|GPWS|TCAS\s+RA)\b", re.I),
+]
+
 
 def classify_query(user_message: str) -> str:
-    """Classify a pilot message as 'short', 'briefing', or 'normal'.
+    """Classify a pilot message as 'emergency', 'short', 'briefing', or 'normal'.
 
-    Returns one of: 'short', 'briefing', 'normal'.
+    Returns one of: 'emergency', 'short', 'briefing', 'normal'.
     """
     text = user_message.strip()
+    # Emergency takes priority over everything
+    for pat in _EMERGENCY_PATTERNS:
+        if pat.search(text):
+            return "emergency"
     for pat in _SHORT_PATTERNS:
         if pat.search(text):
             return "short"
@@ -153,6 +165,60 @@ def classify_query(user_message: str) -> str:
         if pat.search(text):
             return "briefing"
     return "normal"
+
+
+# ---------------------------------------------------------------------------
+# Dynamic temperature by flight phase and query type
+# ---------------------------------------------------------------------------
+
+# Phase → temperature tier
+_PHASE_TEMPERATURE: dict[FlightPhase, str] = {
+    FlightPhase.TAKEOFF: "critical",
+    FlightPhase.APPROACH: "critical",
+    FlightPhase.LANDING: "critical",
+    FlightPhase.CLIMB: "normal",
+    FlightPhase.DESCENT: "normal",
+    FlightPhase.TAXI: "normal",
+    FlightPhase.PREFLIGHT: "relaxed",
+    FlightPhase.CRUISE: "relaxed",
+    FlightPhase.LANDED: "relaxed",
+}
+
+
+def get_temperature_for_context(
+    phase: FlightPhase,
+    query_type: str,
+    *,
+    temp_critical: float = 0.1,
+    temp_normal: float = 0.3,
+    temp_relaxed: float = 0.5,
+) -> float:
+    """Return the appropriate temperature for the current flight context.
+
+    Emergency and short queries always use the normal (deterministic) temp.
+    Briefings use normal temp for accuracy. Otherwise, phase determines tier.
+    """
+    if query_type in ("emergency", "short", "briefing"):
+        return temp_normal
+
+    tier = _PHASE_TEMPERATURE.get(phase, "normal")
+    return {"critical": temp_critical, "normal": temp_normal, "relaxed": temp_relaxed}[tier]
+
+
+def get_model_for_query(
+    query_type: str,
+    *,
+    model_default: str,
+    model_fast: str,
+) -> str:
+    """Route to the appropriate model based on query complexity.
+
+    Short queries go to the fast/cheap model (Haiku).
+    Everything else uses the default model (Sonnet).
+    """
+    if query_type == "short":
+        return model_fast
+    return model_default
 
 
 def max_tokens_for_query(
@@ -339,10 +405,17 @@ class ClaudeClient:
         max_tokens: int = 1024,
         max_tokens_briefing: int = 2048,
         max_history: int = 20,
-        temperature: float = 0.7,
+        temperature: float = 0.3,
+        model_fast: str = "claude-haiku-4-5-20251001",
+        temp_critical: float = 0.1,
+        temp_normal: float = 0.3,
+        temp_relaxed: float = 0.5,
+        summary_interval: int = 10,
+        summary_max_tokens: int = 256,
     ) -> None:
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
+        self._model_fast = model_fast
         self._sim_client = sim_client
         self._context_store = context_store
         self._conversation: list[dict[str, Any]] = []
@@ -350,6 +423,13 @@ class ClaudeClient:
         self._max_tokens = max_tokens
         self._max_tokens_briefing = max_tokens_briefing
         self._temperature = temperature
+        self._temp_critical = temp_critical
+        self._temp_normal = temp_normal
+        self._temp_relaxed = temp_relaxed
+        self._summary_interval = summary_interval
+        self._summary_max_tokens = summary_max_tokens
+        self._conversation_summary: str = ""
+        self._turns_since_summary: int = 0
 
     def _build_system_prompt(
         self,
@@ -394,6 +474,11 @@ class ClaudeClient:
             f'QNH {env.barometer_inhg:.2f}"Hg'
         )
 
+        if self._conversation_summary:
+            dynamic_parts.append(
+                "\n--- FLIGHT SESSION SUMMARY ---\n" + self._conversation_summary
+            )
+
         if context_docs:
             dynamic_parts.append("\n--- RELEVANT REFERENCE MATERIAL ---")
             for doc in context_docs[:3]:
@@ -434,6 +519,22 @@ class ClaudeClient:
             briefing_max=self._max_tokens_briefing,
         )
 
+        # Dynamic temperature based on flight phase and query type
+        effective_temp = get_temperature_for_context(
+            sim_state.flight_phase,
+            query_type,
+            temp_critical=self._temp_critical,
+            temp_normal=self._temp_normal,
+            temp_relaxed=self._temp_relaxed,
+        )
+
+        # Model routing: short queries → fast model, everything else → default
+        effective_model = get_model_for_query(
+            query_type,
+            model_default=self._model,
+            model_fast=self._model_fast,
+        )
+
         # Build user message content
         content: list[dict[str, Any]] = []
         if image_base64:
@@ -451,6 +552,7 @@ class ClaudeClient:
 
         self._conversation.append({"role": "user", "content": content})
         self._trim_history()
+        await self._maybe_summarize()
 
         # Agentic loop: keep going while Claude wants to use tools
         while True:
@@ -462,13 +564,13 @@ class ClaudeClient:
             stop_reason = None
 
             async with self._client.messages.stream(
-                model=self._model,
+                model=effective_model,
                 max_tokens=effective_max_tokens,
                 system=system,
                 messages=self._conversation,
                 tools=TOOL_DEFINITIONS,
                 stop_sequences=STOP_SEQUENCES,
-                temperature=self._temperature,
+                temperature=effective_temp,
             ) as stream:
                 async for event in stream:
                     if event.type == "content_block_start":
@@ -570,6 +672,75 @@ class ClaudeClient:
 
     def clear_history(self) -> None:
         self._conversation.clear()
+        self._conversation_summary = ""
+        self._turns_since_summary = 0
+
+    async def _maybe_summarize(self) -> None:
+        """Generate a rolling summary of old conversation history.
+
+        Every N turns, summarize the oldest messages being trimmed and
+        inject the summary into the system prompt. This preserves key
+        decisions, commitments, and flight-relevant facts across long
+        sessions without consuming the full context window.
+        """
+        self._turns_since_summary += 1
+        if self._turns_since_summary < self._summary_interval:
+            return
+        if len(self._conversation) <= self._max_history:
+            return
+
+        self._turns_since_summary = 0
+
+        # Extract the messages that will be trimmed
+        trim_count = len(self._conversation) - self._max_history
+        old_messages = self._conversation[:trim_count]
+
+        # Build a text representation of old messages for summarization
+        summary_input: list[str] = []
+        for msg in old_messages:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                text_parts = [
+                    c.get("text", "") for c in content if isinstance(c, dict) and "text" in c
+                ]
+                content = " ".join(text_parts)
+            if content:
+                summary_input.append(f"{role}: {content[:200]}")
+
+        if not summary_input:
+            return
+
+        prior_summary = ""
+        if self._conversation_summary:
+            prior_summary = f"Previous summary: {self._conversation_summary}\n\n"
+
+        try:
+            response = await self._client.messages.create(
+                model=self._model_fast,  # Use Haiku for summaries
+                max_tokens=self._summary_max_tokens,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            f"{prior_summary}"
+                            "Summarize the key decisions, commitments, and flight-relevant "
+                            "facts from this conversation. Focus on: diversion plans, weather "
+                            "briefings, clearances received, altitude/heading assignments, "
+                            "fuel state discussions, and any problems discussed. Be concise.\n\n"
+                            + "\n".join(summary_input)
+                        ),
+                    }
+                ],
+                temperature=0.1,
+            )
+            self._conversation_summary = response.content[0].text
+            logger.info(
+                "Generated conversation summary (%d chars)",
+                len(self._conversation_summary),
+            )
+        except Exception:
+            logger.warning("Failed to generate conversation summary", exc_info=True)
 
     def _trim_history(self) -> None:
         if len(self._conversation) > self._max_history * 2:
