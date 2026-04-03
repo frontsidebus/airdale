@@ -748,7 +748,55 @@ async def ws_chat(ws: WebSocket, state: AppState = Depends(get_ws_app_state)):
 
 
 # ---------------------------------------------------------------------------
-# ElevenLabs WebSocket streaming TTS
+# Cartesia TTS streaming (v2 default)
+# ---------------------------------------------------------------------------
+
+
+async def _tts_cartesia_stream(
+    ws: WebSocket,
+    tts_queue: asyncio.Queue[str | None],
+    interrupt: asyncio.Event,
+    state: AppState,
+) -> None:
+    """Stream TTS via Cartesia REST synthesis per sentence.
+
+    Cartesia achieves ~90ms TTFB so per-sentence REST calls are fast enough
+    for real-time cockpit use. Audio is sent as PCM to the browser.
+    """
+    while True:
+        if interrupt.is_set():
+            break
+        try:
+            sentence = await asyncio.wait_for(tts_queue.get(), timeout=0.1)
+        except asyncio.TimeoutError:
+            continue
+        if sentence is None:
+            break
+        if interrupt.is_set():
+            break
+
+        clean_text = preprocess_for_tts(sentence)
+        if not clean_text:
+            continue
+
+        # Check cache
+        if clean_text in state.tts_cache:
+            await ws.send_json({"type": "tts_audio", "size": len(state.tts_cache[clean_text])})
+            await ws.send_bytes(state.tts_cache[clean_text])
+            continue
+
+        try:
+            assert state.cartesia_client is not None
+            audio = await state.cartesia_client.synthesize(clean_text)
+            if audio and not interrupt.is_set():
+                await ws.send_json({"type": "tts_audio", "size": len(audio)})
+                await ws.send_bytes(audio)
+        except Exception as exc:
+            logger.warning("Cartesia TTS failed for chunk: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# ElevenLabs WebSocket streaming TTS (legacy fallback)
 # ---------------------------------------------------------------------------
 
 
@@ -918,16 +966,25 @@ async def _stream_response(
     REST fallback. This runs as a task so it can be cancelled when the
     user barges in.
     """
-    tts_enabled = bool(state.settings.elevenlabs_api_key and state.settings.voice_id)
+    tts_enabled = state.cartesia_client is not None or bool(
+        state.settings.elevenlabs_api_key
+        and getattr(state.settings, "elevenlabs_voice_id", "")
+    )
     sentence_buffer = ""
     full_response = ""
 
     # TTS queue ensures audio chunks are sent in order
     tts_queue: asyncio.Queue[str | None] = asyncio.Queue()
 
-    # Pre-warm ElevenLabs TLS connection in the background
-    if tts_enabled:
-
+    # Choose TTS streaming strategy based on backend
+    if tts_enabled and state.cartesia_client is not None:
+        # Cartesia: use REST synthesis per sentence (still fast at ~90ms TTFB)
+        tts_task: asyncio.Task[None] | None = asyncio.create_task(
+            _tts_cartesia_stream(ws, tts_queue, interrupt, state)
+        )
+    elif tts_enabled:
+        # ElevenLabs: WebSocket streaming
+        # Pre-warm TLS connection
         async def _warmup_tts() -> None:
             try:
                 if state.tts_client is not None:
@@ -936,10 +993,7 @@ async def _stream_response(
                 pass
 
         asyncio.create_task(_warmup_tts())
-
-    # Use WebSocket streaming TTS sender
-    if tts_enabled:
-        tts_task: asyncio.Task[None] | None = asyncio.create_task(
+        tts_task = asyncio.create_task(
             _tts_websocket_stream(ws, tts_queue, interrupt, state)
         )
     else:
