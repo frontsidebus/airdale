@@ -6,6 +6,7 @@ import tempfile
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from orchestrator.context_store import PHASE_TOPICS, ContextStore
 from orchestrator.sim_client import FlightPhase, SimState
 
@@ -91,15 +92,16 @@ class TestDocumentIngestion:
             store = ContextStore(chromadb_url="http://localhost:8000")
 
             with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-                f.write("A" * 250)
+                # Write enough text with paragraph breaks for semantic chunker
+                f.write("Section one content.\n\n" * 10)
                 f.flush()
-                count = await store.ingest_document(f.name, chunk_size=100, chunk_overlap=20)
+                count = await store.ingest_document(f.name)
 
-            assert count == 4  # 250 chars / (100-20) step = ~3.1, so 4 chunks
+            assert count >= 1  # Semantic chunker produces at least one chunk
             mock_chromadb_collection.upsert.assert_called_once()
             call_kwargs = mock_chromadb_collection.upsert.call_args[1]
-            assert len(call_kwargs["ids"]) == 4
-            assert len(call_kwargs["documents"]) == 4
+            assert len(call_kwargs["ids"]) == count
+            assert len(call_kwargs["documents"]) == count
 
     @pytest.mark.asyncio
     async def test_ingest_with_metadata(self, mock_chromadb_collection: MagicMock) -> None:
