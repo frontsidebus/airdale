@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -70,11 +71,7 @@ class CartesiaClient:
             "transcript": text,
             "model_id": self._model_id,
             "voice": {"mode": "id", "id": self._voice_id},
-            "output_format": {
-                "container": "raw",
-                "encoding": self._output_format,
-                "sample_rate": self._sample_rate,
-            },
+            "output_format": self._build_output_format(),
             "language": self._language,
         }
 
@@ -102,11 +99,7 @@ class CartesiaClient:
             "transcript": text,
             "model_id": self._model_id,
             "voice": {"mode": "id", "id": self._voice_id},
-            "output_format": {
-                "container": "raw",
-                "encoding": self._output_format,
-                "sample_rate": self._sample_rate,
-            },
+            "output_format": self._build_output_format(),
             "language": self._language,
         }
 
@@ -250,6 +243,16 @@ class CartesiaClient:
 
         except Exception as exc:
             logger.warning("Cartesia WebSocket streaming failed: %s", exc)
+
+    def _build_output_format(self) -> dict[str, Any]:
+        """Build the output_format payload for Cartesia API."""
+        if self._output_format == "mp3":
+            return {"container": "mp3", "bit_rate": 128000, "sample_rate": self._sample_rate}
+        return {
+            "container": "raw",
+            "encoding": self._output_format,
+            "sample_rate": self._sample_rate,
+        }
 
     def set_emotion(self, emotion: str | None) -> None:
         """Set the emotional tone for speech synthesis.
