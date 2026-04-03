@@ -70,7 +70,7 @@ class TestSettingsDefaults:
     ) -> None:
         monkeypatch.delenv("CLAUDE_TEMPERATURE", raising=False)
         s = Settings(anthropic_api_key="sk-test")
-        assert s.claude_temperature == 0.7
+        assert s.claude_temperature == 0.3  # v2 default (was 0.7)
 
 
 class TestSettingsEnvOverrides:
