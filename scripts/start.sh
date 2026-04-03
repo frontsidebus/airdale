@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# MERLIN Startup Script
+# MERLIN v2 Startup Script
 # Starts all components: Docker services, MSFS adapter, and web server.
 # Run from WSL: ./scripts/start.sh
 # =============================================================================
@@ -11,6 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Colors
+RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
@@ -19,6 +20,14 @@ NC='\033[0m'
 log()  { echo -e "${CYAN}[MERLIN]${NC} $1"; }
 ok()   { echo -e "${GREEN}[  OK  ]${NC} $1"; }
 warn() { echo -e "${YELLOW}[ WARN ]${NC} $1"; }
+fail() { echo -e "${RED}[ FAIL ]${NC} $1"; }
+
+# Load .env if it exists
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    set -a
+    source "$PROJECT_ROOT/.env"
+    set +a
+fi
 
 # Detect docker command (WSL2 may need docker.exe)
 if command -v docker &>/dev/null; then
@@ -26,45 +35,97 @@ if command -v docker &>/dev/null; then
 elif command -v docker.exe &>/dev/null; then
     DOCKER=docker.exe
 else
-    warn "Docker not found — Whisper and ChromaDB will be unavailable"
+    warn "Docker not found — ChromaDB and legacy Whisper will be unavailable"
     DOCKER=""
 fi
 
 cd "$PROJECT_ROOT"
 mkdir -p "$PROJECT_ROOT/logs"
 
-# --- 1. Docker services (Whisper + ChromaDB) --------------------------------
+# --- 0. Pre-flight: check required API keys ---------------------------------
+log "Pre-flight checks..."
+
+STT_BACKEND="${STT_BACKEND:-deepgram}"
+TTS_BACKEND="${TTS_BACKEND:-cartesia}"
+
+PREFLIGHT_OK=true
+
+if [ "$STT_BACKEND" = "deepgram" ] && [ -z "$DEEPGRAM_API_KEY" ]; then
+    fail "DEEPGRAM_API_KEY not set (required for STT_BACKEND=deepgram)"
+    warn "  Set it in .env or export it, or set STT_BACKEND=whisper for local fallback"
+    PREFLIGHT_OK=false
+fi
+
+if [ "$TTS_BACKEND" = "cartesia" ] && [ -z "$CARTESIA_API_KEY" ]; then
+    fail "CARTESIA_API_KEY not set (required for TTS_BACKEND=cartesia)"
+    warn "  Set it in .env or export it, or set TTS_BACKEND=elevenlabs or TTS_BACKEND=local"
+    PREFLIGHT_OK=false
+fi
+
+if [ -z "$ANTHROPIC_API_KEY" ]; then
+    fail "ANTHROPIC_API_KEY not set (required)"
+    PREFLIGHT_OK=false
+fi
+
+if [ "$PREFLIGHT_OK" = false ]; then
+    echo ""
+    fail "Pre-flight failed. Fix the above and try again."
+    exit 1
+fi
+
+ok "API keys configured (STT: $STT_BACKEND, TTS: $TTS_BACKEND)"
+
+# --- 1. Docker services (ChromaDB + optional Whisper) ------------------------
 if [ -n "$DOCKER" ]; then
     log "Starting Docker services..."
-    $DOCKER compose up -d whisper chromadb telemetry-service 2>/dev/null
 
-    # Wait for Whisper to be healthy
-    log "Waiting for Whisper to load model (this may take a minute on first run)..."
-    for i in $(seq 1 60); do
-        status=$($DOCKER inspect merlin-whisper --format '{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
-        if [ "$status" = "healthy" ]; then
-            ok "Whisper STT ready"
-            break
-        fi
-        if [ "$i" -eq 60 ]; then
-            warn "Whisper still loading — continuing anyway (it will be ready soon)"
-        fi
-        sleep 5
-    done
+    # ChromaDB is always needed (RAG store)
+    $DOCKER compose up -d chromadb telemetry-service 2>/dev/null
+
+    # Whisper only if using legacy STT backend
+    if [ "$STT_BACKEND" = "whisper" ]; then
+        log "Starting Whisper container (STT_BACKEND=whisper)..."
+        $DOCKER compose up -d whisper 2>/dev/null
+
+        log "Waiting for Whisper to load model..."
+        for i in $(seq 1 60); do
+            status=$($DOCKER inspect merlin-whisper --format '{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
+            if [ "$status" = "healthy" ]; then
+                ok "Whisper STT ready"
+                break
+            fi
+            if [ "$i" -eq 60 ]; then
+                warn "Whisper still loading — continuing anyway"
+            fi
+            sleep 5
+        done
+    else
+        ok "Skipping Whisper (using $STT_BACKEND cloud STT)"
+    fi
 
     # Check ChromaDB
-    if curl -sf http://localhost:8000/api/v2/heartbeat >/dev/null 2>&1; then
-        ok "ChromaDB ready"
-    else
-        warn "ChromaDB not responding yet — it should come up shortly"
-    fi
+    for i in $(seq 1 15); do
+        if curl -sf http://localhost:8000/api/v2/heartbeat >/dev/null 2>&1; then
+            ok "ChromaDB ready"
+            break
+        fi
+        if [ "$i" -eq 15 ]; then
+            warn "ChromaDB not responding yet — it should come up shortly"
+        fi
+        sleep 2
+    done
 
     # Check Telemetry Service
-    if curl -sf http://localhost:8080/api/health >/dev/null 2>&1; then
-        ok "Telemetry service ready"
-    else
-        warn "Telemetry service not responding yet — it should come up shortly"
-    fi
+    for i in $(seq 1 10); do
+        if curl -sf http://localhost:8080/api/health >/dev/null 2>&1; then
+            ok "Telemetry service ready"
+            break
+        fi
+        if [ "$i" -eq 10 ]; then
+            warn "Telemetry service not responding yet — it should come up shortly"
+        fi
+        sleep 2
+    done
 else
     warn "Skipping Docker services (docker not available)"
 fi
@@ -126,7 +187,7 @@ done
 # --- Summary ----------------------------------------------------------------
 echo ""
 echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
-echo -e "${CYAN}  MERLIN AI Co-Pilot v1.2 — All Systems Go${NC}"
+echo -e "${CYAN}  MERLIN AI Co-Pilot v2.0 — All Systems Go${NC}"
 echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
 echo ""
 
@@ -134,12 +195,12 @@ echo ""
 STATUS=$(curl -s http://localhost:3838/api/status 2>/dev/null)
 if [ -n "$STATUS" ]; then
     SIM=$(echo "$STATUS" | python3 -c "import sys,json; print('CONNECTED' if json.load(sys.stdin).get('sim_connected') else 'WAITING')" 2>/dev/null || echo "?")
-    WHISPER=$(echo "$STATUS" | python3 -c "import sys,json; print('OK' if json.load(sys.stdin).get('whisper_available') else 'DOWN')" 2>/dev/null || echo "?")
     CHROMA=$(echo "$STATUS" | python3 -c "import sys,json; print('OK' if json.load(sys.stdin).get('chromadb_available') else 'DOWN')" 2>/dev/null || echo "?")
 
     echo -e "  Cockpit UI:   ${GREEN}http://localhost:3838${NC}"
     echo -e "  SimConnect:   ${SIM}"
-    echo -e "  Whisper STT:  ${WHISPER}"
+    echo -e "  STT Backend:  ${GREEN}${STT_BACKEND}${NC}"
+    echo -e "  TTS Backend:  ${GREEN}${TTS_BACKEND}${NC}"
     echo -e "  ChromaDB:     ${CHROMA}"
 else
     echo -e "  Cockpit UI:   http://localhost:3838"
