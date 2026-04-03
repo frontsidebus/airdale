@@ -18,6 +18,22 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TIMEOUT = 10.0
 
 
+def _normalize_identifier(identifier: str) -> str:
+    """Normalize airport identifier, adding K prefix only for US FAA codes.
+
+    3-letter codes that look like US domestic (all alpha, no leading E/C/L/R
+    which are common ICAO prefixes) get K-prefixed. 4-letter ICAO codes pass
+    through unchanged.
+    """
+    identifier = identifier.strip().upper()
+    if len(identifier) == 4:
+        return identifier  # Already ICAO format
+    if len(identifier) == 3 and identifier.isalpha():
+        # Only prefix if it looks like a US FAA code (not a foreign 3-letter)
+        return f"K{identifier}"
+    return identifier
+
+
 # ---------------------------------------------------------------------------
 # Pydantic response models
 # ---------------------------------------------------------------------------
@@ -69,9 +85,7 @@ async def get_notams(identifier: str) -> dict[str, Any]:
     Returns:
         Dict with NOTAMs or error message.
     """
-    identifier = identifier.strip().upper()
-    if not identifier.startswith("K") and len(identifier) == 3:
-        identifier = f"K{identifier}"
+    identifier = _normalize_identifier(identifier)
 
     url = "https://external-api.faa.gov/notamapi/v1/notams"
     params = {
@@ -136,9 +150,7 @@ async def get_weather(identifier: str) -> dict[str, Any]:
     Returns:
         Parsed weather report or error.
     """
-    identifier = identifier.strip().upper()
-    if not identifier.startswith("K") and len(identifier) == 3:
-        identifier = f"K{identifier}"
+    identifier = _normalize_identifier(identifier)
 
     base_url = "https://aviationweather.gov/api/data"
     report = WeatherReport(identifier=identifier)
@@ -237,7 +249,8 @@ async def get_adsb_traffic(
     """
     # Convert radius to lat/lon bounding box (approximate)
     lat_delta = radius_nm / 60.0  # 1 degree lat ≈ 60 nm
-    lon_delta = radius_nm / (60.0 * math.cos(math.radians(lat)))
+    cos_lat = math.cos(math.radians(lat))
+    lon_delta = radius_nm / (60.0 * cos_lat) if abs(cos_lat) > 1e-6 else 180.0
 
     url = "https://opensky-network.org/api/states/all"
     params = {
@@ -269,7 +282,7 @@ async def get_adsb_traffic(
                     continue
 
                 brg = _bearing_deg(lat, lon, t_lat, t_lon)
-                alt_m = s[7] or s[13] or 0  # baro or geo altitude
+                alt_m = s[7] or (s[13] if len(s) > 13 else 0) or 0
                 alt_ft = alt_m * 3.28084
 
                 target = TrafficTarget(
@@ -320,9 +333,7 @@ async def get_charts(
     Returns:
         Dict with chart URLs or error.
     """
-    identifier = identifier.strip().upper()
-    if not identifier.startswith("K") and len(identifier) == 3:
-        identifier = f"K{identifier}"
+    identifier = _normalize_identifier(identifier)
 
     url = f"https://api.aviationapi.com/v1/charts/{identifier}"
 
