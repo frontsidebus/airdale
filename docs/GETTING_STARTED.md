@@ -1,6 +1,6 @@
 # Getting Started with MERLIN
 
-This guide assumes you have completed the [installation](INSTALL.md). You have the SimConnect bridge built, Docker services running, and your `.env` configured with API keys.
+This guide assumes you have completed the [installation](INSTALL.md) and configured your `.env` file with API keys. See the [Configuration Guide](CONFIGURATION.md) for all available settings.
 
 ---
 
@@ -25,7 +25,13 @@ The easiest way to start everything is with the startup script (from WSL):
 ./scripts/start.sh
 ```
 
-This launches Docker services (Whisper, ChromaDB), builds and starts the SimConnect bridge, and starts the web server. You'll see a status summary when everything is ready.
+This validates your API keys, launches Docker services (ChromaDB, telemetry service), builds and starts the SimConnect bridge, and starts the web server. You'll see a status summary when everything is ready.
+
+You can verify all systems with the health check:
+
+```bash
+./scripts/healthcheck.sh
+```
 
 To stop all components:
 
@@ -124,7 +130,7 @@ MERLIN will call the `get_sim_state` tool, read your telemetry, and respond with
 
 **Text mode** (default): Type at the `Captain>` prompt. Best for testing or noisy environments.
 
-**Voice mode**: Toggle with the `/voice` command. MERLIN listens through your microphone, transcribes via Whisper, processes with Claude, and responds through ElevenLabs TTS.
+**Voice mode**: Toggle with the `/voice` command. MERLIN listens through your microphone, transcribes via Deepgram streaming STT, processes with Claude, and responds through Cartesia TTS (~90ms latency).
 
 ```
 Captain> /voice
@@ -166,19 +172,23 @@ import asyncio
 from orchestrator.context_store import ContextStore
 
 async def main():
-    store = ContextStore("./data/chromadb")
+    store = ContextStore()
     count = await store.ingest_document(
         "data/manuals/c172s_poh.txt",
-        metadata={"aircraft_type": "Cessna 172 Skyhawk"},
-        chunk_size=1000,    # characters per chunk
-        chunk_overlap=200,  # overlap between chunks
+        metadata={
+            "aircraft_type": "Cessna 172 Skyhawk",
+            "document_type": "poh",
+            "section": "general",
+        },
     )
     print(f"Ingested {count} chunks")
 
 asyncio.run(main())
 ```
 
-The `aircraft_type` metadata field is important -- it allows MERLIN to filter searches to the aircraft you are currently flying.
+The v2 ingestion pipeline uses **aviation-aware semantic chunking** that preserves checklist items, procedure steps, and limitation entries as atomic units. See [RAG System](RAG_SYSTEM.md) for details.
+
+Metadata fields (`aircraft_type`, `document_type`, `section`) are important — they enable filtered retrieval so MERLIN searches the right documents for the aircraft you're flying.
 
 ### Verifying Ingestion
 
@@ -256,19 +266,11 @@ To add a checklist for a new aircraft, create a new YAML file following the same
 
 ### Configuring Voice
 
-**Whisper model size** -- controls transcription speed and accuracy:
+**v2 uses cloud-based STT and TTS by default** for the lowest latency. See [Voice Pipeline](VOICE_PIPELINE.md) for the full architecture.
 
-| Model | Size | Speed | Accuracy | Set in `.env` |
-|---|---|---|---|---|
-| `tiny.en` | 75 MB | Fastest | Lowest | Good for development |
-| `base.en` | 150 MB | Fast | Good | Default -- recommended |
-| `small.en` | 500 MB | Moderate | Better | Good balance |
-| `medium.en` | 1.5 GB | Slow | High | For quiet environments |
-| `large-v3` | 3 GB | Slowest | Highest | Best accuracy, needs GPU |
+**STT (Speech-to-Text):** Deepgram Nova-3 (default). Streaming with aviation keyword boosting. Set `DEEPGRAM_API_KEY` in `.env`. For local/offline use, set `STT_BACKEND=whisper`.
 
-Set via `WHISPER_MODEL` in `.env` or the `ASR_MODEL` environment variable in `docker-compose.yml`.
-
-**ElevenLabs voice** -- choose any voice from your ElevenLabs library. Set `ELEVENLABS_VOICE_ID` in `.env`. Voices with a "narrative" or "conversational" style suit MERLIN's personality. You can also tune `ELEVENLABS_STABILITY`, `ELEVENLABS_SIMILARITY_BOOST`, and `ELEVENLABS_STYLE` in `.env`.
+**TTS (Text-to-Speech):** Cartesia Sonic-3 (default, ~90ms latency). Set `CARTESIA_API_KEY` and `CARTESIA_VOICE_ID` in `.env`. Alternatives: `TTS_BACKEND=elevenlabs` or `TTS_BACKEND=local` (Kokoro, free/offline).
 
 ### Enabling Screen Capture
 
@@ -291,33 +293,13 @@ Screen capture works best when running the orchestrator natively on Windows (not
 
 ---
 
-## Feature Roadmap
+## What's New in v2
 
-### What Works Now (Phases 1-3)
+- **Streaming voice pipeline** — Deepgram Nova-3 STT + Cartesia Sonic-3 TTS (~90ms TTFB), replacing batch Whisper + ElevenLabs
+- **6 new aviation tools** — NOTAM, METAR/TAF, ADS-B traffic, charts, performance calculator, airspace info
+- **Safety layer** — Emergency fast paths that bypass the LLM, V-speed validation, telemetry sanity checks
+- **Smart LLM** — Dynamic temperature by flight phase, Haiku/Sonnet model routing, rolling conversation summary
+- **Upgraded RAG** — Aviation-aware semantic chunking, cross-encoder re-ranking, enhanced metadata
+- **TTS preprocessor** — 6 new ICAO transformations (millibars, ATIS letters, transponder modes, bearings, Zulu time, temperature)
 
-- SimConnect telemetry streaming over WebSocket
-- Text and voice conversation with MERLIN via Claude
-- Tool use: `get_sim_state`, `lookup_airport`, `search_manual`, `get_checklist`, `create_flight_plan`
-- RAG document ingestion and retrieval via ChromaDB
-- FAA airport lookups via the Aviation API
-- Push-to-talk and voice-activity-detection input modes
-- ElevenLabs TTS output with streaming playback
-- Docker Compose deployment for Whisper, ChromaDB, and the orchestrator
-
-### Coming Soon (Phases 4-6)
-
-**Phase 4 -- Situational Awareness:**
-- Automatic flight phase detection from telemetry (the algorithm is implemented; proactive callouts are next)
-- Phase-triggered checklist prompts without being asked
-- Altitude, speed, and configuration deviation alerts
-
-**Phase 5 -- Vision:**
-- Screen capture pipeline sending frames to Claude Vision
-- MERLIN reads instruments and observes the visual environment
-- Selective activation during critical flight phases to manage API costs
-
-**Phase 6 -- Flight Planning:**
-- Full route building with airway and waypoint selection
-- Fuel calculations based on aircraft performance data
-- Weather integration for route planning
-- End-to-end mission support from preflight planning to shutdown debrief
+See [Migration Guide](MIGRATION_V1_V2.md) for details on what changed from v1.
