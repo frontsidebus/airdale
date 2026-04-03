@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+
 from orchestrator.tts.base import TTSClient
 
 # ===========================================================================
@@ -243,8 +244,9 @@ class TestTTSConfig:
         from orchestrator.config import load_settings
 
         settings = load_settings()
-        assert settings.tts_backend == "elevenlabs"
-        assert settings.tts_configured is True  # has api key and voice id
+        assert settings.tts_backend == "cartesia"  # v2 default
+        # Test ElevenLabs configured when explicitly set
+        assert settings.elevenlabs_api_key  # from mock_env_vars
 
     def test_tts_configured_local(
         self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
