@@ -242,7 +242,9 @@ class AviationChunker:
             else:
                 current_text = f"{current_text}\n\n{block}" if current_text else block
 
-        if current_text.strip() and len(current_text.strip()) >= self.min_chunk_chars:
+        # Always include the final chunk — never silently drop document tail
+        # (could contain critical limitations or warnings)
+        if current_text.strip():
             chunks.append(Chunk(
                 text=current_text.strip(),
                 metadata={**metadata, "chunk_index": len(chunks)},
