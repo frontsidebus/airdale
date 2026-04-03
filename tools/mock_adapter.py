@@ -360,7 +360,9 @@ async def _stream_telemetry(
         state.indicated_airspeed += math.sin(t * 0.3) * 0.2
 
         telemetry = state.to_telemetry_json()
-        await ws.send(json.dumps(telemetry))
+        # Wrap in AdapterTelemetry envelope (required by telemetry service)
+        envelope = {"type": "telemetry", "data": telemetry}
+        await ws.send(json.dumps(envelope))
         t += interval
         await asyncio.sleep(interval)
 
