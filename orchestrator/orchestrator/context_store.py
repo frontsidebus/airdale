@@ -1,4 +1,9 @@
-"""ChromaDB-based RAG store for aircraft manuals and aviation knowledge."""
+"""RAG store for aircraft manuals and aviation knowledge.
+
+Supports ChromaDB as the vector store backend with optional cross-encoder
+re-ranking for improved retrieval precision. Enhanced metadata filtering
+supports document_type, section, aircraft_type, and aircraft_variant.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +15,8 @@ from typing import Any
 
 import chromadb
 
+from .chunking import AviationChunker
+from .reranker import CrossEncoderReranker
 from .sim_client import FlightPhase, SimState
 
 logger = logging.getLogger(__name__)
@@ -101,27 +108,50 @@ class ContextStore:
     degrades gracefully: all queries return empty results and document counts
     report zero.
 
-    Includes an in-memory query cache that avoids repeated ChromaDB
-    round-trips for the same query within a flight phase.
+    Features:
+    - Aviation-aware semantic chunking (preserves checklist/procedure structure)
+    - Cross-encoder re-ranking for improved precision
+    - Enhanced metadata: document_type, section, aircraft_type, aircraft_variant
+    - In-memory query cache per flight phase
     """
 
-    def __init__(self, chromadb_url: str = "http://localhost:8000") -> None:
+    # Valid metadata fields for filtering
+    METADATA_FIELDS = {
+        "document_type",  # POH, checklist, AIM, regulation
+        "section",  # systems, limitations, procedures, performance
+        "aircraft_type",  # C172, B738, etc.
+        "aircraft_variant",  # C172S, 737-800, etc.
+        "source_page",  # page number in source document
+    }
+
+    def __init__(
+        self,
+        chromadb_url: str = "http://localhost:8000",
+        enable_reranking: bool = True,
+        retrieve_k: int = 20,
+        rerank_top_n: int = 5,
+    ) -> None:
         self._available = False
         self._collection: Any = None
         self._cache = _QueryCache()
+        self._chunker = AviationChunker()
+        self._reranker = CrossEncoderReranker() if enable_reranking else None
+        self._retrieve_k = retrieve_k
+        self._rerank_top_n = rerank_top_n
         try:
             self._client = chromadb.HttpClient(
                 host=self._parse_host(chromadb_url),
                 port=self._parse_port(chromadb_url),
             )
-            # Verify connectivity with a heartbeat
             self._client.heartbeat()
             self._collection = self._client.get_or_create_collection(
                 name="merlin_docs",
                 metadata={"hnsw:space": "cosine"},
             )
             self._available = True
-            logger.info("Connected to ChromaDB at %s (collection: merlin_docs)", chromadb_url)
+            logger.info(
+                "Connected to ChromaDB at %s (collection: merlin_docs)", chromadb_url
+            )
         except Exception as exc:
             logger.warning(
                 "ChromaDB unavailable at %s (%s); context store disabled. "
@@ -169,13 +199,18 @@ class ContextStore:
         self,
         path: str | Path,
         metadata: dict[str, Any] | None = None,
-        chunk_size: int = 1000,
-        chunk_overlap: int = 200,
     ) -> int:
-        """Ingest a text document into the vector store.
+        """Ingest a text document using aviation-aware semantic chunking.
 
-        Splits the document into overlapping chunks and stores each with
-        metadata for filtered retrieval. Returns the number of chunks ingested.
+        Splits the document respecting section boundaries, checklist items,
+        and procedure steps. Stores each chunk with enhanced metadata.
+
+        Args:
+            path: Path to the text file.
+            metadata: Additional metadata (document_type, aircraft_type, etc.).
+
+        Returns:
+            Number of chunks ingested.
         """
         if not self._available or self._collection is None:
             logger.warning("Context store unavailable; cannot ingest %s", path)
@@ -183,11 +218,11 @@ class ContextStore:
 
         path = Path(path)
         text = path.read_text(encoding="utf-8")
-        base_meta = {"source": str(path), "filename": path.name}
+        base_meta: dict[str, Any] = {"source": str(path), "filename": path.name}
         if metadata:
             base_meta.update(metadata)
 
-        chunks = self._split_text(text, chunk_size, chunk_overlap)
+        chunks = self._chunker.chunk(text, base_metadata=base_meta)
         if not chunks:
             return 0
 
@@ -197,8 +232,14 @@ class ContextStore:
         for i, chunk in enumerate(chunks):
             doc_hash = hashlib.sha256(f"{path}:{i}".encode()).hexdigest()[:16]
             ids.append(f"{path.stem}_{doc_hash}")
-            documents.append(chunk)
-            metadatas.append({**base_meta, "chunk_index": i})
+            documents.append(chunk.text)
+            # Merge chunk metadata with base — filter to string values for ChromaDB
+            chunk_meta = {**base_meta, **chunk.metadata, "chunk_index": i}
+            # ChromaDB requires string/int/float values in metadata
+            clean_meta = {
+                k: v for k, v in chunk_meta.items() if isinstance(v, (str, int, float, bool))
+            }
+            metadatas.append(clean_meta)
 
         self._collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
         logger.info("Ingested %d chunks from %s", len(chunks), path.name)
@@ -211,7 +252,11 @@ class ContextStore:
         filters: dict[str, Any] | None = None,
         phase: FlightPhase | None = None,
     ) -> list[dict[str, Any]]:
-        """Query the store and return matching documents with metadata.
+        """Query the store with optional cross-encoder re-ranking.
+
+        Two-stage retrieval:
+        1. Retrieve top-K candidates from ChromaDB by vector similarity.
+        2. Re-rank with cross-encoder to get top-N most relevant results.
 
         Results are cached per (text, n_results, filters) tuple and
         automatically invalidated when the flight phase changes.
@@ -227,9 +272,17 @@ class ContextStore:
 
         try:
             where = filters if filters else None
+
+            # Stage 1: Retrieve more candidates than needed for re-ranking
+            retrieve_count = (
+                self._retrieve_k
+                if self._reranker and self._reranker.available
+                else n_results
+            )
+
             results = self._collection.query(
                 query_texts=[text],
-                n_results=n_results,
+                n_results=retrieve_count,
                 where=where,
             )
 
@@ -247,6 +300,12 @@ class ContextStore:
                     strict=False,
                 ):
                     docs.append({"content": doc, "metadata": meta, "distance": dist})
+
+            # Stage 2: Re-rank if available
+            if self._reranker and self._reranker.available and len(docs) > n_results:
+                docs = self._reranker.rerank(text, docs, top_n=n_results)
+            else:
+                docs = docs[:n_results]
 
             # Store in cache
             self._cache.put(text, n_results, filters, docs)
