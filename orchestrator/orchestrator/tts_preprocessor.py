@@ -91,6 +91,38 @@ _RWY_SUFFIX: dict[str, str] = {
 
 # Aviation acronyms that TTS engines mangle if not expanded.
 # Map uppercase acronym → spaced-out letters or spoken form.
+# NATO phonetic alphabet for letter expansions
+_NATO_PHONETIC: dict[str, str] = {
+    "A": "Alpha",
+    "B": "Bravo",
+    "C": "Charlie",
+    "D": "Delta",
+    "E": "Echo",
+    "F": "Foxtrot",
+    "G": "Golf",
+    "H": "Hotel",
+    "I": "India",
+    "J": "Juliet",
+    "K": "Kilo",
+    "L": "Lima",
+    "M": "Mike",
+    "N": "November",
+    "O": "Oscar",
+    "P": "Papa",
+    "Q": "Quebec",
+    "R": "Romeo",
+    "S": "Sierra",
+    "T": "Tango",
+    "U": "Uniform",
+    "V": "Victor",
+    "W": "Whiskey",
+    "X": "X-ray",
+    "Y": "Yankee",
+    "Z": "Zulu",
+}
+
+# Aviation acronyms that TTS engines mangle if not expanded.
+# Map uppercase acronym → spaced-out letters or spoken form.
 _AVIATION_ACRONYMS: dict[str, str] = {
     "NOTAM": "NOTAM",  # already a pronounceable word
     "SIGMET": "SIGMET",  # already pronounceable
@@ -208,7 +240,7 @@ def _expand_altitude(text: str) -> str:
         return _number_to_words(n) + " " + spoken_unit
 
     return re.sub(
-        r"\b(\d{1,3}(?:,?\d{3})?)\s*(ft|feet)\b",
+        r"\b(\d{1,3}(?:,\d{3})*|\d{4,5})\s*(ft|feet)\b",
         _repl,
         text,
         flags=re.IGNORECASE,
@@ -335,6 +367,21 @@ def _expand_qnh(text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
+
+    # Altimeter in millibars/hectopascals: "1013 hectopascals" → digit-by-digit
+    def _repl_millibar(m: re.Match[str]) -> str:
+        digits = m.group(1)
+        unit = m.group(2).lower()
+        spoken_unit = "hectopascals" if unit in ("hectopascals", "hpa") else "millibars"
+        return _digits_to_words(digits) + " " + spoken_unit
+
+    text = re.sub(
+        r"\b(\d{3,4})\s*(hectopascals|millibars|hPa|mb)\b",
+        _repl_millibar,
+        text,
+        flags=re.IGNORECASE,
+    )
+
     return text
 
 
@@ -378,6 +425,104 @@ def _expand_distance(text: str) -> str:
         flags=re.IGNORECASE,
     )
     return text
+
+
+def _expand_atis_information(text: str) -> str:
+    """Information A → Information Alpha (NATO phonetic)."""
+
+    def _repl(m: re.Match[str]) -> str:
+        letter = m.group(1).upper()
+        return "information " + _NATO_PHONETIC.get(letter, letter)
+
+    return re.sub(
+        r"\b[Ii]nformation\s+([A-Za-z])\b",
+        _repl,
+        text,
+    )
+
+
+def _expand_transponder_mode(text: str) -> str:
+    """Mode C → Mode Charlie, Mode S → Mode Sierra."""
+
+    def _repl(m: re.Match[str]) -> str:
+        letter = m.group(1).upper()
+        return "Mode " + _NATO_PHONETIC.get(letter, letter)
+
+    return re.sub(
+        r"\b[Mm]ode\s+([A-Za-z])\b",
+        _repl,
+        text,
+    )
+
+
+def _expand_bearing_radial(text: str) -> str:
+    """the 270 radial → the two seven zero radial."""
+
+    def _repl(m: re.Match[str]) -> str:
+        prefix = m.group(1)
+        digits = m.group(2)
+        return prefix + _digits_to_words(digits) + " radial"
+
+    return re.sub(
+        r"((?:the|on|from|to|inbound|outbound)\s+)(\d{3})\s+radial\b",
+        _repl,
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
+def _expand_zulu_time(text: str) -> str:
+    """1430 Zulu or 0800Z → one four tree zero Zulu."""
+
+    def _repl(m: re.Match[str]) -> str:
+        digits = m.group(1)
+        return _digits_to_words(digits) + " Zulu"
+
+    return re.sub(
+        r"\b(\d{4})\s*[Zz](?:ulu)?\b",
+        _repl,
+        text,
+    )
+
+
+def _expand_temperature(text: str) -> str:
+    """minus 12 degrees → minus one two degrees (ICAO digit-by-digit)."""
+
+    def _repl(m: re.Match[str]) -> str:
+        sign = m.group(1) or ""
+        digits = m.group(2)
+        unit = m.group(3)
+        prefix = "minus " if sign.strip().lower() == "minus" else ""
+        return prefix + _digits_to_words(digits) + " " + unit
+
+    return re.sub(
+        r"\b(minus\s+)?(\d{1,3})\s*(degrees?\s*(?:Celsius|celsius|C|Fahrenheit|fahrenheit|F)?)\b",
+        _repl,
+        text,
+    )
+
+
+def _expand_standalone_frequency(text: str) -> str:
+    """Expand bare aviation frequencies (118.0-136.975 MHz) without context words.
+
+    Only matches frequencies NOT already expanded by _expand_frequency (those
+    preceded by context words). Targets the comm/nav band range.
+    """
+
+    def _repl(m: re.Match[str]) -> str:
+        integer_part = m.group(1)
+        decimal_part = m.group(2)
+        freq = float(f"{integer_part}.{decimal_part}")
+        # Only expand if in aviation comm/nav range
+        if 108.0 <= freq <= 136.975:
+            return _digits_to_words(integer_part) + " point " + _digits_to_words(decimal_part)
+        return m.group(0)
+
+    return re.sub(
+        r"(?<!\w)(\d{3})\.(\d{1,3})(?!\w)",
+        _repl,
+        text,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -487,12 +632,17 @@ def preprocess_for_tts(text: str) -> str:
     text = _expand_flight_level(text)
     # Headings before general number handling
     text = _expand_heading(text)
+    # Bearing/radial before general number handling
+    text = _expand_bearing_radial(text)
     # Squawk before general digit handling
     text = _expand_squawk(text)
-    # QNH / altimeter before general number handling
+    # QNH / altimeter (including millibars/hectopascals) before general numbers
     text = _expand_qnh(text)
-    # Frequencies (context-sensitive)
+    # Frequencies (context-sensitive first, then standalone aviation band)
     text = _expand_frequency(text)
+    text = _expand_standalone_frequency(text)
+    # Zulu time before general digit handling
+    text = _expand_zulu_time(text)
     # DME / distance before stripping NM
     text = _expand_distance(text)
     # Runway designators
@@ -501,6 +651,12 @@ def preprocess_for_tts(text: str) -> str:
     text = _expand_speed(text)
     # Altitudes (3500ft, 3,500 feet)
     text = _expand_altitude(text)
+    # Temperature (ICAO digit-by-digit)
+    text = _expand_temperature(text)
+    # ATIS information letters (NATO phonetic)
+    text = _expand_atis_information(text)
+    # Transponder modes (NATO phonetic)
+    text = _expand_transponder_mode(text)
 
     # Aviation acronyms (after specific patterns to avoid interfering)
     text = _expand_aviation_acronyms(text)

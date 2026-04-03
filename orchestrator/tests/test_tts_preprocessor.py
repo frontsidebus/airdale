@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from orchestrator.tts_preprocessor import preprocess_for_tts
 
 # ---------------------------------------------------------------------------
@@ -271,6 +272,199 @@ class TestCombined:
         ],
     )
     def test_combined_scenarios(self, input_text: str, expected: str) -> None:
+        assert preprocess_for_tts(input_text) == expected
+
+
+# ---------------------------------------------------------------------------
+# Edge cases
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Altimeter millibars / hectopascals
+# ---------------------------------------------------------------------------
+
+
+class TestAltimeterMillibars:
+    @pytest.mark.parametrize(
+        "input_text,expected",
+        [
+            (
+                "1013 hectopascals",
+                "one zero one tree hectopascals",
+            ),
+            (
+                "1013 millibars",
+                "one zero one tree millibars",
+            ),
+            (
+                "1013 hPa",
+                "one zero one tree hectopascals",
+            ),
+            (
+                "998 mb",
+                "niner niner eight millibars",
+            ),
+            (
+                "Set altimeter 1023 hectopascals",
+                "Set altimeter one zero two tree hectopascals",
+            ),
+        ],
+    )
+    def test_altimeter_millibar(self, input_text: str, expected: str) -> None:
+        assert preprocess_for_tts(input_text) == expected
+
+
+# ---------------------------------------------------------------------------
+# ATIS information letters
+# ---------------------------------------------------------------------------
+
+
+class TestATISInformation:
+    @pytest.mark.parametrize(
+        "input_text,expected",
+        [
+            ("Information A", "information Alpha"),
+            ("Information B is current", "information Bravo is current"),
+            ("information Z", "information Zulu"),
+            ("ATIS information K", "ATIS information Kilo"),
+        ],
+    )
+    def test_atis_information(self, input_text: str, expected: str) -> None:
+        assert preprocess_for_tts(input_text) == expected
+
+
+# ---------------------------------------------------------------------------
+# Transponder modes
+# ---------------------------------------------------------------------------
+
+
+class TestTransponderModes:
+    @pytest.mark.parametrize(
+        "input_text,expected",
+        [
+            ("Mode C", "Mode Charlie"),
+            ("Mode S", "Mode Sierra"),
+            ("Mode A", "Mode Alpha"),
+            ("Squawk Mode C", "Squawk Mode Charlie"),
+        ],
+    )
+    def test_transponder_mode(self, input_text: str, expected: str) -> None:
+        assert preprocess_for_tts(input_text) == expected
+
+
+# ---------------------------------------------------------------------------
+# Bearing / radial notation
+# ---------------------------------------------------------------------------
+
+
+class TestBearingRadial:
+    @pytest.mark.parametrize(
+        "input_text,expected",
+        [
+            (
+                "the 270 radial",
+                "the two seven zero radial",
+            ),
+            (
+                "on the 180 radial",
+                "on the one eight zero radial",
+            ),
+            (
+                "from the 090 radial",
+                "from the zero niner zero radial",
+            ),
+            (
+                "inbound 315 radial",
+                "inbound tree one fife radial",
+            ),
+        ],
+    )
+    def test_bearing_radial(self, input_text: str, expected: str) -> None:
+        assert preprocess_for_tts(input_text) == expected
+
+
+# ---------------------------------------------------------------------------
+# Zulu time
+# ---------------------------------------------------------------------------
+
+
+class TestZuluTime:
+    @pytest.mark.parametrize(
+        "input_text,expected",
+        [
+            ("1430 Zulu", "one four tree zero Zulu"),
+            ("0800Z", "zero eight zero zero Zulu"),
+            ("Depart at 2200 Zulu", "Depart at two two zero zero Zulu"),
+            ("ETA 1545Z", "ETA one fife four fife Zulu"),
+        ],
+    )
+    def test_zulu_time(self, input_text: str, expected: str) -> None:
+        assert preprocess_for_tts(input_text) == expected
+
+
+# ---------------------------------------------------------------------------
+# Temperature
+# ---------------------------------------------------------------------------
+
+
+class TestTemperature:
+    @pytest.mark.parametrize(
+        "input_text,expected",
+        [
+            ("minus 12 degrees", "minus one two degrees"),
+            ("minus 5 degrees Celsius", "minus fife degrees Celsius"),
+            ("22 degrees", "two two degrees"),
+            ("minus 40 degrees C", "minus four zero degrees C"),
+        ],
+    )
+    def test_temperature(self, input_text: str, expected: str) -> None:
+        assert preprocess_for_tts(input_text) == expected
+
+
+# ---------------------------------------------------------------------------
+# Standalone frequencies (no context word)
+# ---------------------------------------------------------------------------
+
+
+class TestStandaloneFrequency:
+    @pytest.mark.parametrize(
+        "input_text,expected",
+        [
+            ("121.500", "one two one point fife zero zero"),
+            ("Switch to 118.300", "Switch to one one eight point tree zero zero"),
+            # Outside aviation range should NOT be expanded
+            ("Set 105.000", "Set 105.000"),
+        ],
+    )
+    def test_standalone_frequency(self, input_text: str, expected: str) -> None:
+        assert preprocess_for_tts(input_text) == expected
+
+
+# ---------------------------------------------------------------------------
+# Altitude regex edge case: 35,000 feet
+# ---------------------------------------------------------------------------
+
+
+class TestAltitudeEdgeCases:
+    @pytest.mark.parametrize(
+        "input_text,expected",
+        [
+            (
+                "35,000 feet",
+                "thirty five thousand feet",
+            ),
+            (
+                "10,000 ft",
+                "ten thousand feet",
+            ),
+            (
+                "1,500 feet",
+                "one thousand five hundred feet",
+            ),
+        ],
+    )
+    def test_large_altitude(self, input_text: str, expected: str) -> None:
         assert preprocess_for_tts(input_text) == expected
 
 
