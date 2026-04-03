@@ -19,6 +19,7 @@ from .tools import (
     get_sim_state,
     lookup_airport,
     search_manual,
+    set_aircraft_control,
 )
 
 logger = logging.getLogger(__name__)
@@ -266,6 +267,63 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "required": ["departure", "destination"],
         },
     },
+    {
+        "name": "set_aircraft_control",
+        "description": (
+            "Control an aircraft system in the simulator. Can set flaps, gear, "
+            "autopilot settings, throttle, radios, trim, and other controls. "
+            "Use this when the Captain gives a direct order to manipulate aircraft "
+            "systems (e.g. 'give me flaps 20', 'set heading bug to 270', "
+            "'gear down'). For critical actions (gear, autopilot master), confirm "
+            "with the Captain before executing unless they gave a direct order."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "system": {
+                    "type": "string",
+                    "enum": [
+                        "flaps", "gear", "autopilot", "throttle", "radio",
+                        "barometer", "trim", "parking_brake", "spoilers",
+                        "mixture", "propeller",
+                    ],
+                    "description": "The aircraft system to control",
+                },
+                "action": {
+                    "type": "string",
+                    "description": (
+                        "The action to perform. Examples by system: "
+                        "flaps: 'up', 'full', '1', '2', '3', '10', '20', '30', "
+                        "'set', 'incr', 'decr'; "
+                        "gear: 'up', 'down', 'toggle'; "
+                        "autopilot: 'on', 'off', 'heading', 'heading_hold', "
+                        "'altitude', 'altitude_hold', 'vertical_speed', 'vs_hold', "
+                        "'speed', 'speed_hold', 'nav', 'approach'; "
+                        "throttle: 'set'; "
+                        "radio: 'com1', 'com2', 'nav1', 'nav2'; "
+                        "barometer: 'set'; trim: 'set'; "
+                        "spoilers: 'toggle', 'set'; "
+                        "mixture/propeller: 'set'"
+                    ),
+                },
+                "value": {
+                    "type": "number",
+                    "description": (
+                        "Numeric value when needed. Units depend on system: "
+                        "flaps set: percentage (0-100) or notch (1-4); "
+                        "autopilot heading: degrees (0-360); "
+                        "autopilot altitude: feet; "
+                        "autopilot vertical_speed: fpm (-6000 to +6000); "
+                        "autopilot speed: knots; "
+                        "throttle/mixture/propeller/spoilers set: percentage (0-100); "
+                        "radio: frequency in MHz (e.g. 121.5); "
+                        "barometer: inHg (e.g. 29.92)"
+                    ),
+                },
+            },
+            "required": ["system", "action"],
+        },
+    },
 ]
 
 
@@ -496,6 +554,13 @@ class ClaudeClient:
                     args["destination"],
                     altitude=args.get("altitude", 5000),
                     route=args.get("route", ""),
+                )
+            elif name == "set_aircraft_control":
+                return await set_aircraft_control(
+                    self._sim_client,
+                    args["system"],
+                    args["action"],
+                    value=args.get("value"),
                 )
             else:
                 return {"error": f"Unknown tool: {name}"}

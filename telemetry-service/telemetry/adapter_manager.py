@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from .adapter_protocol import ServiceRegisterAck
+from .adapter_protocol import ServiceCommand, ServiceCommandAck, ServiceRegisterAck
 from .schema import TelemetryEnvelope
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,8 @@ class AdapterManager:
         self._stale_timeout = stale_timeout
         self._lock = asyncio.Lock()
         self._consumer_lock = asyncio.Lock()  # Protects self._consumers
+        # Track pending commands: command_id → consumer WebSocket for ack routing
+        self._pending_commands: dict[str, WebSocket] = {}
 
     # -------------------------------------------------------------------
     # Adapter management
@@ -165,6 +167,53 @@ class AdapterManager:
     @property
     def consumer_count(self) -> int:
         return len(self._consumers)
+
+    # -------------------------------------------------------------------
+    # Command routing (consumer → adapter → ack back to consumer)
+    # -------------------------------------------------------------------
+
+    async def send_command_to_adapter(
+        self,
+        adapter_id: str,
+        command_id: str,
+        command: str,
+        value: int,
+        consumer_ws: WebSocket,
+    ) -> bool:
+        """Forward a command to an adapter. Returns False if adapter not found."""
+        async with self._lock:
+            conn = self._adapters.get(adapter_id)
+            if conn is None:
+                return False
+
+        self._pending_commands[command_id] = consumer_ws
+        msg = ServiceCommand(command_id=command_id, command=command, value=value)
+        await conn.websocket.send_text(msg.model_dump_json())
+        logger.info(
+            "Routed command %s to adapter %s: %s=%d",
+            command_id[:8],
+            adapter_id,
+            command,
+            value,
+        )
+        return True
+
+    async def route_command_ack(
+        self, command_id: str, success: bool, message: str = ""
+    ) -> None:
+        """Forward a command ack back to the consumer that sent the command."""
+        consumer_ws = self._pending_commands.pop(command_id, None)
+        if consumer_ws is None:
+            logger.warning("Ack for unknown command_id: %s", command_id[:8])
+            return
+
+        ack = ServiceCommandAck(
+            command_id=command_id, success=success, message=message
+        )
+        try:
+            await consumer_ws.send_text(ack.model_dump_json())
+        except Exception:
+            logger.warning("Failed to send command ack to consumer (disconnected?)")
 
     # -------------------------------------------------------------------
     # Stale adapter cleanup

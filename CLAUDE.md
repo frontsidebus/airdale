@@ -225,7 +225,9 @@ TELEMETRY_SERVICE_HOST=$(hostname).local       # WSL2 native
 
 5. **WebSocket for IPC** -- All components communicate over WebSocket with JSON payloads. This keeps everything language-agnostic and independently deployable.
 
-5. **Claude tool use for actions** -- The orchestrator defines tools (`get_sim_state`, `lookup_airport`, `search_manual`, `get_checklist`, `create_flight_plan`) that Claude calls mid-response. Do not pre-fetch everything into the context window.
+5. **Bidirectional command protocol** -- The telemetry service routes commands from consumers (orchestrator) to adapters, with acknowledgment tracking. Commands flow: `ConsumerCommand` → `ServiceCommand` → adapter executes → `AdapterCommandAck` → `ServiceCommandAck`. This enables MERLIN to control aircraft systems via SimConnect's `TransmitClientEvent`.
+
+6. **Claude tool use for actions** -- The orchestrator defines tools (`get_sim_state`, `lookup_airport`, `search_manual`, `get_checklist`, `create_flight_plan`, `set_aircraft_control`) that Claude calls mid-response. The `set_aircraft_control` tool translates human-friendly system/action/value parameters to SimConnect events. Do not pre-fetch everything into the context window.
 
 6. **Dynamic token budgeting** -- Three tiers: 256 tokens for short acknowledgments (roger, thanks, simple questions); `claude_max_tokens` (1024) for routine cockpit comms; `claude_max_tokens_briefing` (2048) for briefings, checklists, and flight plans. This keeps responses tactical during high-workload phases.
 

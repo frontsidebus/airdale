@@ -45,6 +45,12 @@ public sealed class TelemetryServiceClient : IDisposable
         };
     }
 
+    /// <summary>
+    /// Raised when a command is received from the telemetry service.
+    /// Handler receives (commandId, command, value) and returns success bool.
+    /// </summary>
+    public event Func<string, string, uint, bool>? CommandReceived;
+
     public bool IsConnected => _ws?.State == WebSocketState.Open && _registered;
 
     /// <summary>
@@ -206,6 +212,32 @@ public sealed class TelemetryServiceClient : IDisposable
     }
 
     // -----------------------------------------------------------------------
+    //  Command acknowledgment
+    // -----------------------------------------------------------------------
+
+    private async Task SendCommandAckAsync(string commandId, bool success, CancellationToken ct)
+    {
+        if (_ws?.State != WebSocketState.Open) return;
+
+        try
+        {
+            var ack = new { type = "command_ack", command_id = commandId, success, message = "" };
+            var json = JsonSerializer.Serialize(ack, _jsonOptions);
+            var bytes = Encoding.UTF8.GetBytes(json);
+            await _ws.SendAsync(
+                new ArraySegment<byte>(bytes),
+                WebSocketMessageType.Text,
+                endOfMessage: true,
+                cancellationToken: ct
+            );
+        }
+        catch (Exception ex)
+        {
+            Log("WARN", $"Failed to send command ack: {ex.Message}");
+        }
+    }
+
+    // -----------------------------------------------------------------------
     //  Receive loop (for acks, commands, errors)
     // -----------------------------------------------------------------------
 
@@ -226,7 +258,35 @@ public sealed class TelemetryServiceClient : IDisposable
                 if (result.MessageType == WebSocketMessageType.Text)
                 {
                     var msg = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                    Log("DEBUG", $"Received from service: {msg}");
+
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(msg);
+                        var root = doc.RootElement;
+
+                        if (root.TryGetProperty("type", out var typeEl)
+                            && typeEl.GetString() == "command")
+                        {
+                            var commandId = root.GetProperty("command_id").GetString() ?? "";
+                            var command = root.GetProperty("command").GetString() ?? "";
+                            uint value = root.TryGetProperty("value", out var valEl)
+                                ? (uint)valEl.GetInt32()
+                                : 0u;
+
+                            Log("INFO", $"Received command: {command} (id={commandId[..Math.Min(8, commandId.Length)]}, value={value})");
+
+                            var success = CommandReceived?.Invoke(commandId, command, value) ?? false;
+                            await SendCommandAckAsync(commandId, success, ct);
+                        }
+                        else
+                        {
+                            Log("DEBUG", $"Received from service: {msg}");
+                        }
+                    }
+                    catch (JsonException)
+                    {
+                        Log("DEBUG", $"Received non-JSON from service: {msg}");
+                    }
                 }
             }
         }

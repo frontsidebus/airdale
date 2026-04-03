@@ -12,6 +12,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from .adapter_manager import AdapterManager
 from .adapter_protocol import (
+    ServiceCommandAck,
     ServiceError,
     ServiceHeartbeatAck,
     ServiceStateResponse,
@@ -154,6 +155,8 @@ async def ws_ingest(ws: WebSocket):
                 await manager.update_telemetry(adapter_id, msg.data)
             elif msg.type == "status":
                 await manager.update_adapter_status(adapter_id, msg.connected, msg.vehicle_name)
+            elif msg.type == "command_ack":
+                await manager.route_command_ack(msg.command_id, msg.success, msg.message)
 
     except WebSocketDisconnect:
         logger.info("Adapter disconnected: %s", adapter_id or "unknown")
@@ -219,6 +222,22 @@ async def ws_telemetry(ws: WebSocket):
                 else:
                     resp = ServiceStateResponse(message="No adapter data available yet.")
                     await ws.send_text(resp.model_dump_json())
+
+            elif msg.type == "command":
+                sent = await manager.send_command_to_adapter(
+                    adapter_id=msg.adapter_id,
+                    command_id=msg.command_id,
+                    command=msg.command,
+                    value=msg.value,
+                    consumer_ws=ws,
+                )
+                if not sent:
+                    ack = ServiceCommandAck(
+                        command_id=msg.command_id,
+                        success=False,
+                        message=f"Adapter '{msg.adapter_id}' not found",
+                    )
+                    await ws.send_text(ack.model_dump_json())
 
             elif msg.type == "heartbeat":
                 ack = ServiceHeartbeatAck(

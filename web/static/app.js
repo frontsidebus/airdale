@@ -62,7 +62,11 @@
     audioQueue: [],
     isPlayingAudio: false,
     currentAudio: null,
-    ttsAccumulator: [],       // accumulate binary TTS chunks per response
+    preDecodedBuffer: null,   // pre-decoded AudioBuffer for gapless playback
+    preDecoding: false,       // true while a pre-decode is in flight
+    ttsChunkBuffer: [],       // accumulate small TTS chunks before batching
+    ttsFlushTimer: null,      // timer for flushing chunk buffer
+    ttsFirstChunk: true,      // true until first batch is flushed
     ttsVolume: 0.8,
     seenMessageIds: new Set(),      // dedup after reconnect
     messageIdCounter: 0,
@@ -587,9 +591,13 @@
       state.currentAudio = null;
     }
 
-    // Clear pending audio queue and any accumulating TTS chunks
+    // Clear pending audio queue and buffered TTS chunks
     state.audioQueue.length = 0;
-    state.ttsAccumulator.length = 0;
+    state.preDecodedBuffer = null;
+    state.preDecoding = false;
+    state.ttsChunkBuffer.length = 0;
+    if (state.ttsFlushTimer) { clearTimeout(state.ttsFlushTimer); state.ttsFlushTimer = null; }
+    state.ttsFirstChunk = true;
     state.isPlayingAudio = false;
 
     if (state.voiceMode === 'speaking') {
@@ -620,9 +628,9 @@
     ws.binaryType = 'blob';
 
     ws.addEventListener('message', (evt) => {
-      // Binary data = TTS audio chunk — accumulate until response ends
+      // Binary data = TTS audio chunk — batch briefly then play
       if (evt.data instanceof Blob) {
-        if (evt.data.size > 0) state.ttsAccumulator.push(evt.data);
+        if (evt.data.size > 0) bufferTtsChunk(evt.data);
         return;
       }
       // Buffer incoming messages for backpressure handling
@@ -707,8 +715,8 @@
       case 'done':
         // Server signals end of Claude response
         finishStreamingMessage();
-        // Flush accumulated TTS chunks as a single blob for gapless playback
-        flushTtsAccumulator();
+        // Flush any remaining buffered TTS chunks
+        flushTtsChunkBuffer();
         // Stay in speaking mode if TTS is still playing, otherwise idle
         if (!state.isPlayingAudio && state.audioQueue.length === 0) {
           setVoiceMode('idle');
@@ -727,7 +735,7 @@
 
       case 'stream_end':
         finishStreamingMessage();
-        flushTtsAccumulator();
+        flushTtsChunkBuffer();
         if (!state.isPlayingAudio && state.audioQueue.length === 0) {
           setVoiceMode('idle');
         }
@@ -765,8 +773,13 @@
         // Server confirms the active response was cancelled (barge-in)
         finishStreamingMessage();
         removeThinkingIndicator();
-        // Discard any accumulated TTS chunks for the cancelled response
-        state.ttsAccumulator.length = 0;
+        // Discard any pending audio for the cancelled response
+        state.audioQueue.length = 0;
+        state.preDecodedBuffer = null;
+        state.preDecoding = false;
+        state.ttsChunkBuffer.length = 0;
+        if (state.ttsFlushTimer) { clearTimeout(state.ttsFlushTimer); state.ttsFlushTimer = null; }
+        state.ttsFirstChunk = true;
         break;
 
       case 'error':
@@ -1496,21 +1509,75 @@
     return Math.sqrt(sumSq / (count || 1));
   }
 
-  function flushTtsAccumulator() {
-    if (state.ttsAccumulator.length === 0) return;
-    // Concatenated MP3 chunks form a valid MP3 stream — one decode, one play.
-    const combined = new Blob(state.ttsAccumulator, { type: 'audio/mpeg' });
-    state.ttsAccumulator.length = 0;
+  // ── TTS chunk batching ─────────────────────────────────
+  // ElevenLabs sends many small audio fragments. Playing each one individually
+  // causes audible gaps. Instead, batch chunks over a short time window and
+  // concatenate into a single blob for smooth playback.
+
+  function bufferTtsChunk(blob) {
+    state.ttsChunkBuffer.push(blob);
+    // First batch: flush quickly (200ms) so audio starts fast
+    // Subsequent batches: 400ms window for smoother, larger clips
+    if (!state.ttsFlushTimer) {
+      const delay = state.ttsFirstChunk ? 200 : 400;
+      state.ttsFlushTimer = setTimeout(flushTtsChunkBuffer, delay);
+    }
+  }
+
+  function flushTtsChunkBuffer() {
+    if (state.ttsFlushTimer) { clearTimeout(state.ttsFlushTimer); state.ttsFlushTimer = null; }
+    if (state.ttsChunkBuffer.length === 0) return;
+    const combined = new Blob(state.ttsChunkBuffer, { type: 'audio/mpeg' });
+    state.ttsChunkBuffer.length = 0;
+    state.ttsFirstChunk = false;
     queueAudioBlob(combined);
   }
 
   function queueAudioBlob(blob) {
     state.audioQueue.push(blob);
-    if (!state.isPlayingAudio) playNextAudio();
+    if (!state.isPlayingAudio) {
+      playNextAudio();
+    } else if (!state.preDecoding && !state.preDecodedBuffer) {
+      // Pre-decode this new blob while current clip plays
+      preDecodeNext();
+    }
+  }
+
+  async function preDecodeNext() {
+    if (state.audioQueue.length === 0 || state.preDecoding) return;
+    state.preDecoding = true;
+    const blob = state.audioQueue.shift();
+    try {
+      const ctx = getPlaybackContext();
+      const arrayBuf = await blob.arrayBuffer();
+      state.preDecodedBuffer = await ctx.decodeAudioData(arrayBuf);
+    } catch (err) {
+      state.preDecodedBuffer = null;
+    }
+    state.preDecoding = false;
   }
 
   async function playNextAudio() {
-    if (state.audioQueue.length === 0) {
+    // Use pre-decoded buffer if available, otherwise decode from queue
+    let audioBuffer = null;
+
+    if (state.preDecodedBuffer) {
+      audioBuffer = state.preDecodedBuffer;
+      state.preDecodedBuffer = null;
+    } else if (state.audioQueue.length > 0) {
+      const blob = state.audioQueue.shift();
+      try {
+        const ctx = getPlaybackContext();
+        const arrayBuf = await blob.arrayBuffer();
+        audioBuffer = await ctx.decodeAudioData(arrayBuf);
+      } catch (err) {
+        // Decode failed — try next clip
+        playNextAudio();
+        return;
+      }
+    }
+
+    if (!audioBuffer) {
       state.isPlayingAudio = false;
       state.currentAudio = null;
       if (state.voiceMode === 'speaking') setVoiceMode('idle');
@@ -1520,44 +1587,39 @@
     state.isPlayingAudio = true;
     setVoiceMode('speaking');
 
-    const blob = state.audioQueue.shift();
+    const ctx = getPlaybackContext();
+    const duration = audioBuffer.duration;
 
-    try {
-      const ctx = getPlaybackContext();
-      const arrayBuf = await blob.arrayBuffer();
-      const audioBuffer = await ctx.decodeAudioData(arrayBuf);
-      const duration = audioBuffer.duration;
+    // Update the master volume from slider
+    _playbackGain.gain.value = state.ttsVolume;
 
-      // Update the master volume from slider
-      _playbackGain.gain.value = state.ttsVolume;
-
-      // Envelope: 10ms fade-in, 10ms fade-out — eliminates start/end clicks
-      const envelope = ctx.createGain();
-      const t0 = ctx.currentTime;
-      envelope.gain.setValueAtTime(0.0, t0);
-      envelope.gain.linearRampToValueAtTime(1.0, t0 + 0.010);
-      if (duration > 0.020) {
-        envelope.gain.setValueAtTime(1.0, t0 + duration - 0.010);
-        envelope.gain.linearRampToValueAtTime(0.0, t0 + duration);
-      }
-      envelope.connect(_compressor);
-
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(envelope);
-
-      state.currentAudio = source;
-
-      source.addEventListener('ended', () => {
-        envelope.disconnect();
-        playNextAudio();
-      }, { once: true });
-
-      source.start(0);
-    } catch (err) {
-      // Audio decode/playback error — skip to next queued clip
-      playNextAudio();
+    // Envelope: 3ms fade-in/out — just enough to prevent clicks,
+    // short enough to avoid audible volume dips between clips
+    const envelope = ctx.createGain();
+    const t0 = ctx.currentTime;
+    envelope.gain.setValueAtTime(0.0, t0);
+    envelope.gain.linearRampToValueAtTime(1.0, t0 + 0.003);
+    if (duration > 0.006) {
+      envelope.gain.setValueAtTime(1.0, t0 + duration - 0.003);
+      envelope.gain.linearRampToValueAtTime(0.0, t0 + duration);
     }
+    envelope.connect(_compressor);
+
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(envelope);
+
+    state.currentAudio = source;
+
+    // Pre-decode the next clip while this one plays
+    preDecodeNext();
+
+    source.addEventListener('ended', () => {
+      envelope.disconnect();
+      playNextAudio();
+    }, { once: true });
+
+    source.start(0);
   }
 
   // ── Volume control ─────────────────────────────────────

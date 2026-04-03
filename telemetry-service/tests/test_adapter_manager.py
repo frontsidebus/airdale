@@ -148,3 +148,74 @@ class TestActiveAdapters:
         await asyncio.sleep(0.05)
         await mgr.cleanup_stale_adapters()
         assert mgr.adapter_count == 0
+
+
+class TestCommandRouting:
+    @pytest.mark.asyncio
+    async def test_send_command_to_adapter_success(self):
+        mgr = AdapterManager()
+        ws_adapter = _mock_ws()
+        ws_consumer = _mock_ws()
+        await mgr.register_adapter(ws_adapter, "msfs-1", "msfs2024", "aircraft")
+
+        result = await mgr.send_command_to_adapter(
+            adapter_id="msfs-1",
+            command_id="cmd-001",
+            command="FLAPS_2",
+            value=0,
+            consumer_ws=ws_consumer,
+        )
+
+        assert result is True
+        ws_adapter.send_text.assert_called_once()
+        import json
+
+        sent = json.loads(ws_adapter.send_text.call_args[0][0])
+        assert sent["type"] == "command"
+        assert sent["command_id"] == "cmd-001"
+        assert sent["command"] == "FLAPS_2"
+        assert sent["value"] == 0
+
+    @pytest.mark.asyncio
+    async def test_send_command_to_unknown_adapter(self):
+        mgr = AdapterManager()
+        ws_consumer = _mock_ws()
+
+        result = await mgr.send_command_to_adapter(
+            adapter_id="nonexistent",
+            command_id="cmd-002",
+            command="GEAR_DOWN",
+            value=0,
+            consumer_ws=ws_consumer,
+        )
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_route_command_ack(self):
+        mgr = AdapterManager()
+        ws_adapter = _mock_ws()
+        ws_consumer = _mock_ws()
+        await mgr.register_adapter(ws_adapter, "msfs-1", "msfs2024", "aircraft")
+
+        # Send command to register pending ack
+        await mgr.send_command_to_adapter(
+            adapter_id="msfs-1",
+            command_id="cmd-003",
+            command="GEAR_DOWN",
+            value=0,
+            consumer_ws=ws_consumer,
+        )
+
+        # Route the ack back to consumer
+        await mgr.route_command_ack("cmd-003", success=True, message="Gear extended")
+
+        # Consumer should have received the ack (adapter send_text + consumer send_text)
+        ws_consumer.send_text.assert_called_once()
+        import json
+
+        ack_data = json.loads(ws_consumer.send_text.call_args[0][0])
+        assert ack_data["type"] == "command_ack"
+        assert ack_data["command_id"] == "cmd-003"
+        assert ack_data["success"] is True
+        assert ack_data["message"] == "Gear extended"

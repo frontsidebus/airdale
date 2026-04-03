@@ -9,9 +9,11 @@ Technical deep-dive into MERLIN's system design, component responsibilities, dat
 ```
 +-------------------+         SimConnect (COM)            +------------------------+
 |                   | <---------------------------------> |                        |
-|   MSFS 2024       |   Position, Attitude, Speeds,       |   MSFS Adapter         |
+|   MSFS 2024       |   READ: Position, Attitude, Speeds, |   MSFS Adapter         |
 |   (Simulator)     |   Engines, Fuel, Environment,       |   (adapters/msfs/)     |
 |                   |   Autopilot, Radios, Surfaces       |   C# / .NET 8          |
+|                   |   WRITE: TransmitClientEvent        |                        |
+|                   |   (flaps, gear, AP, throttle, etc.) |                        |
 +-------------------+                                     +----------+-------------+
                                                                      |
 +-------------------+         X-Plane UDP (future)        +----------+-------------+
@@ -122,6 +124,34 @@ MSFS 2024
 
 ---
 
+## Data Flow: Aircraft Control Commands
+
+```
+Pilot (voice or text)
+  -> "Merlin, give me flaps at 20"
+  -> Whisper STT / text input
+  -> ClaudeClient interprets intent
+  -> Claude calls tool: set_aircraft_control(system="flaps", action="2")
+  -> tools.py: _resolve_command() maps to SimConnect event ("FLAPS_2", 0)
+  -> sim_client.py: send_command() sends JSON via WebSocket to telemetry service
+       {"type": "command", "command_id": "<uuid>", "adapter_id": "msfs-adapter",
+        "command": "FLAPS_2", "value": 0}
+  -> Telemetry service routes command to target adapter WebSocket
+  -> MSFS adapter: TelemetryServiceClient receives command in ReceiveLoopAsync
+  -> SimConnectManager.ExecuteCommand() calls TransmitClientEvent()
+  -> SimConnect COM API sets flaps in the sim
+  -> Adapter sends command_ack back through telemetry service to orchestrator
+  -> Tool returns result to Claude, MERLIN responds: "Flaps two, set."
+```
+
+Supported control systems: flaps, gear, autopilot (heading/altitude/VS/speed/nav/approach),
+throttle, radios (COM1/COM2/NAV1/NAV2), barometer, trim, parking brake, spoilers, mixture, propeller.
+
+Safety: Critical commands (gear, AP master) trigger a `safety_note` in the tool result.
+The tool description instructs Claude to confirm critical actions with the pilot.
+
+---
+
 ## Data Flow: Voice Pipeline
 
 ```
@@ -186,7 +216,7 @@ Barge-in: new user input cancels in-flight Claude stream + TTS immediately
 | `voice.py` | `VoiceInput` (PTT and VAD modes); `VoiceOutput` (streaming TTS with sentence buffering); barge-in cancellation support |
 | `tts_preprocessor.py` | ICAO-compliant aviation text preprocessing for TTS: digit-by-digit pronunciation for flight levels, headings, frequencies, runway designators, squawk codes |
 | `whisper_client.py` | HTTP client for faster-whisper ASR service (OpenAI-compatible `/v1/audio/transcriptions` endpoint); `TranscriptionResult` dataclass; retry with exponential backoff; confidence scoring |
-| `tools.py` | Claude tool implementations: `get_sim_state`, `lookup_airport`, `search_manual`, `get_checklist`, `create_flight_plan` |
+| `tools.py` | Claude tool implementations: `get_sim_state`, `lookup_airport`, `search_manual`, `get_checklist`, `create_flight_plan`, `set_aircraft_control` |
 | `screen_capture.py` | Optional screen capture for vision-based analysis |
 | `main.py` | CLI entry point for headless/console operation |
 
