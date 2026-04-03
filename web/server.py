@@ -1126,11 +1126,21 @@ async def _transcribe_audio_bytes_with_confidence(
     mime_type: str,
     state: AppState,
 ) -> tuple[str, float]:
-    """Transcribe browser audio with confidence. Sends webm directly to
-    Whisper and falls back to ffmpeg conversion if that fails.
-    """
+    """Transcribe browser audio. Routes to Deepgram (v2) or Whisper (legacy)."""
+    # --- Deepgram path (v2 default) ---
+    if state.deepgram_client is not None:
+        try:
+            # Convert webm/ogg to wav for Deepgram
+            if "webm" in mime_type or "ogg" in mime_type:
+                audio_bytes = await convert_webm_to_wav_normalized(audio_bytes)
+            result = await state.deepgram_client.transcribe(audio_bytes)
+            return result.text, result.confidence
+        except Exception as exc:
+            logger.error("Deepgram transcription failed: %s", exc)
+            return "", 0.0
+
+    # --- Whisper fallback path ---
     if "webm" in mime_type or "ogg" in mime_type:
-        # Try sending webm/ogg directly -- Whisper handles it with encode=true
         text, confidence = await _transcribe_with_confidence(
             audio_bytes,
             filename="audio.webm",
@@ -1140,7 +1150,6 @@ async def _transcribe_audio_bytes_with_confidence(
         if text or confidence > 0.0:
             return text, confidence
 
-        # Fallback: convert to wav via ffmpeg
         logger.info("Direct webm transcription failed, falling back to ffmpeg")
         audio_bytes = await convert_webm_to_wav_normalized(audio_bytes)
 
