@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# MERLIN Shutdown Script
+# MERLIN v2 Shutdown Script
 # Gracefully stops all MERLIN components.
 # =============================================================================
 
@@ -31,7 +31,8 @@ log "Stopping MSFS adapter..."
 # Stop Docker services
 if [ -n "$DOCKER" ]; then
     log "Stopping Docker services..."
-    $DOCKER compose stop whisper chromadb telemetry-service 2>/dev/null
+    # Stop all MERLIN containers (ChromaDB, telemetry-service, and Whisper if running)
+    $DOCKER compose stop chromadb telemetry-service whisper 2>/dev/null
     ok "Docker services stopped"
 else
     log "Docker not available — skipping container shutdown"
