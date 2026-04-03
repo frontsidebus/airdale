@@ -86,17 +86,57 @@ class Settings(BaseSettings):
         description="Full telemetry service WebSocket URL (constructed if empty)",
     )
 
-    # --- Whisper STT ---------------------------------------------------------
+    # --- STT (Speech-to-Text) ------------------------------------------------
+    stt_backend: str = Field(
+        default="deepgram",
+        description="STT backend: 'deepgram' (cloud streaming) or 'whisper' (local batch)",
+    )
+
+    # Deepgram STT
+    deepgram_api_key: str = Field(
+        default="",
+        description="Deepgram API key for streaming STT",
+    )
+    deepgram_model: str = Field(
+        default="nova-3",
+        description="Deepgram model (nova-3 recommended for aviation)",
+    )
+    deepgram_endpointing_ms: int = Field(
+        default=300,
+        description="Deepgram endpointing silence threshold in ms",
+    )
+
+    # Whisper STT (legacy/fallback)
     whisper_model: str = Field(
         default="large-v3-turbo",
-        description="Whisper model size (used by Docker service, not locally)",
+        description="Whisper model size (legacy fallback, used by Docker service)",
     )
     whisper_url: str = Field(
         default="http://localhost:9090",
-        description="URL of the local Whisper ASR HTTP service",
+        description="URL of the local Whisper ASR HTTP service (legacy fallback)",
     )
 
-    # --- ElevenLabs TTS ------------------------------------------------------
+    # --- TTS (Text-to-Speech) ------------------------------------------------
+    tts_backend: str = Field(
+        default="cartesia",
+        description="TTS backend: 'cartesia' (low-latency), 'elevenlabs' (cloud), 'local' (Kokoro)",
+    )
+
+    # Cartesia TTS
+    cartesia_api_key: str = Field(
+        default="",
+        description="Cartesia API key for ultra-low-latency TTS",
+    )
+    cartesia_voice_id: str = Field(
+        default="",
+        description="Cartesia voice ID",
+    )
+    cartesia_model_id: str = Field(
+        default="sonic-2",
+        description="Cartesia model ID",
+    )
+
+    # ElevenLabs TTS (fallback)
     elevenlabs_model_id: str = Field(
         default="eleven_multilingual_v2",
         description="ElevenLabs model ID for TTS synthesis",
@@ -104,12 +144,6 @@ class Settings(BaseSettings):
     elevenlabs_voice_id: str = Field(
         default="",
         description="ElevenLabs voice ID for TTS output",
-    )
-
-    # --- TTS settings --------------------------------------------------------
-    tts_backend: str = Field(
-        default="elevenlabs",
-        description="TTS backend: 'elevenlabs' (cloud) or 'local' (Kokoro)",
     )
     tts_local_url: str = Field(
         default="http://localhost:8880",
