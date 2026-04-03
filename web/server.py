@@ -240,6 +240,7 @@ async def lifespan(app: FastAPI):
             api_key=settings.cartesia_api_key,
             voice_id=getattr(settings, "cartesia_voice_id", ""),
             model_id=getattr(settings, "cartesia_model_id", "sonic-2"),
+            output_format="mp3",  # Browser expects MP3 for decodeAudioData
         )
         logger.info("TTS backend: Cartesia Sonic-3 (low-latency)")
     else:

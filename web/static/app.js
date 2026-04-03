@@ -1651,9 +1651,9 @@
       const data = await res.json();
 
       // Map server response fields to UI LEDs
-      // Server returns: sim_connected, whisper_available, chromadb_available, elevenlabs_configured
+      // v2: uses stt_available/tts_available (falls back to legacy fields)
       setLed(dom.statusSim,     data.sim_connected       ? 'green' : 'red');
-      setLed(dom.statusWhisper,  data.whisper_available   ? 'green' : 'red');
+      setLed(dom.statusWhisper,  (data.stt_available ?? data.whisper_available) ? 'green' : 'red');
       setLed(dom.statusChroma,   data.chromadb_available  ? 'green' : 'red');
       // Claude is available if we got a valid status response (API key is loaded)
       setLed(dom.statusClaude,   data.claude_model        ? 'green' : 'amber');
