@@ -134,8 +134,8 @@ class TestQueryClassification:
             ("Engine failure!", "emergency"),
             ("Pan-Pan, we have smoke in the cockpit", "emergency"),
             ("I need to declare an emergency", "emergency"),
-            ("TCAS RA!", "emergency"),
-            ("GPWS terrain warning", "emergency"),
+            ("TCAS RA climb now", "emergency"),
+            ("GPWS warning pull up", "emergency"),
         ],
     )
     def test_emergency_classification(self, message: str, expected: str) -> None:
@@ -173,3 +173,16 @@ class TestQueryClassification:
     def test_emergency_takes_priority_over_short(self) -> None:
         """'Mayday' should be emergency, not short (even if it starts with a short word)."""
         assert classify_query("Mayday") == "emergency"
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "crash course on navigation",
+            "beautiful terrain below",
+            "smoke break after landing",
+            "declare your intentions",
+        ],
+    )
+    def test_no_false_positive_emergency(self, message: str) -> None:
+        """Common phrases should NOT trigger emergency classification."""
+        assert classify_query(message) != "emergency"

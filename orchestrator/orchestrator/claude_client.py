@@ -141,10 +141,10 @@ _SHORT_PATTERNS: list[re.Pattern[str]] = [
 
 # Patterns indicating an emergency or urgent situation.
 _EMERGENCY_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"\b(mayday|pan\s*pan|emergency|declare)\b", re.I),
-    re.compile(r"\b(engine\s+(fire|failure|out)|fire\s+in)\b", re.I),
-    re.compile(r"\b(smoke|decompress|ditching|crash)\b", re.I),
-    re.compile(r"\b(terrain|pull\s+up|GPWS|TCAS\s+RA)\b", re.I),
+    re.compile(r"\b(mayday|pan\s*pan|declare\s+(?:an?\s+)?emergency)\b", re.I),
+    re.compile(r"\b(engine\s+(fire|failure|out|flameout)|fire\s+in\s+the)\b", re.I),
+    re.compile(r"\b(smoke\s+in|decompress|ditching|crash\s+land)\b", re.I),
+    re.compile(r"\b(pull\s+up|GPWS\s+warning|TCAS\s+RA|terrain\s+alert)\b", re.I),
 ]
 
 
