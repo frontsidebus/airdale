@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from telemetry.schema import (
     AircraftExtensions,
     Attitude,
@@ -83,9 +82,7 @@ def sample_envelope(sample_position: Position) -> TelemetryEnvelope:
         ),
         radios=RadioState(com1=124.0, com2=121.5, nav1=110.0, nav2=115.0),
         fuel=FuelState(total_gallons=40.0, total_weight_lbs=240.0),
-        surfaces=SurfaceState(
-            gear_handle=True, flaps_percent=0.0, spoilers_percent=0.0
-        ),
+        surfaces=SurfaceState(gear_handle=True, flaps_percent=0.0, spoilers_percent=0.0),
     )
     envelope.with_aircraft_extensions(aircraft_ext)
     return envelope

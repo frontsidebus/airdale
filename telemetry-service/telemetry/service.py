@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
@@ -126,9 +126,7 @@ async def ws_ingest(ws: WebSocket):
 
         if msg is None or msg.type != "register":
             await ws.send_text(
-                ServiceError(
-                    message="First message must be type 'register'"
-                ).model_dump_json()
+                ServiceError(message="First message must be type 'register'").model_dump_json()
             )
             await ws.close(code=4002, reason="Invalid registration")
             return
@@ -156,13 +154,9 @@ async def ws_ingest(ws: WebSocket):
             if msg.type == "telemetry":
                 await manager.update_telemetry(adapter_id, msg.data)
             elif msg.type == "status":
-                await manager.update_adapter_status(
-                    adapter_id, msg.connected, msg.vehicle_name
-                )
+                await manager.update_adapter_status(adapter_id, msg.connected, msg.vehicle_name)
             elif msg.type == "command_ack":
-                await manager.route_command_ack(
-                    msg.command_id, msg.success, msg.message
-                )
+                await manager.route_command_ack(msg.command_id, msg.success, msg.message)
 
     except WebSocketDisconnect:
         logger.info("Adapter disconnected: %s", adapter_id or "unknown")
@@ -197,9 +191,7 @@ async def ws_telemetry(ws: WebSocket):
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError:
-                await ws.send_text(
-                    ServiceError(message="Invalid JSON").model_dump_json()
-                )
+                await ws.send_text(ServiceError(message="Invalid JSON").model_dump_json())
                 continue
 
             msg = parse_consumer_message(data)
@@ -208,9 +200,7 @@ async def ws_telemetry(ws: WebSocket):
                 msg_type = data.get("type")
                 if msg_type:
                     await ws.send_text(
-                        ServiceError(
-                            message=f"Unknown request type: {msg_type}"
-                        ).model_dump_json()
+                        ServiceError(message=f"Unknown request type: {msg_type}").model_dump_json()
                     )
                 continue
 
@@ -230,9 +220,7 @@ async def ws_telemetry(ws: WebSocket):
                     state_data["vehicle_type"] = current.vehicle_type
                     await ws.send_text(json.dumps(state_data))
                 else:
-                    resp = ServiceStateResponse(
-                        message="No adapter data available yet."
-                    )
+                    resp = ServiceStateResponse(message="No adapter data available yet.")
                     await ws.send_text(resp.model_dump_json())
 
             elif msg.type == "command":
@@ -253,7 +241,7 @@ async def ws_telemetry(ws: WebSocket):
 
             elif msg.type == "heartbeat":
                 ack = ServiceHeartbeatAck(
-                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    timestamp=datetime.now(UTC).isoformat(),
                     clients=manager.consumer_count,
                     adapters=manager.adapter_count,
                 )

@@ -131,8 +131,7 @@ class Settings(BaseSettings):
         # Build telemetry service URL from components if not explicitly set
         if not self.telemetry_service_url:
             self.telemetry_service_url = (
-                f"ws://{self.telemetry_service_host}"
-                f":{self.telemetry_service_port}/ws/telemetry"
+                f"ws://{self.telemetry_service_host}:{self.telemetry_service_port}/ws/telemetry"
             )
         return self
 

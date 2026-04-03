@@ -6,21 +6,16 @@ with realistic telemetry sequences and verifies hysteresis behaviour.
 
 from __future__ import annotations
 
-import pytest
-
 from orchestrator.flight_phase import FlightPhaseDetector, PhaseThresholds
 from orchestrator.sim_client import (
-    Attitude,
     EngineData,
     Engines,
-    Environment,
     FlightPhase,
     Position,
     SimState,
     Speeds,
     SurfaceState,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -144,8 +139,11 @@ class TestClimbDetection:
     def test_strong_climb_airborne(self) -> None:
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=5000, vertical_speed=800,
-            indicated_airspeed=85, gear_handle=False, rpm=2700,
+            altitude_agl=5000,
+            vertical_speed=800,
+            indicated_airspeed=85,
+            gear_handle=False,
+            rpm=2700,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.CLIMB
@@ -153,8 +151,11 @@ class TestClimbDetection:
     def test_marginal_climb_at_threshold(self) -> None:
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=5000, vertical_speed=301,
-            indicated_airspeed=85, gear_handle=False, rpm=2700,
+            altitude_agl=5000,
+            vertical_speed=301,
+            indicated_airspeed=85,
+            gear_handle=False,
+            rpm=2700,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.CLIMB
@@ -162,8 +163,11 @@ class TestClimbDetection:
     def test_below_climb_threshold_not_climb(self) -> None:
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=5000, vertical_speed=150,
-            indicated_airspeed=120, gear_handle=False, rpm=2400,
+            altitude_agl=5000,
+            vertical_speed=150,
+            indicated_airspeed=120,
+            gear_handle=False,
+            rpm=2400,
         )
         phase = _repeat_update(d, s)
         # 150 fpm is within cruise VS band (+/-200)
@@ -176,8 +180,11 @@ class TestCruiseDetection:
     def test_level_flight_high_altitude(self) -> None:
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=8000, vertical_speed=50,
-            indicated_airspeed=130, gear_handle=False, rpm=2400,
+            altitude_agl=8000,
+            vertical_speed=50,
+            indicated_airspeed=130,
+            gear_handle=False,
+            rpm=2400,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.CRUISE
@@ -185,8 +192,11 @@ class TestCruiseDetection:
     def test_exactly_zero_vs(self) -> None:
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=6500, vertical_speed=0,
-            indicated_airspeed=120, gear_handle=False, rpm=2400,
+            altitude_agl=6500,
+            vertical_speed=0,
+            indicated_airspeed=120,
+            gear_handle=False,
+            rpm=2400,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.CRUISE
@@ -194,8 +204,11 @@ class TestCruiseDetection:
     def test_slight_positive_vs_still_cruise(self) -> None:
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=6500, vertical_speed=199,
-            indicated_airspeed=120, gear_handle=False, rpm=2400,
+            altitude_agl=6500,
+            vertical_speed=199,
+            indicated_airspeed=120,
+            gear_handle=False,
+            rpm=2400,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.CRUISE
@@ -203,8 +216,11 @@ class TestCruiseDetection:
     def test_slight_negative_vs_still_cruise(self) -> None:
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=6500, vertical_speed=-199,
-            indicated_airspeed=120, gear_handle=False, rpm=2400,
+            altitude_agl=6500,
+            vertical_speed=-199,
+            indicated_airspeed=120,
+            gear_handle=False,
+            rpm=2400,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.CRUISE
@@ -216,8 +232,11 @@ class TestDescentDetection:
     def test_strong_descent_high_altitude(self) -> None:
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=8000, vertical_speed=-600,
-            indicated_airspeed=130, gear_handle=False, rpm=2200,
+            altitude_agl=8000,
+            vertical_speed=-600,
+            indicated_airspeed=130,
+            gear_handle=False,
+            rpm=2200,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.DESCENT
@@ -225,8 +244,11 @@ class TestDescentDetection:
     def test_descent_at_threshold(self) -> None:
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=8000, vertical_speed=-301,
-            indicated_airspeed=130, gear_handle=False, rpm=2200,
+            altitude_agl=8000,
+            vertical_speed=-301,
+            indicated_airspeed=130,
+            gear_handle=False,
+            rpm=2200,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.DESCENT
@@ -235,8 +257,12 @@ class TestDescentDetection:
         """Below approach AGL but gear up -> still DESCENT, not APPROACH."""
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=2500, vertical_speed=-500,
-            indicated_airspeed=130, gear_handle=False, flaps_percent=0, rpm=2200,
+            altitude_agl=2500,
+            vertical_speed=-500,
+            indicated_airspeed=130,
+            gear_handle=False,
+            flaps_percent=0,
+            rpm=2200,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.DESCENT
@@ -248,8 +274,12 @@ class TestApproachDetection:
     def test_low_alt_gear_down_descending(self) -> None:
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=2000, vertical_speed=-500,
-            indicated_airspeed=90, gear_handle=True, flaps_percent=0, rpm=2100,
+            altitude_agl=2000,
+            vertical_speed=-500,
+            indicated_airspeed=90,
+            gear_handle=True,
+            flaps_percent=0,
+            rpm=2100,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.APPROACH
@@ -257,8 +287,12 @@ class TestApproachDetection:
     def test_low_alt_gear_down_with_flaps(self) -> None:
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=2500, vertical_speed=-100,
-            indicated_airspeed=90, gear_handle=True, flaps_percent=50, rpm=2100,
+            altitude_agl=2500,
+            vertical_speed=-100,
+            indicated_airspeed=90,
+            gear_handle=True,
+            flaps_percent=50,
+            rpm=2100,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.APPROACH
@@ -267,8 +301,12 @@ class TestApproachDetection:
         """Gear down, low alt, but VS not below descent threshold and no flaps => DESCENT."""
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=2500, vertical_speed=-100,
-            indicated_airspeed=100, gear_handle=True, flaps_percent=0, rpm=2200,
+            altitude_agl=2500,
+            vertical_speed=-100,
+            indicated_airspeed=100,
+            gear_handle=True,
+            flaps_percent=0,
+            rpm=2200,
         )
         phase = _repeat_update(d, s)
         # VS=-100 is not < -300, flaps=0 => else branch => DESCENT
@@ -277,8 +315,12 @@ class TestApproachDetection:
     def test_above_approach_agl_is_not_approach(self) -> None:
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=3500, vertical_speed=-500,
-            indicated_airspeed=90, gear_handle=True, flaps_percent=50, rpm=2100,
+            altitude_agl=3500,
+            vertical_speed=-500,
+            indicated_airspeed=90,
+            gear_handle=True,
+            flaps_percent=50,
+            rpm=2100,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.DESCENT
@@ -290,8 +332,12 @@ class TestLandingDetection:
     def test_short_final(self) -> None:
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=100, vertical_speed=-300,
-            indicated_airspeed=65, gear_handle=True, flaps_percent=75, rpm=1500,
+            altitude_agl=100,
+            vertical_speed=-300,
+            indicated_airspeed=65,
+            gear_handle=True,
+            flaps_percent=75,
+            rpm=1500,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.LANDING
@@ -299,8 +345,12 @@ class TestLandingDetection:
     def test_at_landing_agl_threshold(self) -> None:
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=199, vertical_speed=-200,
-            indicated_airspeed=65, gear_handle=True, flaps_percent=75, rpm=1500,
+            altitude_agl=199,
+            vertical_speed=-200,
+            indicated_airspeed=65,
+            gear_handle=True,
+            flaps_percent=75,
+            rpm=1500,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.LANDING
@@ -309,8 +359,11 @@ class TestLandingDetection:
         """Even at low AGL, gear up prevents LANDING detection."""
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=100, vertical_speed=-300,
-            indicated_airspeed=65, gear_handle=False, rpm=1500,
+            altitude_agl=100,
+            vertical_speed=-300,
+            indicated_airspeed=65,
+            gear_handle=False,
+            rpm=1500,
         )
         phase = _repeat_update(d, s)
         # Gear up, low alt => won't match landing or approach gear checks
@@ -325,16 +378,25 @@ class TestLandedDetection:
         d = FlightPhaseDetector()
         # First establish LANDING
         landing = _state(
-            altitude_agl=50, vertical_speed=-300,
-            indicated_airspeed=65, gear_handle=True, flaps_percent=75, rpm=1500,
+            altitude_agl=50,
+            vertical_speed=-300,
+            indicated_airspeed=65,
+            gear_handle=True,
+            flaps_percent=75,
+            rpm=1500,
         )
         _repeat_update(d, landing)
         assert d.current_phase == FlightPhase.LANDING
 
         # Now on the ground, decelerating
         on_ground = _state(
-            altitude_agl=0, ground_speed=40, vertical_speed=0,
-            indicated_airspeed=45, gear_handle=True, flaps_percent=75, rpm=1200,
+            altitude_agl=0,
+            ground_speed=40,
+            vertical_speed=0,
+            indicated_airspeed=45,
+            gear_handle=True,
+            flaps_percent=75,
+            rpm=1200,
         )
         phase = _repeat_update(d, on_ground)
         assert phase == FlightPhase.LANDED
@@ -344,8 +406,11 @@ class TestLandedDetection:
         # Manually set current phase to LANDING
         d._current_phase = FlightPhase.LANDING
         s = _state(
-            altitude_agl=0, ground_speed=3, vertical_speed=0,
-            rpm=800, gear_handle=True,
+            altitude_agl=0,
+            ground_speed=3,
+            vertical_speed=0,
+            rpm=800,
+            gear_handle=True,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.LANDED
@@ -428,8 +493,10 @@ class TestCustomThresholds:
         thresholds = PhaseThresholds(approach_agl=5000.0)
         d = FlightPhaseDetector(thresholds=thresholds)
         s = _state(
-            altitude_agl=4000, vertical_speed=-500,
-            gear_handle=True, rpm=2100,
+            altitude_agl=4000,
+            vertical_speed=-500,
+            gear_handle=True,
+            rpm=2100,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.APPROACH
@@ -460,45 +527,79 @@ class TestFullFlightSequence:
         assert phase == FlightPhase.TAKEOFF
 
         # Initial climb
-        phase = d.update(_state(
-            altitude_agl=500, vertical_speed=800,
-            indicated_airspeed=85, gear_handle=False, rpm=2700,
-        ))
+        phase = d.update(
+            _state(
+                altitude_agl=500,
+                vertical_speed=800,
+                indicated_airspeed=85,
+                gear_handle=False,
+                rpm=2700,
+            )
+        )
         assert phase == FlightPhase.CLIMB
 
         # Level off at cruise
-        phase = d.update(_state(
-            altitude_agl=6500, vertical_speed=50,
-            indicated_airspeed=120, gear_handle=False, rpm=2400,
-        ))
+        phase = d.update(
+            _state(
+                altitude_agl=6500,
+                vertical_speed=50,
+                indicated_airspeed=120,
+                gear_handle=False,
+                rpm=2400,
+            )
+        )
         assert phase == FlightPhase.CRUISE
 
         # Begin descent
-        phase = d.update(_state(
-            altitude_agl=5000, vertical_speed=-600,
-            indicated_airspeed=130, gear_handle=False, rpm=2200,
-        ))
+        phase = d.update(
+            _state(
+                altitude_agl=5000,
+                vertical_speed=-600,
+                indicated_airspeed=130,
+                gear_handle=False,
+                rpm=2200,
+            )
+        )
         assert phase == FlightPhase.DESCENT
 
         # Approach — gear down, flaps, below 3000 AGL
-        phase = d.update(_state(
-            altitude_agl=2000, vertical_speed=-500,
-            indicated_airspeed=90, gear_handle=True, flaps_percent=50, rpm=2100,
-        ))
+        phase = d.update(
+            _state(
+                altitude_agl=2000,
+                vertical_speed=-500,
+                indicated_airspeed=90,
+                gear_handle=True,
+                flaps_percent=50,
+                rpm=2100,
+            )
+        )
         assert phase == FlightPhase.APPROACH
 
         # Short final — below 200 AGL
-        phase = d.update(_state(
-            altitude_agl=100, vertical_speed=-300,
-            indicated_airspeed=65, gear_handle=True, flaps_percent=75, rpm=1500,
-        ))
+        phase = d.update(
+            _state(
+                altitude_agl=100,
+                vertical_speed=-300,
+                indicated_airspeed=65,
+                gear_handle=True,
+                flaps_percent=75,
+                rpm=1500,
+            )
+        )
         assert phase == FlightPhase.LANDING
 
         # Touchdown and deceleration
-        phase = d.update(_state(
-            altitude_agl=0, ground_speed=40, vertical_speed=0,
-            indicated_airspeed=45, gear_handle=True, flaps_percent=75, rpm=1200,
-        ))
+        phase = d.update(
+            _state(
+                altitude_agl=0,
+                ground_speed=40,
+                vertical_speed=0,
+                indicated_airspeed=45,
+                gear_handle=True,
+                flaps_percent=75,
+                rpm=1200,
+            )
+        )
         assert phase == FlightPhase.LANDED
 
     def test_go_around_from_approach(self) -> None:
@@ -507,16 +608,28 @@ class TestFullFlightSequence:
         d._hold_required = 1
 
         # On approach
-        d.update(_state(
-            altitude_agl=800, vertical_speed=-500,
-            indicated_airspeed=90, gear_handle=True, flaps_percent=50, rpm=2100,
-        ))
+        d.update(
+            _state(
+                altitude_agl=800,
+                vertical_speed=-500,
+                indicated_airspeed=90,
+                gear_handle=True,
+                flaps_percent=50,
+                rpm=2100,
+            )
+        )
 
         # Go around -- full power, positive VS, climbing
-        phase = d.update(_state(
-            altitude_agl=900, vertical_speed=1000,
-            indicated_airspeed=80, gear_handle=True, flaps_percent=25, rpm=2700,
-        ))
+        phase = d.update(
+            _state(
+                altitude_agl=900,
+                vertical_speed=1000,
+                indicated_airspeed=80,
+                gear_handle=True,
+                flaps_percent=25,
+                rpm=2700,
+            )
+        )
         assert phase == FlightPhase.CLIMB
 
 
@@ -531,8 +644,11 @@ class TestEdgeCases:
     def test_zero_vs_airborne_high_alt_is_cruise(self) -> None:
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=10000, vertical_speed=0,
-            indicated_airspeed=150, gear_handle=False, rpm=2400,
+            altitude_agl=10000,
+            vertical_speed=0,
+            indicated_airspeed=150,
+            gear_handle=False,
+            rpm=2400,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.CRUISE
@@ -541,8 +657,11 @@ class TestEdgeCases:
         """VS exactly at cruise band boundary."""
         d = FlightPhaseDetector()
         s = _state(
-            altitude_agl=8000, vertical_speed=-200,
-            indicated_airspeed=130, gear_handle=False, rpm=2400,
+            altitude_agl=8000,
+            vertical_speed=-200,
+            indicated_airspeed=130,
+            gear_handle=False,
+            rpm=2400,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.CRUISE
@@ -551,8 +670,12 @@ class TestEdgeCases:
         d = FlightPhaseDetector()
         # altitude_agl=3000 is NOT < 3000 so approach check fails => climb/descent/cruise
         s = _state(
-            altitude_agl=3000, vertical_speed=-500,
-            indicated_airspeed=130, gear_handle=True, flaps_percent=50, rpm=2100,
+            altitude_agl=3000,
+            vertical_speed=-500,
+            indicated_airspeed=130,
+            gear_handle=True,
+            flaps_percent=50,
+            rpm=2100,
         )
         phase = _repeat_update(d, s)
         assert phase == FlightPhase.DESCENT

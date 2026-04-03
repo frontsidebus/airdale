@@ -12,7 +12,6 @@ from pydantic import BaseModel, Field
 
 from .schema import TelemetryEnvelope
 
-
 # ---------------------------------------------------------------------------
 # Adapter → Service messages
 # ---------------------------------------------------------------------------
@@ -157,9 +156,9 @@ class ServiceCommandAck(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def parse_adapter_message(data: dict[str, Any]) -> (
-    AdapterRegister | AdapterTelemetry | AdapterStatus | AdapterCommandAck | None
-):
+def parse_adapter_message(
+    data: dict[str, Any],
+) -> AdapterRegister | AdapterTelemetry | AdapterStatus | AdapterCommandAck | None:
     """Parse a raw JSON dict into a typed adapter message."""
     msg_type = data.get("type")
     if msg_type == "register":
@@ -173,9 +172,9 @@ def parse_adapter_message(data: dict[str, Any]) -> (
     return None
 
 
-def parse_consumer_message(data: dict[str, Any]) -> (
-    ConsumerSubscribe | ConsumerGetState | ConsumerHeartbeat | ConsumerCommand | None
-):
+def parse_consumer_message(
+    data: dict[str, Any],
+) -> ConsumerSubscribe | ConsumerGetState | ConsumerHeartbeat | ConsumerCommand | None:
     """Parse a raw JSON dict into a typed consumer message."""
     msg_type = data.get("type")
     if msg_type == "subscribe":

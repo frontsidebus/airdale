@@ -82,27 +82,19 @@ _PHASE_STYLE: dict[FlightPhase, str] = {
     FlightPhase.TAXI: (
         "Phase: TAXI. Professional, concise. 1-2 sentences unless reading a checklist."
     ),
-    FlightPhase.TAKEOFF: (
-        "Phase: TAKEOFF. ULTRA-BRIEF. Callouts only. No humor. No filler."
-    ),
+    FlightPhase.TAKEOFF: ("Phase: TAKEOFF. ULTRA-BRIEF. Callouts only. No humor. No filler."),
     FlightPhase.CLIMB: (
         "Phase: CLIMB. Professional, moderate length. Light humor once established."
     ),
     FlightPhase.CRUISE: (
         "Phase: CRUISE. Conversational, can be more detailed. Good time to teach."
     ),
-    FlightPhase.DESCENT: (
-        "Phase: DESCENT. Briefing mode. Structured and clear. Minimal humor."
-    ),
+    FlightPhase.DESCENT: ("Phase: DESCENT. Briefing mode. Structured and clear. Minimal humor."),
     FlightPhase.APPROACH: (
         "Phase: APPROACH. ULTRA-BRIEF. Concise callouts only. No humor. No filler."
     ),
-    FlightPhase.LANDING: (
-        "Phase: LANDING. ULTRA-BRIEF. Callouts only. Crisp and precise."
-    ),
-    FlightPhase.LANDED: (
-        "Phase: LANDED. Relaxed debrief mode. Can use humor. Moderate length."
-    ),
+    FlightPhase.LANDING: ("Phase: LANDING. ULTRA-BRIEF. Callouts only. Crisp and precise."),
+    FlightPhase.LANDED: ("Phase: LANDED. Relaxed debrief mode. Can use humor. Moderate length."),
 }
 
 # ---------------------------------------------------------------------------
@@ -200,9 +192,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "properties": {
                 "identifier": {
                     "type": "string",
-                    "description": (
-                        "Airport ICAO or FAA identifier (e.g., KJFK, KLAX, ORL)"
-                    ),
+                    "description": ("Airport ICAO or FAA identifier (e.g., KJFK, KLAX, ORL)"),
                 },
             },
             "required": ["identifier"],
@@ -382,13 +372,9 @@ class ClaudeClient:
         # Flight-phase-aware response style
         phase = sim_state.flight_phase
         if phase in _PHASE_STYLE:
-            dynamic_parts.append(
-                f"\n--- CURRENT RESPONSE STYLE ---\n{_PHASE_STYLE[phase]}"
-            )
+            dynamic_parts.append(f"\n--- CURRENT RESPONSE STYLE ---\n{_PHASE_STYLE[phase]}")
 
-        dynamic_parts.append(
-            f"\n--- CURRENT FLIGHT STATE ---\n{sim_state.telemetry_summary()}"
-        )
+        dynamic_parts.append(f"\n--- CURRENT FLIGHT STATE ---\n{sim_state.telemetry_summary()}")
         dynamic_parts.append(f"Aircraft: {sim_state.aircraft or 'Unknown'}")
         dynamic_parts.append(f"On ground: {sim_state.on_ground}")
 
@@ -405,7 +391,7 @@ class ClaudeClient:
             f"{env.wind_speed_kts:.0f}kt | "
             f"Vis {env.visibility_sm:.0f}sm | "
             f"Temp {env.temperature_c:.0f}\u00b0C | "
-            f"QNH {env.barometer_inhg:.2f}\"Hg"
+            f'QNH {env.barometer_inhg:.2f}"Hg'
         )
 
         if context_docs:
@@ -451,14 +437,16 @@ class ClaudeClient:
         # Build user message content
         content: list[dict[str, Any]] = []
         if image_base64:
-            content.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/jpeg",
-                    "data": image_base64,
-                },
-            })
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": image_base64,
+                    },
+                }
+            )
         content.append({"type": "text", "text": user_message})
 
         self._conversation.append({"role": "user", "content": content})
@@ -497,15 +485,15 @@ class ClaudeClient:
                     elif event.type == "content_block_stop":
                         if current_tool_name:
                             tool_input = (
-                                json.loads(current_tool_input)
-                                if current_tool_input
-                                else {}
+                                json.loads(current_tool_input) if current_tool_input else {}
                             )
-                            tool_use_blocks.append({
-                                "id": current_tool_id,
-                                "name": current_tool_name,
-                                "input": tool_input,
-                            })
+                            tool_use_blocks.append(
+                                {
+                                    "id": current_tool_id,
+                                    "name": current_tool_name,
+                                    "input": tool_input,
+                                }
+                            )
                             current_tool_name = ""
                     elif event.type == "message_delta":
                         stop_reason = event.delta.stop_reason
@@ -515,12 +503,14 @@ class ClaudeClient:
             if collected_text:
                 assistant_content.append({"type": "text", "text": collected_text})
             for tb in tool_use_blocks:
-                assistant_content.append({
-                    "type": "tool_use",
-                    "id": tb["id"],
-                    "name": tb["name"],
-                    "input": tb["input"],
-                })
+                assistant_content.append(
+                    {
+                        "type": "tool_use",
+                        "id": tb["id"],
+                        "name": tb["name"],
+                        "input": tb["input"],
+                    }
+                )
             self._conversation.append({"role": "assistant", "content": assistant_content})
 
             if stop_reason != "tool_use" or not tool_use_blocks:
@@ -530,16 +520,16 @@ class ClaudeClient:
             tool_results: list[dict[str, Any]] = []
             for tb in tool_use_blocks:
                 result = await self._execute_tool(tb["name"], tb["input"], sim_state)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tb["id"],
-                    "content": json.dumps(result),
-                })
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tb["id"],
+                        "content": json.dumps(result),
+                    }
+                )
             self._conversation.append({"role": "user", "content": tool_results})
 
-    async def _execute_tool(
-        self, name: str, args: dict[str, Any], sim_state: SimState
-    ) -> Any:
+    async def _execute_tool(self, name: str, args: dict[str, Any], sim_state: SimState) -> Any:
         logger.info("Executing tool: %s(%s)", name, args)
         try:
             if name == "get_sim_state":

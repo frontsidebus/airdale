@@ -24,6 +24,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Create minimal .env for compose
+        run: |
+          cp .env.example .env 2>/dev/null || touch .env
+
       - name: Validate compose config
         run: docker compose config --quiet
 

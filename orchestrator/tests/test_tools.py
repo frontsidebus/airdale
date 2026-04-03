@@ -2,27 +2,20 @@
 
 from __future__ import annotations
 
-import json
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 import respx
-
 from orchestrator.sim_client import (
-    Attitude,
-    AutopilotState,
     EngineData,
     Engines,
     Environment,
     FlightPhase,
     FuelState,
     Position,
-    TelemetryClient,
     SimState,
-    Speeds,
-    SurfaceState,
+    TelemetryClient,
 )
 from orchestrator.tools import (
     CRITICAL_COMMANDS,
@@ -35,7 +28,6 @@ from orchestrator.tools import (
     search_manual,
     set_aircraft_control,
 )
-
 
 # ---------------------------------------------------------------------------
 # get_sim_state
@@ -63,7 +55,12 @@ class TestGetSimState:
     @pytest.mark.asyncio
     async def test_position_rounding(self) -> None:
         state = SimState(
-            position=Position(latitude=28.429412345, longitude=-81.30912345, altitude_msl=6543.7, altitude_agl=6443.2),
+            position=Position(
+                latitude=28.429412345,
+                longitude=-81.30912345,
+                altitude_msl=6543.7,
+                altitude_agl=6443.2,
+            ),
         )
         mock_client = MagicMock(spec=TelemetryClient)
         mock_client.get_state = AsyncMock(return_value=state)
@@ -74,9 +71,12 @@ class TestGetSimState:
     @pytest.mark.asyncio
     async def test_engine_params_formatting(self) -> None:
         state = SimState(
-            engines=Engines(engine_count=1, engines=[
-                EngineData(rpm=2412.6, fuel_flow_gph=9.37, oil_temp=192.4, oil_pressure=61.8),
-            ]),
+            engines=Engines(
+                engine_count=1,
+                engines=[
+                    EngineData(rpm=2412.6, fuel_flow_gph=9.37, oil_temp=192.4, oil_pressure=61.8),
+                ],
+            ),
         )
         mock_client = MagicMock(spec=TelemetryClient)
         mock_client.get_state = AsyncMock(return_value=state)
@@ -127,17 +127,22 @@ class TestLookupAirport:
     @respx.mock
     async def test_successful_lookup_icao(self) -> None:
         respx.get("https://api.aviationapi.com/v1/airports", params={"apt": "KJFK"}).mock(
-            return_value=httpx.Response(200, json={
-                "KJFK": [{
-                    "facility_name": "JOHN F KENNEDY INTL",
-                    "city": "NEW YORK",
-                    "state_full": "NEW YORK",
-                    "elevation": "13",
-                    "latitude": "40.6413",
-                    "longitude": "-73.7781",
-                    "status_code": "O",
-                }],
-            })
+            return_value=httpx.Response(
+                200,
+                json={
+                    "KJFK": [
+                        {
+                            "facility_name": "JOHN F KENNEDY INTL",
+                            "city": "NEW YORK",
+                            "state_full": "NEW YORK",
+                            "elevation": "13",
+                            "latitude": "40.6413",
+                            "longitude": "-73.7781",
+                            "status_code": "O",
+                        }
+                    ],
+                },
+            )
         )
         result = await lookup_airport("KJFK")
         assert result["identifier"] == "KJFK"
@@ -148,9 +153,12 @@ class TestLookupAirport:
     @respx.mock
     async def test_three_letter_code_gets_k_prefix(self) -> None:
         respx.get("https://api.aviationapi.com/v1/airports", params={"apt": "KJFK"}).mock(
-            return_value=httpx.Response(200, json={
-                "KJFK": [{"facility_name": "JOHN F KENNEDY INTL"}],
-            })
+            return_value=httpx.Response(
+                200,
+                json={
+                    "KJFK": [{"facility_name": "JOHN F KENNEDY INTL"}],
+                },
+            )
         )
         result = await lookup_airport("JFK")
         assert result["identifier"] == "KJFK"
@@ -159,9 +167,12 @@ class TestLookupAirport:
     @respx.mock
     async def test_four_letter_code_starting_with_k_no_prefix(self) -> None:
         respx.get("https://api.aviationapi.com/v1/airports", params={"apt": "KLAX"}).mock(
-            return_value=httpx.Response(200, json={
-                "KLAX": [{"facility_name": "LOS ANGELES INTL"}],
-            })
+            return_value=httpx.Response(
+                200,
+                json={
+                    "KLAX": [{"facility_name": "LOS ANGELES INTL"}],
+                },
+            )
         )
         result = await lookup_airport("KLAX")
         assert result["identifier"] == "KLAX"
@@ -209,9 +220,12 @@ class TestLookupAirport:
     async def test_dict_response_instead_of_list(self) -> None:
         """API sometimes returns a dict instead of a list for the airport."""
         respx.get("https://api.aviationapi.com/v1/airports", params={"apt": "KJFK"}).mock(
-            return_value=httpx.Response(200, json={
-                "KJFK": {"facility_name": "JOHN F KENNEDY INTL", "city": "NEW YORK"},
-            })
+            return_value=httpx.Response(
+                200,
+                json={
+                    "KJFK": {"facility_name": "JOHN F KENNEDY INTL", "city": "NEW YORK"},
+                },
+            )
         )
         result = await lookup_airport("KJFK")
         assert result["name"] == "JOHN F KENNEDY INTL"
@@ -228,10 +242,20 @@ class TestSearchManual:
     @pytest.mark.asyncio
     async def test_returns_formatted_results(self) -> None:
         mock_store = MagicMock()
-        mock_store.query = AsyncMock(return_value=[
-            {"content": "V-speeds for C172: Vr=55, Vx=62, Vy=74", "metadata": {"source": "poh.pdf"}, "distance": 0.1},
-            {"content": "Normal climb: 75-85 KIAS", "metadata": {"source": "poh.pdf"}, "distance": 0.2},
-        ])
+        mock_store.query = AsyncMock(
+            return_value=[
+                {
+                    "content": "V-speeds for C172: Vr=55, Vx=62, Vy=74",
+                    "metadata": {"source": "poh.pdf"},
+                    "distance": 0.1,
+                },
+                {
+                    "content": "Normal climb: 75-85 KIAS",
+                    "metadata": {"source": "poh.pdf"},
+                    "distance": 0.2,
+                },
+            ]
+        )
 
         result = await search_manual("V-speeds", mock_store)
         assert len(result) == 2
@@ -321,9 +345,14 @@ class TestGetChecklist:
     @pytest.mark.asyncio
     async def test_aircraft_specific_checklist_from_store(self) -> None:
         mock_store = MagicMock()
-        mock_store.query = AsyncMock(return_value=[
-            {"content": "C172 Preflight: 1. Check fuel...", "metadata": {"source": "c172_checklist.pdf"}},
-        ])
+        mock_store.query = AsyncMock(
+            return_value=[
+                {
+                    "content": "C172 Preflight: 1. Check fuel...",
+                    "metadata": {"source": "c172_checklist.pdf"},
+                },
+            ]
+        )
 
         result = await get_checklist("PREFLIGHT", mock_store, aircraft_type="Cessna 172")
         assert result["source"] == "aircraft_manual"

@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import io
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 from orchestrator.screen_capture import CaptureManager
-
 
 # ---------------------------------------------------------------------------
 # Initialization
@@ -164,12 +161,17 @@ class TestGrabFrame:
 
         cm = CaptureManager(enabled=True)
 
-        with patch.dict("sys.modules", {"mss": mock_mss_module, "PIL": mock_pil, "PIL.Image": mock_pil.Image}):
-            with patch("builtins.__import__", side_effect=lambda name, *args, **kwargs: {
-                "mss": mock_mss_module,
-                "PIL": mock_pil,
-                "PIL.Image": mock_pil.Image,
-            }.get(name, __builtins__.__import__(name, *args, **kwargs))):
+        with patch.dict(
+            "sys.modules", {"mss": mock_mss_module, "PIL": mock_pil, "PIL.Image": mock_pil.Image}
+        ):
+            with patch(
+                "builtins.__import__",
+                side_effect=lambda name, *args, **kwargs: {
+                    "mss": mock_mss_module,
+                    "PIL": mock_pil,
+                    "PIL.Image": mock_pil.Image,
+                }.get(name, __builtins__.__import__(name, *args, **kwargs)),
+            ):
                 # Just test that the method handles errors gracefully
                 result = cm._grab_frame()
                 # May be None or a string depending on mock fidelity

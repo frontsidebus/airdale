@@ -15,7 +15,6 @@ import asyncio
 import base64
 import json
 import logging
-import math
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -35,10 +34,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-
 from orchestrator.audio_processing import (
-    AVIATION_PROMPT,
     convert_webm_to_wav_normalized,
 )
 from orchestrator.claude_client import ClaudeClient  # noqa: E402
@@ -48,6 +44,7 @@ from orchestrator.flight_phase import FlightPhaseDetector  # noqa: E402
 from orchestrator.sim_client import SimState, TelemetryClient  # noqa: E402
 from orchestrator.tts_preprocessor import preprocess_for_tts  # noqa: E402
 from orchestrator.whisper_client import WhisperClient  # noqa: E402
+from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -140,8 +137,7 @@ async def _prepopulate_tts_cache(state: AppState) -> None:
             continue
         try:
             resp = await state.tts_client.post(
-                f"https://api.elevenlabs.io/v1/text-to-speech/"
-                f"{state.settings.voice_id}/stream",
+                f"https://api.elevenlabs.io/v1/text-to-speech/{state.settings.voice_id}/stream",
                 headers={
                     "xi-api-key": state.settings.elevenlabs_api_key,
                     "Content-Type": "application/json",
@@ -159,9 +155,7 @@ async def _prepopulate_tts_cache(state: AppState) -> None:
             )
             resp.raise_for_status()
             state.tts_cache[sanitized] = resp.content
-            logger.info(
-                "Cached TTS phrase: '%s' (%d bytes)", sanitized, len(resp.content)
-            )
+            logger.info("Cached TTS phrase: '%s' (%d bytes)", sanitized, len(resp.content))
         except Exception as exc:
             logger.debug("Failed to cache TTS phrase '%s': %s", sanitized, exc)
 
@@ -324,9 +318,7 @@ async def get_status(state: AppState = Depends(get_app_state)):
     return {
         "sim_connected": bridge_ok,
         "chromadb_available": chromadb_ok,
-        "chromadb_documents": (
-            state.context_store.document_count if state.context_store else 0
-        ),
+        "chromadb_documents": (state.context_store.document_count if state.context_store else 0),
         "whisper_available": whisper_ok,
         "elevenlabs_configured": bool(
             state.settings.elevenlabs_api_key and state.settings.voice_id
@@ -360,9 +352,7 @@ async def transcribe_audio(file: UploadFile, state: AppState = Depends(get_app_s
         if not text and confidence == 0.0:
             logger.info("Direct webm transcription failed, falling back to ffmpeg")
             audio_bytes = await convert_webm_to_wav_normalized(audio_bytes)
-            text, confidence = await _transcribe_with_confidence(
-                audio_bytes, state=state
-            )
+            text, confidence = await _transcribe_with_confidence(audio_bytes, state=state)
     else:
         text, confidence = await _transcribe_with_confidence(audio_bytes, state=state)
 
@@ -460,9 +450,7 @@ async def ws_telemetry(ws: WebSocket, state: AppState = Depends(get_ws_app_state
                     )
                     # Bridge WS is open, but don't claim sim is connected
                     # until we receive data with connected=true from the bridge
-                    await ws.send_json(
-                        {"type": "telemetry", "connected": False, "data": None}
-                    )
+                    await ws.send_json({"type": "telemetry", "connected": False, "data": None})
 
                     async for raw_msg in bridge_ws:
                         try:
@@ -490,9 +478,7 @@ async def ws_telemetry(ws: WebSocket, state: AppState = Depends(get_ws_app_state
                             pass
 
             except (ConnectionRefusedError, OSError, Exception) as exc:
-                logger.debug(
-                    "Telemetry service not available (%s), retrying in 3s", exc
-                )
+                logger.debug("Telemetry service not available (%s), retrying in 3s", exc)
                 await ws.send_json(
                     {
                         "type": "telemetry",
@@ -801,9 +787,7 @@ async def _tts_websocket_stream(
                 recv_task.cancel()
 
     except Exception as exc:
-        logger.warning(
-            "ElevenLabs WebSocket TTS failed (%s), falling back to REST", exc
-        )
+        logger.warning("ElevenLabs WebSocket TTS failed (%s), falling back to REST", exc)
         # Fallback: drain the queue and use REST-based TTS
         await _tts_rest_fallback(ws, tts_queue, interrupt, state)
 
@@ -878,9 +862,7 @@ async def _stream_response(
                 detected = state.phase_detector.update(current_sim_state)
                 current_sim_state.flight_phase = detected
 
-        async for chunk in state.claude_client.chat(
-            user_text, sim_state=current_sim_state
-        ):
+        async for chunk in state.claude_client.chat(user_text, sim_state=current_sim_state):
             if interrupt.is_set():
                 logger.info("Response interrupted mid-stream")
                 break
@@ -993,8 +975,7 @@ async def _send_tts_chunk_rest(ws: WebSocket, text: str, state: AppState) -> Non
 
     try:
         resp = await state.tts_client.post(
-            f"https://api.elevenlabs.io/v1/text-to-speech/"
-            f"{state.settings.voice_id}/stream",
+            f"https://api.elevenlabs.io/v1/text-to-speech/{state.settings.voice_id}/stream",
             headers={
                 "xi-api-key": state.settings.elevenlabs_api_key,
                 "Content-Type": "application/json",
@@ -1036,7 +1017,9 @@ async def _transcribe_with_confidence(
             logger.error("Whisper client not initialized")
             return "", 0.0
         result = await state.whisper_client.transcribe_with_confidence(
-            audio_bytes, filename=filename, mime_type=mime_type,
+            audio_bytes,
+            filename=filename,
+            mime_type=mime_type,
         )
         logger.info("Transcribed (confidence=%.2f): %s", result.confidence, result.text[:80])
         return result.text, result.confidence

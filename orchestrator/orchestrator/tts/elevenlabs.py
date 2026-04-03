@@ -116,14 +116,18 @@ class ElevenLabsClient:
                 additional_headers={"xi-api-key": self._api_key},
             ) as ws:
                 # Send initialization message with voice settings
-                await ws.send(json.dumps({
-                    "text": " ",
-                    "voice_settings": {
-                        "stability": self._stability,
-                        "similarity_boost": self._similarity_boost,
-                        "style": self._style,
-                    },
-                }))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "text": " ",
+                            "voice_settings": {
+                                "stability": self._stability,
+                                "similarity_boost": self._similarity_boost,
+                                "style": self._style,
+                            },
+                        }
+                    )
+                )
 
                 async def _receive_audio() -> None:
                     """Read WS messages, decode base64 audio, enqueue chunks."""
@@ -152,10 +156,14 @@ class ElevenLabsClient:
                     # Feed text chunks into the WebSocket
                     async for chunk in text_chunks:
                         if chunk:
-                            await ws.send(json.dumps({
-                                "text": chunk,
-                                "try_trigger_generation": True,
-                            }))
+                            await ws.send(
+                                json.dumps(
+                                    {
+                                        "text": chunk,
+                                        "try_trigger_generation": True,
+                                    }
+                                )
+                            )
 
                     # Send flush signal to get final audio
                     await ws.send(json.dumps({"text": ""}))

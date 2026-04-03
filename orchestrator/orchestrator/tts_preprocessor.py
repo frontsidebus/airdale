@@ -46,14 +46,38 @@ _DIGIT_WORDS_PLAIN: dict[str, str] = {
 
 # Standard English number words for natural readback (speeds, altitudes).
 _ONES = [
-    "", "one", "two", "three", "four", "five",
-    "six", "seven", "eight", "nine", "ten",
-    "eleven", "twelve", "thirteen", "fourteen", "fifteen",
-    "sixteen", "seventeen", "eighteen", "nineteen",
+    "",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
 ]
 _TENS = [
-    "", "", "twenty", "thirty", "forty", "fifty",
-    "sixty", "seventy", "eighty", "ninety",
+    "",
+    "",
+    "twenty",
+    "thirty",
+    "forty",
+    "fifty",
+    "sixty",
+    "seventy",
+    "eighty",
+    "ninety",
 ]
 
 _MULTI_SPACE_RE = re.compile(r"[ \t]{2,}")
@@ -217,11 +241,7 @@ def _expand_frequency(text: str) -> str:
         prefix = m.group(1) or ""
         integer_part = m.group(2)
         decimal_part = m.group(3)
-        spoken = (
-            _digits_to_words(integer_part)
-            + " point "
-            + _digits_to_words(decimal_part)
-        )
+        spoken = _digits_to_words(integer_part) + " point " + _digits_to_words(decimal_part)
         if prefix:
             return prefix + spoken
         return spoken
@@ -332,6 +352,7 @@ def _expand_aviation_acronyms(text: str) -> str:
 
 def _expand_distance(text: str) -> str:
     """5nm → five nautical miles; DME 12.3 → D M E one two point tree."""
+
     # NM / nm distances
     def _repl_nm(m: re.Match[str]) -> str:
         raw = m.group(1)
@@ -413,9 +434,9 @@ def _strip_markdown(text: str) -> str:
 
 def _replace_special_chars(text: str) -> str:
     """Convert special characters to speakable equivalents."""
-    text = text.replace("\u2014", ", ")      # em dash
-    text = text.replace("\u2013", " to ")    # en dash
-    text = text.replace("\u2026", "...")      # ellipsis
+    text = text.replace("\u2014", ", ")  # em dash
+    text = text.replace("\u2013", " to ")  # en dash
+    text = text.replace("\u2026", "...")  # ellipsis
     text = text.replace("\u00b0", " degrees")  # degree sign
     text = text.replace("\u00b1", " plus or minus ")  # plus-minus
     text = text.replace("&", " and ")
