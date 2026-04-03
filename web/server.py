@@ -42,6 +42,8 @@ from orchestrator.config import load_settings  # noqa: E402
 from orchestrator.context_store import ContextStore  # noqa: E402
 from orchestrator.flight_phase import FlightPhaseDetector  # noqa: E402
 from orchestrator.sim_client import SimState, TelemetryClient  # noqa: E402
+from orchestrator.stt.deepgram import DeepgramSTTClient  # noqa: E402
+from orchestrator.tts.cartesia import CartesiaClient  # noqa: E402
 from orchestrator.tts_preprocessor import preprocess_for_tts  # noqa: E402
 from orchestrator.whisper_client import WhisperClient  # noqa: E402
 from pydantic import BaseModel
@@ -100,8 +102,10 @@ class AppState:
     claude_client: ClaudeClient | None = None
     context_store: ContextStore | None = None
     phase_detector: FlightPhaseDetector | None = None
-    whisper_client: WhisperClient | None = None
-    tts_client: httpx.AsyncClient | None = None
+    whisper_client: WhisperClient | None = None  # Legacy STT fallback
+    deepgram_client: DeepgramSTTClient | None = None  # v2 streaming STT
+    cartesia_client: CartesiaClient | None = None  # v2 low-latency TTS
+    tts_client: httpx.AsyncClient | None = None  # Legacy ElevenLabs HTTP
     tts_cache: dict[str, bytes] = field(default_factory=dict)
     sim_connected: bool = False
     bridge_last_seen: float = 0.0
@@ -204,8 +208,18 @@ async def lifespan(app: FastAPI):
 
         state.sim_client.subscribe(_on_state)
 
-    # Whisper client (unified async client from Phase 3)
-    state.whisper_client = WhisperClient(base_url=settings.whisper_url)
+    # STT client — route to configured backend
+    stt_backend = getattr(settings, "stt_backend", "whisper")
+    if stt_backend == "deepgram" and getattr(settings, "deepgram_api_key", ""):
+        state.deepgram_client = DeepgramSTTClient(
+            api_key=settings.deepgram_api_key,
+            model=getattr(settings, "deepgram_model", "nova-3"),
+            endpointing_ms=getattr(settings, "deepgram_endpointing_ms", 300),
+        )
+        logger.info("STT backend: Deepgram Nova-3 (streaming)")
+    else:
+        state.whisper_client = WhisperClient(base_url=settings.whisper_url)
+        logger.info("STT backend: Whisper (local batch)")
 
     # Claude client
     state.claude_client = ClaudeClient(
@@ -219,7 +233,19 @@ async def lifespan(app: FastAPI):
         temperature=settings.claude_temperature,
     )
 
-    # TTS HTTP client (connection pooling)
+    # TTS client — route to configured backend
+    tts_backend = getattr(settings, "tts_backend", "elevenlabs")
+    if tts_backend == "cartesia" and getattr(settings, "cartesia_api_key", ""):
+        state.cartesia_client = CartesiaClient(
+            api_key=settings.cartesia_api_key,
+            voice_id=getattr(settings, "cartesia_voice_id", ""),
+            model_id=getattr(settings, "cartesia_model_id", "sonic-2"),
+        )
+        logger.info("TTS backend: Cartesia Sonic-3 (low-latency)")
+    else:
+        logger.info("TTS backend: ElevenLabs (cloud)")
+
+    # Legacy TTS HTTP client (connection pooling, used by ElevenLabs path)
     state.tts_client = httpx.AsyncClient(timeout=30.0)
 
     # Pre-populate TTS cache in the background (non-blocking)
@@ -247,6 +273,10 @@ async def lifespan(app: FastAPI):
         await state.tts_client.aclose()
     if state.whisper_client is not None:
         await state.whisper_client.aclose()
+    if state.deepgram_client is not None:
+        await state.deepgram_client.aclose()
+    if state.cartesia_client is not None:
+        await state.cartesia_client.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -315,13 +345,28 @@ async def get_status(state: AppState = Depends(get_app_state)):
         state.bridge_connected and (time.monotonic() - state.bridge_last_seen) < 10.0
     ) or state.sim_connected
 
+    stt_backend = getattr(state.settings, "stt_backend", "whisper")
+    tts_backend = getattr(state.settings, "tts_backend", "elevenlabs")
+
     return {
         "sim_connected": bridge_ok,
         "chromadb_available": chromadb_ok,
         "chromadb_documents": (state.context_store.document_count if state.context_store else 0),
+        "stt_backend": stt_backend,
+        "stt_available": (
+            state.deepgram_client is not None if stt_backend == "deepgram" else whisper_ok
+        ),
+        "tts_backend": tts_backend,
+        "tts_available": (
+            state.cartesia_client is not None
+            if tts_backend == "cartesia"
+            else bool(state.settings.elevenlabs_api_key and state.settings.voice_id)
+        ),
+        # Legacy fields for backward compat
         "whisper_available": whisper_ok,
         "elevenlabs_configured": bool(
-            state.settings.elevenlabs_api_key and state.settings.voice_id
+            state.settings.elevenlabs_api_key
+            and getattr(state.settings, "elevenlabs_voice_id", "")
         ),
         "claude_model": state.settings.claude_model,
         "telemetry_service_url": state.settings.telemetry_service_url,
@@ -330,25 +375,49 @@ async def get_status(state: AppState = Depends(get_app_state)):
 
 @app.post("/api/transcribe")
 async def transcribe_audio(file: UploadFile, state: AppState = Depends(get_app_state)):
-    """Transcribe uploaded audio via the Whisper Docker service.
+    """Transcribe uploaded audio.
 
-    Accepts webm or wav from the browser MediaRecorder. Sends webm directly
-    to Whisper (which handles decoding natively via encode=true) and falls
-    back to ffmpeg conversion only if direct transcription fails.
-    Returns text and confidence score.
+    Routes to Deepgram (v2 default, cloud streaming) or Whisper (legacy
+    fallback, local batch) based on STT_BACKEND configuration.
     """
     audio_bytes = await file.read()
     content_type = file.content_type or ""
     filename = file.filename or "audio.webm"
 
+    logger.info("Received %d bytes of audio (mime: %s)", len(audio_bytes), content_type)
+
+    # --- Deepgram path (v2 default) ---
+    if state.deepgram_client is not None:
+        try:
+            # Convert webm to wav for Deepgram (it prefers raw audio)
+            is_webm = "webm" in content_type or filename.endswith(".webm")
+            if is_webm:
+                audio_bytes = await convert_webm_to_wav_normalized(audio_bytes)
+
+            result = await state.deepgram_client.transcribe(audio_bytes)
+            response: dict[str, Any] = {
+                "text": result.text,
+                "confidence": result.confidence,
+            }
+            if result.text and result.confidence < _LOW_CONFIDENCE_THRESHOLD:
+                response["low_confidence"] = True
+                logger.warning(
+                    "Low confidence transcription (%.2f): '%s'",
+                    result.confidence,
+                    result.text[:80],
+                )
+            return response
+        except Exception as exc:
+            logger.error("Deepgram transcription failed: %s", exc)
+            return {"text": "", "confidence": 0.0, "error": str(exc)}
+
+    # --- Whisper fallback path (legacy) ---
     is_webm = "webm" in content_type or filename.endswith(".webm")
 
     if is_webm:
-        # Try sending webm directly (Whisper accepts it with encode=true)
         text, confidence = await _transcribe_with_confidence(
             audio_bytes, filename="audio.webm", mime_type="audio/webm", state=state
         )
-        # Fallback: convert to wav if direct approach fails
         if not text and confidence == 0.0:
             logger.info("Direct webm transcription failed, falling back to ffmpeg")
             audio_bytes = await convert_webm_to_wav_normalized(audio_bytes)
@@ -356,34 +425,58 @@ async def transcribe_audio(file: UploadFile, state: AppState = Depends(get_app_s
     else:
         text, confidence = await _transcribe_with_confidence(audio_bytes, state=state)
 
-    result: dict[str, Any] = {"text": text, "confidence": confidence}
+    result_dict: dict[str, Any] = {"text": text, "confidence": confidence}
 
-    # If confidence is low, warn the caller
     if text and confidence < _LOW_CONFIDENCE_THRESHOLD:
-        result["low_confidence"] = True
+        result_dict["low_confidence"] = True
         logger.warning(
             "Low confidence transcription (%.2f): '%s'",
             confidence,
             text[:80],
         )
 
-    return result
+    return result_dict
 
 
 @app.post("/api/tts")
 async def text_to_speech(request: TTSRequest, state: AppState = Depends(get_app_state)):
-    """Convert text to speech via ElevenLabs and return MP3 audio."""
+    """Convert text to speech. Routes to Cartesia (v2) or ElevenLabs (fallback)."""
+    clean = preprocess_for_tts(request.text)
+
+    # Check TTS cache first (works for all backends)
+    if clean in state.tts_cache:
+        content_type = "audio/pcm" if state.cartesia_client else "audio/mpeg"
+        return Response(content=state.tts_cache[clean], media_type=content_type)
+
+    # --- Cartesia path (v2 default) ---
+    if state.cartesia_client is not None:
+        try:
+            audio = await state.cartesia_client.synthesize(clean)
+            if audio:
+                return Response(
+                    content=audio,
+                    media_type=state.cartesia_client.audio_content_type,
+                )
+            return Response(
+                content=json.dumps({"error": "Cartesia returned empty audio"}),
+                status_code=502,
+                media_type="application/json",
+            )
+        except Exception as exc:
+            logger.error("Cartesia TTS failed: %s", exc)
+            return Response(
+                content=json.dumps({"error": f"TTS failed: {exc}"}),
+                status_code=502,
+                media_type="application/json",
+            )
+
+    # --- ElevenLabs fallback path ---
     if not state.settings.elevenlabs_api_key or not state.settings.voice_id:
         return Response(
-            content=json.dumps({"error": "ElevenLabs not configured"}),
+            content=json.dumps({"error": "No TTS backend configured"}),
             status_code=503,
             media_type="application/json",
         )
-
-    # Check TTS cache first
-    clean = preprocess_for_tts(request.text)
-    if clean in state.tts_cache:
-        return Response(content=state.tts_cache[clean], media_type="audio/mpeg")
 
     if state.tts_client is None:
         return Response(
