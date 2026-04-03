@@ -486,7 +486,11 @@ def _expand_zulu_time(text: str) -> str:
 
 
 def _expand_temperature(text: str) -> str:
-    """minus 12 degrees → minus one two degrees (ICAO digit-by-digit)."""
+    """minus 12 degrees Celsius → minus one two degrees Celsius (ICAO).
+
+    Only matches when a temperature unit (Celsius/C/Fahrenheit/F) is present
+    OR preceded by "minus" — avoids false matches on "180 degree turn".
+    """
 
     def _repl(m: re.Match[str]) -> str:
         sign = m.group(1) or ""
@@ -495,11 +499,19 @@ def _expand_temperature(text: str) -> str:
         prefix = "minus " if sign.strip().lower() == "minus" else ""
         return prefix + _digits_to_words(digits) + " " + unit
 
-    return re.sub(
-        r"\b(minus\s+)?(\d{1,3})\s*(degrees?\s*(?:Celsius|celsius|C|Fahrenheit|fahrenheit|F)?)\b",
+    # With explicit temperature unit (Celsius/C/Fahrenheit/F)
+    text = re.sub(
+        r"\b(minus\s+)?(\d{1,3})\s*(degrees?\s+(?:Celsius|celsius|C|Fahrenheit|fahrenheit|F))\b",
         _repl,
         text,
     )
+    # "minus N degrees" — minus prefix is a strong temperature signal
+    text = re.sub(
+        r"\b(minus\s+)(\d{1,3})\s*(degrees?)\b",
+        _repl,
+        text,
+    )
+    return text
 
 
 def _expand_standalone_frequency(text: str) -> str:

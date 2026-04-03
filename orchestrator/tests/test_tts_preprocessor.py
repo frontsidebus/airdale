@@ -414,12 +414,17 @@ class TestTemperature:
         [
             ("minus 12 degrees", "minus one two degrees"),
             ("minus 5 degrees Celsius", "minus fife degrees Celsius"),
-            ("22 degrees", "two two degrees"),
+            ("22 degrees Celsius", "two two degrees Celsius"),
             ("minus 40 degrees C", "minus four zero degrees C"),
         ],
     )
     def test_temperature(self, input_text: str, expected: str) -> None:
         assert preprocess_for_tts(input_text) == expected
+
+    def test_degree_turn_not_expanded(self) -> None:
+        """'180 degree turn' should NOT be temperature-expanded."""
+        result = preprocess_for_tts("make a 180 degree turn")
+        assert "one eight zero" not in result
 
 
 # ---------------------------------------------------------------------------
