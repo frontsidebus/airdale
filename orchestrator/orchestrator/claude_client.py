@@ -339,10 +339,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "description": (
             "Control an aircraft system in the simulator. Can set flaps, gear, "
             "autopilot settings, throttle, radios, trim, and other controls. "
-            "Use this when the Captain gives a direct order to manipulate aircraft "
-            "systems (e.g. 'give me flaps 20', 'set heading bug to 270', "
-            "'gear down'). For critical actions (gear, autopilot master), confirm "
-            "with the Captain before executing unless they gave a direct order."
+            "EXECUTE IMMEDIATELY when the Captain gives a direct order like "
+            "'give me full flaps', 'gear down', 'set heading to 270'. "
+            "Do NOT ask for clarification when the order is unambiguous. "
+            "After executing, give a brief confirmation like 'Flaps full.' "
+            "or 'Gear down, three green.'"
         ),
         "input_schema": {
             "type": "object",
