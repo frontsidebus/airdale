@@ -139,6 +139,7 @@ async def set_aircraft_control(
         return {"error": f"Unknown control: system={system}, action={action}"}
 
     result = await sim_client.send_command(command, sim_value)
+    logger.info("Command result for %s: %s", command, result)
     result["command"] = command
     result["sim_value"] = sim_value
 
