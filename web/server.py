@@ -154,9 +154,9 @@ async def _prepopulate_tts_cache(state: AppState) -> None:
                     "text": sanitized,
                     "model_id": state.settings.elevenlabs_model_id,
                     "voice_settings": {
-                        "stability": 0.75,
-                        "similarity_boost": 0.80,
-                        "style": 0.15,
+                        "stability": state.settings.tts_stability,
+                        "similarity_boost": state.settings.tts_similarity_boost,
+                        "style": state.settings.tts_style,
                     },
                 },
             )
