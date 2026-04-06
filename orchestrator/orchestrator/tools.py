@@ -169,6 +169,41 @@ def _resolve_command(
         if action == "toggle":
             return "CROSS_FEED_TOGGLE", 0
 
+    elif system == "magnetos":
+        positions = {"off": 0, "right": 1, "left": 2, "both": 3, "start": 4}
+        if action in positions:
+            return "MAGNETO_SET", positions[action]
+
+    elif system == "carb_heat":
+        if action in ("on", "off", "toggle"):
+            return "ANTI_ICE_CARB_HEAT_TOGGLE", 0
+
+    elif system == "fuel_pump":
+        if action in ("on", "off", "toggle"):
+            return "FUEL_PUMP_TOGGLE", 0
+
+    elif system == "starter":
+        if action in ("engage", "start"):
+            return "TOGGLE_STARTER1", 0
+
+    elif system == "primer":
+        if action in ("prime", "pump"):
+            return "TOGGLE_PRIMER", 0
+
+    elif system == "lights":
+        if action in ("landing", "landing_on"):
+            return "LANDING_LIGHTS_TOGGLE", 0
+        if action in ("taxi", "taxi_on"):
+            return "TOGGLE_TAXI_LIGHTS", 0
+        if action in ("nav", "navigation"):
+            return "TOGGLE_NAV_LIGHTS", 0
+        if action == "beacon":
+            return "TOGGLE_BEACON_LIGHTS", 0
+        if action == "strobe":
+            return "STROBES_TOGGLE", 0
+        if action == "panel":
+            return "PANEL_LIGHTS_TOGGLE", 0
+
     return None, 0
 
 

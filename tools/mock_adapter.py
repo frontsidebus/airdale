@@ -208,6 +208,26 @@ class MockAircraftState:
         elif cmd == "PANEL_LIGHTS_TOGGLE":
             desc = "Panel lights TOGGLE"
 
+        # --- Fuel Selector ---
+        elif cmd == "FUEL_SELECTOR_OFF":
+            desc = "Fuel selector OFF"
+        elif cmd == "FUEL_SELECTOR_ALL":
+            desc = "Fuel selector ALL"
+        elif cmd == "FUEL_SELECTOR_LEFT":
+            desc = "Fuel selector LEFT"
+        elif cmd == "FUEL_SELECTOR_RIGHT":
+            desc = "Fuel selector RIGHT"
+        elif cmd == "FUEL_SELECTOR_SET":
+            desc = f"Fuel selector SET to position {value}"
+
+        # --- Crossfeed ---
+        elif cmd == "CROSS_FEED_OPEN":
+            desc = "Crossfeed OPEN"
+        elif cmd == "CROSS_FEED_OFF":
+            desc = "Crossfeed CLOSED"
+        elif cmd == "CROSS_FEED_TOGGLE":
+            desc = "Crossfeed TOGGLE"
+
         else:
             desc = f"UNKNOWN: {command}({value})"
 
