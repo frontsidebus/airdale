@@ -66,6 +66,9 @@ logging.getLogger().setLevel(getattr(logging, settings.log_level.upper(), loggin
 # Confidence threshold: transcriptions below this trigger a retry or warning
 _LOW_CONFIDENCE_THRESHOLD = 0.4
 
+# Minimum audio duration (seconds) to bother sending to STT
+_MIN_AUDIO_DURATION_SECS = 0.5
+
 # Brief pause (seconds) after MERLIN finishes speaking before accepting input
 _POST_SPEECH_PAUSE_SECS = 0.3
 
