@@ -466,6 +466,41 @@
     addChatMessage('SYSTEM', text);
   }
 
+  // ── Command status display ────────────────────────────
+
+  function showCommandStatus(msg) {
+    var success = msg.success !== false;
+    var icon = success ? '\u2713' : '\u2717';
+    var label = msg.message || (msg.system + ' ' + msg.action).toUpperCase();
+
+    // Add inline message to chat log
+    var el = document.createElement('div');
+    el.className = 'chat-msg command-status-msg ' + (success ? 'cmd-success' : 'cmd-failure');
+    el.innerHTML =
+      '<span class="timestamp">[' + timestamp() + ']</span> ' +
+      '<span class="cmd-icon">' + icon + '</span> ' +
+      '<span class="cmd-label">' + escapeHtml(label) + '</span>';
+    if (dom.chatMessages) dom.chatMessages.appendChild(el);
+    scrollChatIfNeeded();
+
+    // Show toast notification
+    showCommandToast(icon + ' ' + label, success);
+  }
+
+  function showCommandToast(text, success) {
+    var container = document.getElementById('command-toast-container');
+    if (!container) return;
+    var toast = document.createElement('div');
+    toast.className = 'command-toast ' + (success ? 'toast-success' : 'toast-failure');
+    toast.textContent = text;
+    container.appendChild(toast);
+    // Auto-remove after animation
+    setTimeout(function() {
+      toast.classList.add('toast-fade-out');
+      setTimeout(function() { toast.remove(); }, 400);
+    }, 3000);
+  }
+
   // ── Thinking indicator ─────────────────────────────────
 
   function showThinkingIndicator() {
@@ -793,6 +828,11 @@
           addSystemMessage(`ERROR: ${errText}`);
         }
         setVoiceMode('idle');
+        break;
+
+      case 'command_status':
+        // Aircraft control command executed — show inline status + toast
+        showCommandStatus(msg);
         break;
 
       default:

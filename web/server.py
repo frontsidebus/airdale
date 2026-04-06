@@ -1010,10 +1010,45 @@ async def _stream_response(
                 detected = state.phase_detector.update(current_sim_state)
                 current_sim_state.flight_phase = detected
 
-        async for chunk in state.claude_client.chat(user_text, sim_state=current_sim_state):
+        # Queue for command status messages from tool callbacks.
+        # The callback is synchronous so it cannot await ws.send_json
+        # directly; instead it queues messages we drain after each chunk.
+        command_status_queue: list[dict[str, Any]] = []
+
+        def _on_tool_result(
+            tool_name: str, tool_input: dict[str, Any], tool_result: Any
+        ) -> None:
+            if tool_name != "set_aircraft_control":
+                return
+            system = tool_input.get("system", "unknown")
+            action = tool_input.get("action", "unknown")
+            success = not (isinstance(tool_result, dict) and "error" in tool_result)
+            if success:
+                message = f"{system.upper()} {action.upper()}"
+            else:
+                message = f"{system.upper()} {action.upper()} failed"
+            command_status_queue.append(
+                {
+                    "type": "command_status",
+                    "system": system,
+                    "action": action,
+                    "success": success,
+                    "message": message,
+                }
+            )
+
+        async for chunk in state.claude_client.chat(
+            user_text,
+            sim_state=current_sim_state,
+            on_tool_result=_on_tool_result,
+        ):
             if interrupt.is_set():
                 logger.info("Response interrupted mid-stream")
                 break
+
+            # Drain any queued command status messages before text
+            while command_status_queue:
+                await ws.send_json(command_status_queue.pop(0))
 
             full_response += chunk
             await ws.send_json({"type": "text", "content": chunk})
@@ -1024,6 +1059,10 @@ async def _stream_response(
                 if sent:
                     sentence_buffer = remaining
                     await tts_queue.put(sent)
+
+        # Drain any remaining command status messages after stream ends
+        while command_status_queue:
+            await ws.send_json(command_status_queue.pop(0))
 
         # Flush remaining text to TTS (if not interrupted)
         if tts_enabled and sentence_buffer.strip() and not interrupt.is_set():
