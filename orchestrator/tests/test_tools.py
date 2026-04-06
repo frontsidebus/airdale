@@ -520,6 +520,154 @@ class TestResolveCommand:
     def test_unknown_action(self) -> None:
         assert _resolve_command("flaps", "explode", None) == (None, 0)
 
+    # --- Phase 2: Engine controls ---
+
+    @pytest.mark.parametrize(
+        ("system", "action", "value", "expected_event", "expected_value"),
+        [
+            ("magnetos", "off", None, "MAGNETO_SET", 0),
+            ("magnetos", "both", None, "MAGNETO_SET", 3),
+            ("magnetos", "start", None, "MAGNETO_SET", 4),
+            ("carb_heat", "toggle", None, "ANTI_ICE_CARB_HEAT_TOGGLE", 0),
+            ("fuel_pump", "toggle", None, "FUEL_PUMP_TOGGLE", 0),
+            ("starter", "engage", None, "TOGGLE_STARTER1", 0),
+            ("primer", "prime", None, "TOGGLE_PRIMER", 0),
+        ],
+        ids=[
+            "magnetos-off",
+            "magnetos-both",
+            "magnetos-start",
+            "carb_heat-toggle",
+            "fuel_pump-toggle",
+            "starter-engage",
+            "primer-prime",
+        ],
+    )
+    def test_engine_controls(
+        self,
+        system: str,
+        action: str,
+        value: float | None,
+        expected_event: str,
+        expected_value: int,
+    ) -> None:
+        assert _resolve_command(system, action, value) == (expected_event, expected_value)
+
+    # --- Phase 2: Fuel controls ---
+
+    @pytest.mark.parametrize(
+        ("system", "action", "value", "expected_event", "expected_value"),
+        [
+            ("fuel_selector", "off", None, "FUEL_SELECTOR_OFF", 0),
+            ("fuel_selector", "both", None, "FUEL_SELECTOR_ALL", 0),
+            ("fuel_selector", "left", None, "FUEL_SELECTOR_LEFT", 0),
+            ("crossfeed", "open", None, "CROSS_FEED_OPEN", 0),
+            ("crossfeed", "toggle", None, "CROSS_FEED_TOGGLE", 0),
+        ],
+        ids=[
+            "fuel_selector-off",
+            "fuel_selector-both",
+            "fuel_selector-left",
+            "crossfeed-open",
+            "crossfeed-toggle",
+        ],
+    )
+    def test_fuel_controls(
+        self,
+        system: str,
+        action: str,
+        value: float | None,
+        expected_event: str,
+        expected_value: int,
+    ) -> None:
+        assert _resolve_command(system, action, value) == (expected_event, expected_value)
+
+    # --- Phase 2: Lights ---
+
+    @pytest.mark.parametrize(
+        ("system", "action", "value", "expected_event", "expected_value"),
+        [
+            ("lights", "landing", None, "LANDING_LIGHTS_TOGGLE", 0),
+            ("lights", "taxi", None, "TOGGLE_TAXI_LIGHTS", 0),
+            ("lights", "nav", None, "TOGGLE_NAV_LIGHTS", 0),
+            ("lights", "beacon", None, "TOGGLE_BEACON_LIGHTS", 0),
+            ("lights", "strobe", None, "STROBES_TOGGLE", 0),
+        ],
+        ids=[
+            "lights-landing",
+            "lights-taxi",
+            "lights-nav",
+            "lights-beacon",
+            "lights-strobe",
+        ],
+    )
+    def test_lights(
+        self,
+        system: str,
+        action: str,
+        value: float | None,
+        expected_event: str,
+        expected_value: int,
+    ) -> None:
+        assert _resolve_command(system, action, value) == (expected_event, expected_value)
+
+    # --- Phase 2: Trim expansion ---
+
+    @pytest.mark.parametrize(
+        ("system", "action", "value", "expected_event", "expected_value"),
+        [
+            ("trim", "up", None, "ELEV_TRIM_UP", 0),
+            ("trim", "down", None, "ELEV_TRIM_DN", 0),
+            ("trim", "rudder_left", None, "RUDDER_TRIM_LEFT", 0),
+            ("trim", "rudder_right", None, "RUDDER_TRIM_RIGHT", 0),
+        ],
+        ids=[
+            "trim-up",
+            "trim-down",
+            "trim-rudder_left",
+            "trim-rudder_right",
+        ],
+    )
+    def test_trim_expansion(
+        self,
+        system: str,
+        action: str,
+        value: float | None,
+        expected_event: str,
+        expected_value: int,
+    ) -> None:
+        assert _resolve_command(system, action, value) == (expected_event, expected_value)
+
+    # --- Phase 2: Deice ---
+
+    @pytest.mark.parametrize(
+        ("system", "action", "value", "expected_event", "expected_value"),
+        [
+            ("deice", "pitot", None, "PITOT_HEAT_TOGGLE", 0),
+            ("deice", "structural", None, "TOGGLE_STRUCTURAL_DEICE", 0),
+            ("deice", "windshield", None, "WINDSHIELD_DEICE_TOGGLE", 0),
+        ],
+        ids=[
+            "deice-pitot",
+            "deice-structural",
+            "deice-windshield",
+        ],
+    )
+    def test_deice(
+        self,
+        system: str,
+        action: str,
+        value: float | None,
+        expected_event: str,
+        expected_value: int,
+    ) -> None:
+        assert _resolve_command(system, action, value) == (expected_event, expected_value)
+
+    # --- Phase 2: Unknown commands ---
+
+    def test_unknown_system_returns_none(self) -> None:
+        assert _resolve_command("unknown_system", "action", None) == (None, 0)
+
 
 # ---------------------------------------------------------------------------
 # set_aircraft_control
