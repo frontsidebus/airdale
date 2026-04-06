@@ -24,6 +24,18 @@ fi
 log "Stopping web server..."
 lsof -ti :3838 2>/dev/null | xargs -r kill 2>/dev/null && ok "Web server stopped" || ok "Web server not running"
 
+# Stop mock adapter (if running)
+log "Stopping mock adapter..."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [ -f "$PROJECT_ROOT/logs/mock_adapter.pid" ]; then
+    MOCK_PID=$(cat "$PROJECT_ROOT/logs/mock_adapter.pid")
+    kill "$MOCK_PID" 2>/dev/null && ok "Mock adapter stopped (PID: $MOCK_PID)" || ok "Mock adapter not running"
+    rm -f "$PROJECT_ROOT/logs/mock_adapter.pid"
+else
+    pkill -f "tools/mock_adapter.py" 2>/dev/null && ok "Mock adapter stopped" || ok "Mock adapter not running"
+fi
+
 # Stop MSFS adapter
 log "Stopping MSFS adapter..."
 "/mnt/c/Windows/System32/taskkill.exe" /F /IM SimConnectBridge.exe >/dev/null 2>&1 && ok "Adapter stopped" || ok "Adapter not running"
