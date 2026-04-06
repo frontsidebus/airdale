@@ -38,9 +38,9 @@ def _resolve_command(
                 return "FLAPS_SET", int(value * 16383 / 4)
             return "FLAPS_SET", int(value * 16383 / 100)
         if action in ("up", "retract"):
-            return "FLAPS_UP", 0
+            return "FLAPS_SET", 0  # FLAPS_SET 0 is more reliable than FLAPS_UP
         if action in ("full", "down"):
-            return "FLAPS_FULL", 0
+            return "FLAPS_SET", 16383  # FLAPS_SET max — works on all aircraft (FLAPS_FULL doesn't)
         if action == "1" or action == "10":
             return "FLAPS_1", 0
         if action == "2" or action == "20":
