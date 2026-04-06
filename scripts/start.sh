@@ -10,6 +10,15 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# --- Parse flags ---------------------------------------------------------------
+MOCK_MODE=false
+for arg in "$@"; do
+    case "$arg" in
+        --mock) MOCK_MODE=true ;;
+        *) echo "Unknown option: $arg"; exit 1 ;;
+    esac
+done
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -130,30 +139,61 @@ else
     warn "Skipping Docker services (docker not available)"
 fi
 
-# --- 2. MSFS Adapter (Windows .NET process) ---------------------------------
-log "Starting MSFS adapter..."
+# --- 2. Adapter (real MSFS or mock) ------------------------------------------
+if [ "$MOCK_MODE" = true ]; then
+    log "Starting mock adapter..."
 
-# Kill any existing adapter instances
-"/mnt/c/Windows/System32/taskkill.exe" /F /IM SimConnectBridge.exe >/dev/null 2>&1 || true
-sleep 1
+    # Kill any lingering mock adapter
+    pkill -f "tools/mock_adapter.py" 2>/dev/null || true
+    sleep 1
 
-# Build and start in background
-ADAPTER_DIR="$PROJECT_ROOT/adapters/msfs"
-if [ -d "$ADAPTER_DIR" ]; then
-    cd "$ADAPTER_DIR"
-    "/mnt/c/Program Files/dotnet/dotnet.exe" build --verbosity quiet 2>/dev/null
-    "/mnt/c/Program Files/dotnet/dotnet.exe" run > "$PROJECT_ROOT/logs/adapter.log" 2>&1 &
-    ADAPTER_PID=$!
-    cd "$PROJECT_ROOT"
-
-    sleep 3
-    if kill -0 $ADAPTER_PID 2>/dev/null; then
-        ok "MSFS adapter started (PID: $ADAPTER_PID, log: logs/adapter.log)"
-    else
-        warn "MSFS adapter may have failed — check logs/adapter.log (is MSFS running?)"
+    # Activate venv if available (mock adapter needs websockets)
+    if [ -f "$PROJECT_ROOT/orchestrator/.venv/bin/activate" ]; then
+        source "$PROJECT_ROOT/orchestrator/.venv/bin/activate"
     fi
+
+    python3 "$PROJECT_ROOT/tools/mock_adapter.py" > "$PROJECT_ROOT/logs/mock_adapter.log" 2>&1 &
+    MOCK_PID=$!
+    echo "$MOCK_PID" > "$PROJECT_ROOT/logs/mock_adapter.pid"
+
+    # Wait for the mock adapter to register with the telemetry service
+    log "Waiting for mock adapter to register..."
+    for i in $(seq 1 20); do
+        HEALTH=$(curl -sf http://localhost:8080/api/health 2>/dev/null || echo "")
+        if echo "$HEALTH" | grep -q '"adapters":1'; then
+            ok "Mock adapter registered (PID: $MOCK_PID, log: logs/mock_adapter.log)"
+            break
+        fi
+        if [ "$i" -eq 20 ]; then
+            warn "Mock adapter did not register in time — check logs/mock_adapter.log"
+        fi
+        sleep 1
+    done
 else
-    warn "MSFS adapter directory not found at $ADAPTER_DIR"
+    log "Starting MSFS adapter..."
+
+    # Kill any existing adapter instances
+    "/mnt/c/Windows/System32/taskkill.exe" /F /IM SimConnectBridge.exe >/dev/null 2>&1 || true
+    sleep 1
+
+    # Build and start in background
+    ADAPTER_DIR="$PROJECT_ROOT/adapters/msfs"
+    if [ -d "$ADAPTER_DIR" ]; then
+        cd "$ADAPTER_DIR"
+        "/mnt/c/Program Files/dotnet/dotnet.exe" build --verbosity quiet 2>/dev/null
+        "/mnt/c/Program Files/dotnet/dotnet.exe" run > "$PROJECT_ROOT/logs/adapter.log" 2>&1 &
+        ADAPTER_PID=$!
+        cd "$PROJECT_ROOT"
+
+        sleep 3
+        if kill -0 $ADAPTER_PID 2>/dev/null; then
+            ok "MSFS adapter started (PID: $ADAPTER_PID, log: logs/adapter.log)"
+        else
+            warn "MSFS adapter may have failed — check logs/adapter.log (is MSFS running?)"
+        fi
+    else
+        warn "MSFS adapter directory not found at $ADAPTER_DIR"
+    fi
 fi
 
 # --- 3. Web server (FastAPI) ------------------------------------------------
@@ -187,7 +227,11 @@ done
 # --- Summary ----------------------------------------------------------------
 echo ""
 echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
-echo -e "${CYAN}  MERLIN AI Co-Pilot v2.0 — All Systems Go${NC}"
+if [ "$MOCK_MODE" = true ]; then
+    echo -e "${CYAN}  MERLIN AI Co-Pilot v2.0 — ${YELLOW}MOCK MODE${CYAN}${NC}"
+else
+    echo -e "${CYAN}  MERLIN AI Co-Pilot v2.0 — All Systems Go${NC}"
+fi
 echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
 echo ""
 
@@ -209,7 +253,11 @@ fi
 
 echo ""
 echo -e "  Logs:  tail -f logs/web.log"
-echo -e "         tail -f logs/adapter.log"
+if [ "$MOCK_MODE" = true ]; then
+    echo -e "         tail -f logs/mock_adapter.log"
+else
+    echo -e "         tail -f logs/adapter.log"
+fi
 echo ""
 echo -e "  Stop:  ${CYAN}./scripts/stop.sh${NC}"
 echo ""
