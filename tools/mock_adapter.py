@@ -193,6 +193,21 @@ class MockAircraftState:
             desc = f"Prop → {round(value / 16383 * 100, 1)}%"
         elif cmd == "ELEVATOR_TRIM_SET":
             desc = f"Trim → {value}"
+
+        # --- Lights ---
+        elif cmd == "LANDING_LIGHTS_TOGGLE":
+            desc = "Landing lights TOGGLE"
+        elif cmd == "TOGGLE_TAXI_LIGHTS":
+            desc = "Taxi lights TOGGLE"
+        elif cmd == "TOGGLE_NAV_LIGHTS":
+            desc = "Nav lights TOGGLE"
+        elif cmd == "TOGGLE_BEACON_LIGHTS":
+            desc = "Beacon lights TOGGLE"
+        elif cmd == "STROBES_TOGGLE":
+            desc = "Strobe lights TOGGLE"
+        elif cmd == "PANEL_LIGHTS_TOGGLE":
+            desc = "Panel lights TOGGLE"
+
         else:
             desc = f"UNKNOWN: {command}({value})"
 

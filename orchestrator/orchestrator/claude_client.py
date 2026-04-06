@@ -362,6 +362,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "spoilers",
                         "mixture",
                         "propeller",
+                        "fuel_selector",
+                        "crossfeed",
                     ],
                     "description": "The aircraft system to control",
                 },
@@ -379,7 +381,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "radio: 'com1', 'com2', 'nav1', 'nav2'; "
                         "barometer: 'set'; trim: 'set'; "
                         "spoilers: 'toggle', 'set'; "
-                        "mixture/propeller: 'set'"
+                        "mixture/propeller: 'set'; "
+                        "fuel_selector: 'off', 'all', 'both', 'left', 'right', 'set'; "
+                        "crossfeed: 'open', 'close', 'toggle'"
                     ),
                 },
                 "value": {
