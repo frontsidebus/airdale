@@ -786,7 +786,12 @@
         removeThinkingIndicator();
         finishStreamingMessage();
         const errText = msg.content || msg.text || 'Unknown error';
-        // Show transcription errors with more context
+        // Empty / too-short transcription is not a real error -- silently reset
+        if (errText.toLowerCase().includes('could not transcribe')) {
+          setVoiceMode('idle');
+          break;
+        }
+        // Actual STT backend error (network, API key, etc.) -- warn the user
         if (errText.toLowerCase().includes('transcri')) {
           addSystemMessage(`STT WARNING: ${errText}`);
         } else {

@@ -1010,10 +1010,45 @@ async def _stream_response(
                 detected = state.phase_detector.update(current_sim_state)
                 current_sim_state.flight_phase = detected
 
-        async for chunk in state.claude_client.chat(user_text, sim_state=current_sim_state):
+        # Queue for command status messages from tool callbacks.
+        # The callback is synchronous so it cannot await ws.send_json
+        # directly; instead it queues messages we drain after each chunk.
+        command_status_queue: list[dict[str, Any]] = []
+
+        def _on_tool_result(
+            tool_name: str, tool_input: dict[str, Any], tool_result: Any
+        ) -> None:
+            if tool_name != "set_aircraft_control":
+                return
+            system = tool_input.get("system", "unknown")
+            action = tool_input.get("action", "unknown")
+            success = not (isinstance(tool_result, dict) and "error" in tool_result)
+            if success:
+                message = f"{system.upper()} {action.upper()}"
+            else:
+                message = f"{system.upper()} {action.upper()} failed"
+            command_status_queue.append(
+                {
+                    "type": "command_status",
+                    "system": system,
+                    "action": action,
+                    "success": success,
+                    "message": message,
+                }
+            )
+
+        async for chunk in state.claude_client.chat(
+            user_text,
+            sim_state=current_sim_state,
+            on_tool_result=_on_tool_result,
+        ):
             if interrupt.is_set():
                 logger.info("Response interrupted mid-stream")
                 break
+
+            # Drain any queued command status messages before text
+            while command_status_queue:
+                await ws.send_json(command_status_queue.pop(0))
 
             full_response += chunk
             await ws.send_json({"type": "text", "content": chunk})
@@ -1024,6 +1059,10 @@ async def _stream_response(
                 if sent:
                     sentence_buffer = remaining
                     await tts_queue.put(sent)
+
+        # Drain any remaining command status messages after stream ends
+        while command_status_queue:
+            await ws.send_json(command_status_queue.pop(0))
 
         # Flush remaining text to TTS (if not interrupted)
         if tts_enabled and sentence_buffer.strip() and not interrupt.is_set():
@@ -1176,18 +1215,49 @@ async def _transcribe_with_confidence(
         return "", 0.0
 
 
+def _estimate_wav_duration_secs(wav_bytes: bytes) -> float:
+    """Estimate the duration of a 16-kHz mono 16-bit WAV from its byte length.
+
+    Returns 0.0 for non-WAV or unrecognisable data so callers can fall through.
+    """
+    header_size = 44  # standard WAV header
+    if len(wav_bytes) <= header_size:
+        return 0.0
+    # 16-kHz, mono, 16-bit = 32 000 bytes per second of audio
+    return (len(wav_bytes) - header_size) / 32_000
+
+
 async def _transcribe_audio_bytes_with_confidence(
     audio_bytes: bytes,
     mime_type: str,
     state: AppState,
 ) -> tuple[str, float]:
-    """Transcribe browser audio. Routes to Deepgram (v2) or Whisper (legacy)."""
+    """Transcribe browser audio. Routes to Deepgram (v2) or Whisper (legacy).
+
+    Returns ``("", -1.0)`` when the audio is too short to transcribe (so
+    callers can distinguish "nothing useful" from a real STT error).
+    """
+    needs_conversion = "webm" in mime_type or "ogg" in mime_type
+
+    # Convert to WAV early so we can measure duration for both paths
+    if needs_conversion:
+        audio_bytes = await convert_webm_to_wav_normalized(audio_bytes)
+
+    # --- Minimum duration gate ---
+    duration = _estimate_wav_duration_secs(audio_bytes)
+    logger.info(
+        "Audio for STT: %d bytes, estimated %.2fs (min %.2fs)",
+        len(audio_bytes),
+        duration,
+        _MIN_AUDIO_DURATION_SECS,
+    )
+    if 0 < duration < _MIN_AUDIO_DURATION_SECS:
+        logger.info("Audio too short (%.2fs), discarding", duration)
+        return "", -1.0  # sentinel: too-short, not an error
+
     # --- Deepgram path (v2 default) ---
     if state.deepgram_client is not None:
         try:
-            # Convert webm/ogg to wav for Deepgram
-            if "webm" in mime_type or "ogg" in mime_type:
-                audio_bytes = await convert_webm_to_wav_normalized(audio_bytes)
             result = await state.deepgram_client.transcribe(audio_bytes)
             return result.text, result.confidence
         except Exception as exc:
@@ -1195,7 +1265,8 @@ async def _transcribe_audio_bytes_with_confidence(
             return "", 0.0
 
     # --- Whisper fallback path ---
-    if "webm" in mime_type or "ogg" in mime_type:
+    if needs_conversion:
+        # Already converted above; try with webm metadata hint
         text, confidence = await _transcribe_with_confidence(
             audio_bytes,
             filename="audio.webm",
