@@ -281,6 +281,73 @@ The preprocessor uses ICAO-standard digit pronunciation:
 
 ---
 
+## Command Execution Flow
+
+When the pilot gives a voice command to control the aircraft, the request flows through every layer of the stack before reaching the simulator.
+
+### End-to-End Pipeline
+
+```
+Pilot speaks: "Gear down"
+        |
+Browser Mic -> WebSocket -> Deepgram Nova-3 (streaming STT)
+        |
+   "gear down" (transcript)
+        |
+   Claude API (streaming, with set_aircraft_control tool)
+        |
+   Tool call: set_aircraft_control(system="gear", action="down")
+        |
+   _resolve_command() -> ("GEAR_DOWN", 0)
+        |
+   TelemetryClient.send_command("GEAR_DOWN", 0)
+        |
+   ConsumerCommand -> Telemetry Service (ws://localhost:8080)
+        |
+   ServiceCommand -> Adapter (SimConnect bridge or mock adapter)
+        |
+   SimConnect TransmitClientEvent / mock state update
+        |
+   AdapterCommandAck -> ServiceCommandAck -> tool result
+        |
+   Claude response: "Gear down, three green."
+        |
+   TTS Preprocessor -> Cartesia Sonic-3 -> WebSocket -> Browser AudioContext
+```
+
+### Controllable Systems
+
+The `set_aircraft_control` tool exposes 11 aircraft systems to Claude. The tool translates human-friendly parameters into SimConnect event names and data values.
+
+| System | Example Voice Command | SimConnect Events |
+|---|---|---|
+| flaps | "Give me full flaps" | FLAPS_UP, FLAPS_FULL, FLAPS_1/2/3, FLAPS_SET, FLAPS_INCR/DECR |
+| gear | "Gear down" | GEAR_UP, GEAR_DOWN, GEAR_TOGGLE |
+| autopilot | "Set heading to 270" | AP_MASTER, HEADING_BUG_SET, AP_ALT_VAR_SET_ENGLISH, AP_VS_VAR_SET_ENGLISH, AP_SPD_VAR_SET, AP_HDG_HOLD, AP_ALT_HOLD, AP_VS_HOLD, AP_AIRSPEED_HOLD, AP_NAV1_HOLD, AP_APR_HOLD |
+| throttle | "Throttle to 75 percent" | THROTTLE_SET |
+| radio | "Tune COM1 to 121.5" | COM_RADIO_SET_HZ, COM2_RADIO_SET_HZ, NAV1_RADIO_SET_HZ, NAV2_RADIO_SET_HZ |
+| barometer | "Set altimeter 29.92" | KOHLSMAN_SET |
+| trim | "Trim nose up" | ELEVATOR_TRIM_SET |
+| parking_brake | "Set parking brake" | PARKING_BRAKES |
+| spoilers | "Deploy spoilers" | SPOILERS_TOGGLE, SPOILERS_SET |
+| mixture | "Mixture full rich" | MIXTURE_SET |
+| propeller | "Prop to full forward" | PROP_PITCH_SET |
+
+### How Confirmations Work
+
+Claude is instructed to execute commands immediately when the pilot's order is unambiguous, then respond with a brief aviation-style confirmation. The confirmation flows through the same TTS pipeline as any other response:
+
+1. Claude calls `set_aircraft_control` with the appropriate system, action, and value
+2. The command routes through the telemetry service to the adapter
+3. The adapter executes it (SimConnect event or mock state change) and returns an acknowledgment
+4. Claude receives the tool result and generates a confirmation: "Gear down, three green."
+5. The confirmation text passes through the TTS preprocessor (ICAO digit pronunciation, markdown stripping)
+6. Cartesia Sonic-3 synthesizes the audio and streams it to the browser
+
+Critical system commands (gear, autopilot master, parking brake) are flagged with a `safety_note` in the tool result, which Claude can use to add appropriate emphasis or caution to the confirmation.
+
+---
+
 ## Barge-In / Interruption
 
 MERLIN supports barge-in at every stage of the pipeline. When the pilot sends new audio or text while MERLIN is responding:

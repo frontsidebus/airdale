@@ -164,6 +164,152 @@ class TestTranscriptionResult:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Empty / edge-case transcription handling
+# ---------------------------------------------------------------------------
+
+
+class TestEmptyTranscriptionHandling:
+    """Verify graceful handling of empty or degenerate STT responses."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_empty_transcript_text_returns_empty_string(self) -> None:
+        """Deepgram 200 OK with empty transcript text -> result.text is ''."""
+        respx.post("https://api.deepgram.com/v1/listen").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": {
+                        "channels": [
+                            {
+                                "alternatives": [
+                                    {"transcript": "", "confidence": 0.0}
+                                ]
+                            }
+                        ]
+                    },
+                    "metadata": {"duration": 0.3},
+                },
+            )
+        )
+        client = DeepgramSTTClient(api_key="test-key")
+        result = await client.transcribe(b"silence-audio")
+
+        assert result.text == ""
+        assert result.confidence == 0.0
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_very_short_audio_under_500_bytes(self) -> None:
+        """Audio payload < 500 bytes should still be sent and handled."""
+        short_audio = b"\x00" * 200  # 200 bytes of silence
+        respx.post("https://api.deepgram.com/v1/listen").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": {
+                        "channels": [
+                            {
+                                "alternatives": [
+                                    {"transcript": "", "confidence": 0.0}
+                                ]
+                            }
+                        ]
+                    },
+                    "metadata": {"duration": 0.01},
+                },
+            )
+        )
+        client = DeepgramSTTClient(api_key="test-key")
+        result = await client.transcribe(short_audio)
+
+        assert result.text == ""
+        assert result.is_final is True
+
+    @pytest.mark.asyncio
+    @respx.mock
+    @pytest.mark.xfail(
+        reason="BUG: transcribe() raises IndexError on empty alternatives list — "
+        "needs defensive indexing in deepgram.py:122",
+        raises=IndexError,
+        strict=True,
+    )
+    async def test_200_ok_with_empty_alternatives(self) -> None:
+        """Deepgram 200 OK with empty alternatives list -> empty text."""
+        respx.post("https://api.deepgram.com/v1/listen").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": {
+                        "channels": [{"alternatives": []}]
+                    },
+                    "metadata": {"duration": 0.5},
+                },
+            )
+        )
+        client = DeepgramSTTClient(api_key="test-key")
+        result = await client.transcribe(b"some-audio")
+
+        assert result.text == ""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    @pytest.mark.xfail(
+        reason="BUG: transcribe() raises IndexError on empty channels list — "
+        "needs defensive indexing in deepgram.py:121",
+        raises=IndexError,
+        strict=True,
+    )
+    async def test_200_ok_with_empty_channels(self) -> None:
+        """Deepgram 200 OK with empty channels list -> empty text."""
+        respx.post("https://api.deepgram.com/v1/listen").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": {"channels": []},
+                    "metadata": {"duration": 0.5},
+                },
+            )
+        )
+        client = DeepgramSTTClient(api_key="test-key")
+        result = await client.transcribe(b"audio-data")
+
+        assert result.text == ""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_200_ok_whitespace_only_transcript(self) -> None:
+        """Deepgram returning whitespace-only transcript."""
+        respx.post("https://api.deepgram.com/v1/listen").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": {
+                        "channels": [
+                            {
+                                "alternatives": [
+                                    {"transcript": "   ", "confidence": 0.1}
+                                ]
+                            }
+                        ]
+                    },
+                    "metadata": {"duration": 0.8},
+                },
+            )
+        )
+        client = DeepgramSTTClient(api_key="test-key")
+        result = await client.transcribe(b"audio")
+
+        # The raw text comes through as-is; caller is responsible for stripping
+        assert result.text.strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# Cleanup
+# ---------------------------------------------------------------------------
+
+
 class TestCleanup:
     @pytest.mark.asyncio
     async def test_aclose(self) -> None:
