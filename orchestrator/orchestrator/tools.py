@@ -105,6 +105,32 @@ def _resolve_command(
     elif system == "trim":
         if action == "set" and value is not None:
             return "ELEVATOR_TRIM_SET", int(value)
+        if action in ("up", "nose_up"):
+            return "ELEV_TRIM_UP", 0
+        if action in ("down", "nose_down"):
+            return "ELEV_TRIM_DN", 0
+        if action == "rudder_left":
+            return "RUDDER_TRIM_LEFT", 0
+        if action == "rudder_right":
+            return "RUDDER_TRIM_RIGHT", 0
+        if action == "rudder_set" and value is not None:
+            return "RUDDER_TRIM_SET", int(value)
+        if action == "aileron_left":
+            return "AILERON_TRIM_LEFT", 0
+        if action == "aileron_right":
+            return "AILERON_TRIM_RIGHT", 0
+        if action == "aileron_set" and value is not None:
+            return "AILERON_TRIM_SET", int(value)
+
+    elif system == "deice":
+        if action in ("pitot", "pitot_heat"):
+            return "PITOT_HEAT_TOGGLE", 0
+        if action in ("structural", "airframe"):
+            return "TOGGLE_STRUCTURAL_DEICE", 0
+        if action == "windshield":
+            return "WINDSHIELD_DEICE_TOGGLE", 0
+        if action in ("props", "prop_deice"):
+            return "TOGGLE_PROPELLER_DEICE", 0
 
     elif system == "parking_brake":
         return "PARKING_BRAKES", 0
@@ -122,6 +148,61 @@ def _resolve_command(
     elif system == "propeller":
         if action == "set" and value is not None:
             return "PROP_PITCH_SET", int(value * 16383 / 100)
+
+    elif system == "fuel_selector":
+        if action == "off":
+            return "FUEL_SELECTOR_OFF", 0
+        if action in ("all", "both"):
+            return "FUEL_SELECTOR_ALL", 0
+        if action == "left":
+            return "FUEL_SELECTOR_LEFT", 0
+        if action == "right":
+            return "FUEL_SELECTOR_RIGHT", 0
+        if action == "set" and value is not None:
+            return "FUEL_SELECTOR_SET", int(value)
+
+    elif system == "crossfeed":
+        if action in ("open", "on"):
+            return "CROSS_FEED_OPEN", 0
+        if action in ("close", "off"):
+            return "CROSS_FEED_OFF", 0
+        if action == "toggle":
+            return "CROSS_FEED_TOGGLE", 0
+
+    elif system == "magnetos":
+        positions = {"off": 0, "right": 1, "left": 2, "both": 3, "start": 4}
+        if action in positions:
+            return "MAGNETO_SET", positions[action]
+
+    elif system == "carb_heat":
+        if action in ("on", "off", "toggle"):
+            return "ANTI_ICE_CARB_HEAT_TOGGLE", 0
+
+    elif system == "fuel_pump":
+        if action in ("on", "off", "toggle"):
+            return "FUEL_PUMP_TOGGLE", 0
+
+    elif system == "starter":
+        if action in ("engage", "start"):
+            return "TOGGLE_STARTER1", 0
+
+    elif system == "primer":
+        if action in ("prime", "pump"):
+            return "TOGGLE_PRIMER", 0
+
+    elif system == "lights":
+        if action in ("landing", "landing_on"):
+            return "LANDING_LIGHTS_TOGGLE", 0
+        if action in ("taxi", "taxi_on"):
+            return "TOGGLE_TAXI_LIGHTS", 0
+        if action in ("nav", "navigation"):
+            return "TOGGLE_NAV_LIGHTS", 0
+        if action == "beacon":
+            return "TOGGLE_BEACON_LIGHTS", 0
+        if action == "strobe":
+            return "STROBES_TOGGLE", 0
+        if action == "panel":
+            return "PANEL_LIGHTS_TOGGLE", 0
 
     return None, 0
 

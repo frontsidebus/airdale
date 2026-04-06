@@ -192,7 +192,83 @@ class MockAircraftState:
         elif cmd == "PROP_PITCH_SET":
             desc = f"Prop → {round(value / 16383 * 100, 1)}%"
         elif cmd == "ELEVATOR_TRIM_SET":
-            desc = f"Trim → {value}"
+            desc = f"Elevator trim SET → {value}"
+
+        # --- Lights ---
+        elif cmd == "LANDING_LIGHTS_TOGGLE":
+            desc = "Landing lights TOGGLE"
+        elif cmd == "TOGGLE_TAXI_LIGHTS":
+            desc = "Taxi lights TOGGLE"
+        elif cmd == "TOGGLE_NAV_LIGHTS":
+            desc = "Nav lights TOGGLE"
+        elif cmd == "TOGGLE_BEACON_LIGHTS":
+            desc = "Beacon lights TOGGLE"
+        elif cmd == "STROBES_TOGGLE":
+            desc = "Strobe lights TOGGLE"
+        elif cmd == "PANEL_LIGHTS_TOGGLE":
+            desc = "Panel lights TOGGLE"
+
+        # --- Fuel Selector ---
+        elif cmd == "FUEL_SELECTOR_OFF":
+            desc = "Fuel selector OFF"
+        elif cmd == "FUEL_SELECTOR_ALL":
+            desc = "Fuel selector ALL"
+        elif cmd == "FUEL_SELECTOR_LEFT":
+            desc = "Fuel selector LEFT"
+        elif cmd == "FUEL_SELECTOR_RIGHT":
+            desc = "Fuel selector RIGHT"
+        elif cmd == "FUEL_SELECTOR_SET":
+            desc = f"Fuel selector SET to position {value}"
+
+        # --- Crossfeed ---
+        elif cmd == "CROSS_FEED_OPEN":
+            desc = "Crossfeed OPEN"
+        elif cmd == "CROSS_FEED_OFF":
+            desc = "Crossfeed CLOSED"
+        elif cmd == "CROSS_FEED_TOGGLE":
+            desc = "Crossfeed TOGGLE"
+
+        # --- Engine Management ---
+        elif cmd == "MAGNETO_SET":
+            positions = {0: "OFF", 1: "RIGHT", 2: "LEFT", 3: "BOTH", 4: "START"}
+            desc = f"Magnetos → {positions.get(value, f'UNKNOWN({value})')}"
+        elif cmd == "ANTI_ICE_CARB_HEAT_TOGGLE":
+            desc = "Carb heat TOGGLE"
+        elif cmd == "FUEL_PUMP_TOGGLE":
+            desc = "Fuel pump TOGGLE"
+        elif cmd == "TOGGLE_STARTER1":
+            desc = "Starter ENGAGE"
+        elif cmd == "TOGGLE_PRIMER":
+            desc = "Primer PUMP"
+
+        # --- Trim expansion ---
+        elif cmd == "ELEV_TRIM_UP":
+            desc = "Elevator trim UP"
+        elif cmd == "ELEV_TRIM_DN":
+            desc = "Elevator trim DOWN"
+        elif cmd == "RUDDER_TRIM_LEFT":
+            desc = "Rudder trim LEFT"
+        elif cmd == "RUDDER_TRIM_RIGHT":
+            desc = "Rudder trim RIGHT"
+        elif cmd == "RUDDER_TRIM_SET":
+            desc = f"Rudder trim SET → {value}"
+        elif cmd == "AILERON_TRIM_LEFT":
+            desc = "Aileron trim LEFT"
+        elif cmd == "AILERON_TRIM_RIGHT":
+            desc = "Aileron trim RIGHT"
+        elif cmd == "AILERON_TRIM_SET":
+            desc = f"Aileron trim SET → {value}"
+
+        # --- Deice ---
+        elif cmd == "PITOT_HEAT_TOGGLE":
+            desc = "Pitot heat TOGGLE"
+        elif cmd == "TOGGLE_STRUCTURAL_DEICE":
+            desc = "Structural deice TOGGLE"
+        elif cmd == "WINDSHIELD_DEICE_TOGGLE":
+            desc = "Windshield deice TOGGLE"
+        elif cmd == "TOGGLE_PROPELLER_DEICE":
+            desc = "Propeller deice TOGGLE"
+
         else:
             desc = f"UNKNOWN: {command}({value})"
 

@@ -354,6 +354,162 @@ class TestTelemetryJson:
 
 
 # ---------------------------------------------------------------------------
+# apply_command — Phase 2: engine management
+# ---------------------------------------------------------------------------
+
+
+class TestApplyCommandEngineManagement:
+    def test_magnetos_off(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("MAGNETO_SET", 0)
+        assert "OFF" in desc
+
+    def test_magnetos_both(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("MAGNETO_SET", 3)
+        assert "BOTH" in desc
+
+    def test_magnetos_start(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("MAGNETO_SET", 4)
+        assert "START" in desc
+
+    def test_carb_heat_toggle(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("ANTI_ICE_CARB_HEAT_TOGGLE", 0)
+        assert isinstance(desc, str)
+        assert "arb" in desc.lower() or "TOGGLE" in desc
+
+    def test_fuel_pump_toggle(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("FUEL_PUMP_TOGGLE", 0)
+        assert "uel" in desc.lower() or "pump" in desc.lower()
+
+    def test_starter_engage(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("TOGGLE_STARTER1", 0)
+        assert "tarter" in desc or "ENGAGE" in desc
+
+    def test_primer_pump(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("TOGGLE_PRIMER", 0)
+        assert "rimer" in desc or "PUMP" in desc
+
+
+# ---------------------------------------------------------------------------
+# apply_command — Phase 2: fuel controls
+# ---------------------------------------------------------------------------
+
+
+class TestApplyCommandFuelControls:
+    def test_fuel_selector_off(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("FUEL_SELECTOR_OFF", 0)
+        assert "OFF" in desc
+
+    def test_fuel_selector_all(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("FUEL_SELECTOR_ALL", 0)
+        assert "ALL" in desc
+
+    def test_fuel_selector_left(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("FUEL_SELECTOR_LEFT", 0)
+        assert "LEFT" in desc
+
+    def test_crossfeed_open(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("CROSS_FEED_OPEN", 0)
+        assert "OPEN" in desc
+
+    def test_crossfeed_toggle(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("CROSS_FEED_TOGGLE", 0)
+        assert "TOGGLE" in desc
+
+
+# ---------------------------------------------------------------------------
+# apply_command — Phase 2: lights
+# ---------------------------------------------------------------------------
+
+
+class TestApplyCommandLights:
+    def test_landing_lights_toggle(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("LANDING_LIGHTS_TOGGLE", 0)
+        assert "anding" in desc.lower() or "light" in desc.lower()
+
+    def test_taxi_lights_toggle(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("TOGGLE_TAXI_LIGHTS", 0)
+        assert "axi" in desc.lower() or "light" in desc.lower()
+
+    def test_nav_lights_toggle(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("TOGGLE_NAV_LIGHTS", 0)
+        assert "av" in desc.lower() or "light" in desc.lower()
+
+    def test_beacon_lights_toggle(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("TOGGLE_BEACON_LIGHTS", 0)
+        assert "eacon" in desc.lower() or "light" in desc.lower()
+
+    def test_strobe_lights_toggle(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("STROBES_TOGGLE", 0)
+        assert "trobe" in desc.lower() or "light" in desc.lower()
+
+
+# ---------------------------------------------------------------------------
+# apply_command — Phase 2: trim expansion
+# ---------------------------------------------------------------------------
+
+
+class TestApplyCommandTrimExpansion:
+    def test_elev_trim_up(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("ELEV_TRIM_UP", 0)
+        assert "UP" in desc
+
+    def test_elev_trim_down(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("ELEV_TRIM_DN", 0)
+        assert "DOWN" in desc
+
+    def test_rudder_trim_left(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("RUDDER_TRIM_LEFT", 0)
+        assert "LEFT" in desc
+
+    def test_rudder_trim_right(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("RUDDER_TRIM_RIGHT", 0)
+        assert "RIGHT" in desc
+
+
+# ---------------------------------------------------------------------------
+# apply_command — Phase 2: deice
+# ---------------------------------------------------------------------------
+
+
+class TestApplyCommandDeice:
+    def test_pitot_heat_toggle(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("PITOT_HEAT_TOGGLE", 0)
+        assert "itot" in desc.lower() or "heat" in desc.lower()
+
+    def test_structural_deice_toggle(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("TOGGLE_STRUCTURAL_DEICE", 0)
+        assert "tructural" in desc.lower() or "deice" in desc.lower()
+
+    def test_windshield_deice_toggle(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("WINDSHIELD_DEICE_TOGGLE", 0)
+        assert "indshield" in desc.lower() or "deice" in desc.lower()
+
+
+# ---------------------------------------------------------------------------
 # Command feedback — command_ack message format
 # ---------------------------------------------------------------------------
 
