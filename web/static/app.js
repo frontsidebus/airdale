@@ -1507,20 +1507,20 @@
   let _playbackCtx = null;
   let _playbackGain = null;
   let _compressor = null;
-  const TARGET_RMS = 0.15; // Target RMS level for normalization
+  const TARGET_RMS = 0.35; // Target RMS level for normalization (louder output)
   const SILENCE_THRESHOLD = 0.01; // Samples below this are silence
 
   function getPlaybackContext() {
     if (!_playbackCtx || _playbackCtx.state === 'closed') {
       _playbackCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-      // Gentle dynamics compressor — just tame peaks, don't pump
+      // Limiter only — prevent clipping but don't duck sustained audio
       _compressor = _playbackCtx.createDynamicsCompressor();
-      _compressor.threshold.value = -12;  // dB — only compress loud peaks
-      _compressor.knee.value = 20;        // dB — wide soft knee for transparency
-      _compressor.ratio.value = 3;        // 3:1 — gentle limiting
-      _compressor.attack.value = 0.010;   // 10ms — let transients through naturally
-      _compressor.release.value = 0.250;  // 250ms — smooth release avoids pumping
+      _compressor.threshold.value = -3;   // dB — only catch hard clips
+      _compressor.knee.value = 6;         // dB — narrow knee, transparent
+      _compressor.ratio.value = 20;       // Hard limiter above threshold
+      _compressor.attack.value = 0.001;   // 1ms — catch transients fast
+      _compressor.release.value = 0.050;  // 50ms — release quickly so volume stays up
 
       // Master volume controlled by slider
       _playbackGain = _playbackCtx.createGain();
@@ -1643,8 +1643,8 @@
     const ctx = getPlaybackContext();
     const duration = audioBuffer.duration;
 
-    // Update the master volume from slider
-    _playbackGain.gain.value = state.ttsVolume;
+    // Update the master volume from slider (scale 0-1 → 0-3x for amplification headroom)
+    _playbackGain.gain.value = state.ttsVolume * 3.0;
 
     // Envelope: 3ms fade-in/out — just enough to prevent clicks,
     // short enough to avoid audible volume dips between clips
