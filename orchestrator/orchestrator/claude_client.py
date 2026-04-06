@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
@@ -507,10 +507,16 @@ class ClaudeClient:
         user_message: str,
         sim_state: SimState | None = None,
         image_base64: str | None = None,
+        on_tool_result: Callable[[str, dict[str, Any], Any], None] | None = None,
     ) -> AsyncIterator[str]:
         """Send a message and yield streamed response text chunks.
 
         Handles tool use loops internally, yielding text as it arrives.
+
+        Args:
+            on_tool_result: Optional callback invoked after each tool execution
+                with (tool_name, tool_input, tool_result). Useful for notifying
+                callers about command executions.
         """
         if sim_state is None:
             try:
@@ -632,6 +638,11 @@ class ClaudeClient:
             tool_results: list[dict[str, Any]] = []
             for tb in tool_use_blocks:
                 result = await self._execute_tool(tb["name"], tb["input"], sim_state)
+                if on_tool_result is not None:
+                    try:
+                        on_tool_result(tb["name"], tb["input"], result)
+                    except Exception:
+                        logger.warning("on_tool_result callback failed", exc_info=True)
                 tool_results.append(
                     {
                         "type": "tool_result",

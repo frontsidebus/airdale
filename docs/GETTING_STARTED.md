@@ -157,6 +157,56 @@ The default voice input mode is push-to-talk. Switch between modes:
 
 ---
 
+## Testing Without MSFS (Mock Mode)
+
+You do not need Microsoft Flight Simulator running to test MERLIN. Mock mode replaces the real SimConnect adapter with a Python-based mock that simulates a flying aircraft, streams telemetry, and responds to commands.
+
+### What Mock Mode Does
+
+The mock adapter (`tools/mock_adapter.py`) connects to the telemetry service over WebSocket, registers as an MSFS adapter, and begins streaming simulated telemetry at 2 Hz. It starts with a Cessna 172 at 3,000 ft, 110 kt indicated airspeed, heading 270. When MERLIN sends commands (gear, flaps, autopilot, radios, etc.), the mock adapter applies them to its internal state, logs the action, and sends an acknowledgment back through the telemetry service.
+
+From the orchestrator and web UI perspective, mock mode is indistinguishable from a real MSFS connection. Claude receives telemetry, calls tools, and issues commands exactly as it would in a live flight.
+
+### Starting in Mock Mode
+
+```bash
+./scripts/start.sh --mock
+```
+
+This starts Docker services (ChromaDB, telemetry service), launches the mock adapter instead of the SimConnect bridge, and starts the web server. The banner will display **MOCK MODE** to confirm.
+
+### Verifying Commands Are Working
+
+1. Open the cockpit UI at `http://localhost:3838`
+2. Send a command through MERLIN, for example: "Gear down" or "Set flaps full"
+3. MERLIN calls the `set_aircraft_control` tool, which routes the command through the telemetry service to the mock adapter
+4. Watch the mock adapter log for confirmation:
+
+```bash
+tail -f logs/mock_adapter.log
+```
+
+You will see lines like:
+
+```
+  >>> COMMAND RECEIVED: Gear DOWN  (id: a3b2c1d4)
+  >>> COMMAND RECEIVED: Flaps FULL (100%)  (id: e5f6a7b8)
+```
+
+The mock adapter updates its internal state, so subsequent `get_sim_state` calls reflect the changes (e.g., gear shows DOWN, flaps show 100%).
+
+### Customizing the Mock Adapter
+
+You can start the mock adapter standalone with custom parameters:
+
+```bash
+python tools/mock_adapter.py --aircraft "Boeing 747-8" --altitude 35000 --airspeed 250 --hz 5
+```
+
+See `python tools/mock_adapter.py --help` for all options. This is covered in more detail in the [Testing Guide](TESTING.md).
+
+---
+
 ## Ingesting Flight Manuals
 
 MERLIN's RAG pipeline lets you load aircraft POHs and reference documents so it can answer aircraft-specific questions with real data instead of general knowledge.

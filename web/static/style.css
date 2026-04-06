@@ -530,6 +530,97 @@ html, body {
   letter-spacing: 0.5px;
 }
 
+/* ── Command status messages ─────────────────────────── */
+
+.command-status-msg {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  letter-spacing: 1px;
+  border-left: 2px solid transparent;
+}
+
+.command-status-msg.cmd-success {
+  color: var(--green);
+  border-left-color: var(--green);
+  text-shadow: 0 0 6px var(--green-glow);
+}
+
+.command-status-msg.cmd-failure {
+  color: var(--red);
+  border-left-color: var(--red);
+  text-shadow: 0 0 6px var(--red-glow);
+}
+
+.command-status-msg .cmd-icon {
+  font-size: var(--text-lg);
+}
+
+.command-status-msg .cmd-label {
+  letter-spacing: 2px;
+}
+
+/* ── Command toast notifications ────────────────────── */
+
+#command-toast-container {
+  position: fixed;
+  top: var(--space-xl);
+  right: var(--space-xl);
+  z-index: 10001;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  pointer-events: none;
+}
+
+.command-toast {
+  padding: var(--space-sm) var(--space-lg);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  letter-spacing: 2px;
+  border-radius: 2px;
+  border: 1px solid transparent;
+  animation: toast-slide-in 0.3s ease-out;
+  pointer-events: auto;
+}
+
+.command-toast.toast-success {
+  background: rgba(68, 255, 102, 0.1);
+  border-color: rgba(68, 255, 102, 0.3);
+  color: var(--green);
+  text-shadow: 0 0 8px var(--green-glow);
+  box-shadow: 0 2px 12px rgba(68, 255, 102, 0.15);
+}
+
+.command-toast.toast-failure {
+  background: rgba(255, 68, 68, 0.1);
+  border-color: rgba(255, 68, 68, 0.3);
+  color: var(--red);
+  text-shadow: 0 0 8px var(--red-glow);
+  box-shadow: 0 2px 12px rgba(255, 68, 68, 0.15);
+}
+
+.command-toast.toast-fade-out {
+  opacity: 0;
+  transform: translateX(var(--space-lg));
+  transition: opacity 0.4s, transform 0.4s;
+}
+
+@keyframes toast-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(var(--space-lg));
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 /* ── Thinking indicator ──────────────────────────────── */
 
 .thinking-indicator .thinking-dots::after {
