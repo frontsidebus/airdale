@@ -800,7 +800,75 @@ async def _tts_cartesia_stream(
 
 
 # ---------------------------------------------------------------------------
-# ElevenLabs WebSocket streaming TTS (legacy fallback)
+# ElevenLabs REST per-sentence TTS
+# ---------------------------------------------------------------------------
+
+
+async def _tts_elevenlabs_stream(
+    ws: WebSocket,
+    tts_queue: asyncio.Queue[str | None],
+    interrupt: asyncio.Event,
+    state: AppState,
+) -> None:
+    """Synthesize TTS via ElevenLabs REST, one sentence at a time.
+
+    Produces complete audio per sentence — avoids the garbled playback
+    caused by WebSocket chunk fragmentation in the browser pipeline.
+    """
+    voice_id = state.settings.voice_id
+    model_id = state.settings.elevenlabs_model_id
+    api_key = state.settings.elevenlabs_api_key
+
+    while True:
+        if interrupt.is_set():
+            break
+        try:
+            sentence = await asyncio.wait_for(tts_queue.get(), timeout=0.1)
+        except asyncio.TimeoutError:
+            continue
+        if sentence is None:
+            break
+        if interrupt.is_set():
+            break
+
+        clean_text = preprocess_for_tts(sentence)
+        if not clean_text:
+            continue
+
+        # Check cache
+        if clean_text in state.tts_cache:
+            await ws.send_json({"type": "tts_audio", "size": len(state.tts_cache[clean_text])})
+            await ws.send_bytes(state.tts_cache[clean_text])
+            continue
+
+        try:
+            resp = await state.tts_client.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream",
+                headers={
+                    "xi-api-key": api_key,
+                    "Content-Type": "application/json",
+                    "Accept": "audio/mpeg",
+                },
+                json={
+                    "text": clean_text,
+                    "model_id": model_id,
+                    "voice_settings": {
+                        "stability": state.settings.tts_stability,
+                        "similarity_boost": state.settings.tts_similarity_boost,
+                        "style": state.settings.tts_style,
+                    },
+                },
+            )
+            resp.raise_for_status()
+            if resp.content and not interrupt.is_set():
+                await ws.send_json({"type": "tts_audio", "size": len(resp.content)})
+                await ws.send_bytes(resp.content)
+        except Exception as exc:
+            logger.warning("ElevenLabs TTS failed for chunk: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# ElevenLabs WebSocket streaming TTS (legacy — not used, causes garbled audio)
 # ---------------------------------------------------------------------------
 
 
@@ -987,18 +1055,10 @@ async def _stream_response(
             _tts_cartesia_stream(ws, tts_queue, interrupt, state)
         )
     elif tts_enabled:
-        # ElevenLabs: WebSocket streaming
-        # Pre-warm TLS connection
-        async def _warmup_tts() -> None:
-            try:
-                if state.tts_client is not None:
-                    await state.tts_client.head("https://api.elevenlabs.io/v1/voices")
-            except Exception:
-                pass
-
-        asyncio.create_task(_warmup_tts())
+        # ElevenLabs: REST per-sentence (WS streaming causes garbled audio
+        # from chunk fragmentation in the browser playback pipeline)
         tts_task = asyncio.create_task(
-            _tts_websocket_stream(ws, tts_queue, interrupt, state)
+            _tts_elevenlabs_stream(ws, tts_queue, interrupt, state)
         )
     else:
         tts_task = None
