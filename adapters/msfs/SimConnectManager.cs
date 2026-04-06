@@ -492,13 +492,14 @@ public sealed class SimConnectManager : IDisposable
                 SIMCONNECT_DATA_REQUEST_FLAG.CHANGED,
                 0, 0, 0);
 
-            // Aircraft title — once (doesn't change mid-flight)
+            // Aircraft title — poll every second with CHANGED flag so it
+            // updates when the user switches aircraft without restarting.
             _simConnect?.RequestDataOnSimObject(
                 DataRequestId.AircraftTitle,
                 DataDefinitionId.AircraftTitle,
                 SimConnect.SIMCONNECT_OBJECT_ID_USER,
-                SIMCONNECT_PERIOD.ONCE,
-                SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT,
+                SIMCONNECT_PERIOD.SECOND,
+                SIMCONNECT_DATA_REQUEST_FLAG.CHANGED,
                 0, 0, 0);
 
             // Request an immediate one-shot snapshot of all data so we get
@@ -817,7 +818,7 @@ public sealed class SimConnectManager : IDisposable
         ep.ManifoldPressure = mp;
         ep.FuelFlowGph = ff;
         ep.ExhaustGasTemp = egt;
-        ep.OilTemp = oilTemp;
+        ep.OilTemp = oilTemp - 459.67;  // Convert Rankine → Celsius
         ep.OilPressure = oilPressure;
     }
 

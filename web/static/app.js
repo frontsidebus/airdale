@@ -313,7 +313,9 @@
     flat.heading = att.heading_magnetic != null ? String(Math.round(att.heading_magnetic)).padStart(3, '0') + '°' : '---';
 
     flat.rpm       = e1.rpm != null ? Math.round(e1.rpm) : '---';
-    flat.manifold  = e1.manifold_pressure != null ? e1.manifold_pressure.toFixed(1) + ' inHg' : '---';
+    // Hide manifold pressure for jet/turbine aircraft (MP ≈ 0 or aircraft name matches)
+    const isJet = e1.manifold_pressure != null && e1.manifold_pressure < 1.0;
+    flat.manifold  = isJet ? null : (e1.manifold_pressure != null ? e1.manifold_pressure.toFixed(1) + ' inHg' : '---');
     flat.fuel_flow = e1.fuel_flow_gph != null ? e1.fuel_flow_gph.toFixed(1) + ' gph' : '---';
     flat.oil_temp  = e1.oil_temp != null ? Math.round(e1.oil_temp) + '°C' : '---';
 
@@ -358,6 +360,12 @@
       const el = _telemValueCache.get(key);
       if (!el) continue;
 
+      // Hide field entirely if value is null (e.g., manifold pressure on jets)
+      if (value === null) {
+        el.parentElement.style.display = 'none';
+        continue;
+      }
+      el.parentElement.style.display = '';
       const strVal = String(value ?? '---');
       if (el.textContent !== strVal) {
         el.textContent = strVal;
