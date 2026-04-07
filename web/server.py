@@ -331,6 +331,15 @@ async def index():
     return {"message": "MERLIN web UI -- place index.html in web/static/"}
 
 
+@app.get("/overlay")
+async def overlay():
+    """Serve the compact overlay UI for use on top of the sim."""
+    overlay_path = _STATIC_DIR / "overlay.html"
+    if overlay_path.exists():
+        return FileResponse(str(overlay_path))
+    return {"message": "Overlay UI not found"}
+
+
 @app.get("/api/status")
 async def get_status(state: AppState = Depends(get_app_state)):
     """Return health status of all subsystems."""

@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MERLIN // OVERLAY</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    /* ═══════════════════════════════════════════════════════════
+       OVERLAY MODE — compact, transparent, always-on-top
+       Designed to float over MSFS without blocking the view.
+       ═══════════════════════════════════════════════════════════ */
+
+    :root {
+      --overlay-bg: rgba(5, 10, 18, 0.80);
+      --overlay-border: rgba(0, 255, 136, 0.25);
+      --overlay-text: rgba(0, 255, 136, 0.9);
+      --overlay-dim: rgba(0, 255, 136, 0.4);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: transparent !important;
+      overflow: hidden;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--overlay-text);
+      -webkit-app-region: drag; /* Allow dragging the window */
+    }
+
+    /* Hide the full-app elements we don't need */
+    #scanlines, #vignette { display: none !important; }
+    #header { display: none !important; }
+    #telemetry-panel { display: none !important; }
+
+    #app {
+      background: transparent;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      padding: 0;
+    }
+
+    /* ── Overlay header (minimal) ── */
+    .overlay-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 12px;
+      background: var(--overlay-bg);
+      border-bottom: 1px solid var(--overlay-border);
+      -webkit-app-region: drag;
+      flex-shrink: 0;
+    }
+
+    .overlay-header .header-logo {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--overlay-text);
+      letter-spacing: 2px;
+    }
+
+    .overlay-header .status-leds {
+      display: flex;
+      gap: 8px;
+      -webkit-app-region: no-drag;
+    }
+
+    .overlay-header .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #ff3333;
+    }
+    .overlay-header .status-dot.green { background: #00ff88; box-shadow: 0 0 4px #00ff88; }
+
+    /* ── Chat area ── */
+    #main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: transparent;
+    }
+
+    .terminal-panel#chat-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--overlay-bg);
+      border: none;
+      border-radius: 0;
+      margin: 0;
+    }
+
+    .terminal-panel#chat-panel .terminal-header { display: none; }
+
+    .terminal-panel#chat-panel .terminal-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 12px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--overlay-border) transparent;
+    }
+
+    .chat-messages {
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    /* Make chat messages more compact */
+    .chat-msg { margin-bottom: 6px !important; padding: 4px 8px !important; }
+    .chat-msg .chat-role { font-size: 10px !important; }
+    .chat-msg .chat-text { font-size: 12px !important; }
+    .chat-welcome { font-size: 11px !important; padding: 4px !important; }
+
+    /* Command status inline */
+    .command-status-msg {
+      font-size: 11px !important;
+      padding: 3px 8px !important;
+      margin-bottom: 4px !important;
+    }
+
+    /* ── Input row ── */
+    .chat-input-row {
+      padding: 6px 8px;
+      background: var(--overlay-bg);
+      border-top: 1px solid var(--overlay-border);
+      flex-shrink: 0;
+      -webkit-app-region: no-drag;
+    }
+
+    #chat-input {
+      font-size: 12px;
+      padding: 6px 10px;
+      -webkit-app-region: no-drag;
+    }
+
+    /* ── Footer / voice bar ── */
+    #footer {
+      background: var(--overlay-bg);
+      border-top: 1px solid var(--overlay-border);
+      padding: 6px 8px;
+      flex-shrink: 0;
+      -webkit-app-region: no-drag;
+    }
+
+    .voice-section {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .ptt-button {
+      padding: 4px 10px !important;
+      font-size: 10px !important;
+      -webkit-app-region: no-drag;
+    }
+
+    .ptt-label { display: none; } /* Icon only in overlay */
+
+    .waveform-container {
+      flex: 1;
+      max-height: 30px;
+    }
+
+    #waveform-canvas { height: 30px !important; }
+
+    .voice-status { font-size: 10px; }
+    .voice-status-text { font-size: 10px; }
+
+    .volume-control {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      -webkit-app-region: no-drag;
+    }
+
+    .volume-label { font-size: 9px; }
+    .volume-slider { width: 50px !important; }
+    .volume-pct { font-size: 9px; min-width: 24px; }
+
+    /* ── Toast positioning for overlay ── */
+    #command-toast-container {
+      top: 40px !important;
+      right: 8px !important;
+    }
+
+    .command-toast {
+      font-size: 11px !important;
+      padding: 4px 10px !important;
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--overlay-border); border-radius: 2px; }
+  </style>
+</head>
+<body>
+  <!-- Overlay-specific minimal header -->
+  <div class="overlay-header">
+    <span class="header-logo">MERLIN</span>
+    <div class="status-leds">
+      <span class="status-dot" id="overlay-sim-led" title="SIM"></span>
+      <span class="status-dot" id="overlay-stt-led" title="STT"></span>
+      <span class="status-dot" id="overlay-llm-led" title="LLM"></span>
+    </div>
+  </div>
+
+  <!-- Reuse the same app structure but overlay CSS hides what we don't need -->
+  <div id="app">
+    <header id="header">
+      <!-- Hidden in overlay mode but app.js references these -->
+      <div class="header-left"><span class="header-logo">MERLIN</span></div>
+      <div class="header-right">
+        <div class="conn-quality-indicator" id="conn-quality-group">
+          <span class="conn-quality-led conn-offline" id="conn-quality"></span>
+          <span class="conn-quality-label" id="conn-quality-text">OFFLINE</span>
+        </div>
+        <div class="status-led-group">
+          <div class="status-indicator" id="status-simconnect"><span class="led led-red"></span><span class="status-label">SIM</span></div>
+          <div class="status-indicator" id="status-whisper"><span class="led led-red"></span><span class="status-label">STT</span></div>
+          <div class="status-indicator" id="status-chromadb"><span class="led led-red"></span><span class="status-label">DB</span></div>
+          <div class="status-indicator" id="status-claude"><span class="led led-red"></span><span class="status-label">LLM</span></div>
+        </div>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="terminal-panel" id="telemetry-panel">
+        <div class="terminal-header"><span class="terminal-title">TELEMETRY</span><span class="terminal-led" id="telemetry-led"></span></div>
+        <div class="terminal-content" id="telemetry-content"></div>
+      </section>
+
+      <section class="terminal-panel" id="chat-panel">
+        <div class="terminal-header"><span class="terminal-title">MERLIN</span><span class="terminal-led" id="chat-led"></span></div>
+        <div class="terminal-content" id="chat-content">
+          <div class="chat-messages" id="chat-messages" role="log" aria-live="polite">
+            <div class="chat-welcome" id="chat-welcome">
+              <span class="chat-welcome-callsign">MERLIN OVERLAY</span>
+              <span class="chat-welcome-prompt">Hold SPACE to talk.</span>
+            </div>
+          </div>
+        </div>
+        <div class="chat-input-row">
+          <input type="text" id="chat-input" placeholder="Command... (SPACE = PTT)" autocomplete="off" spellcheck="false">
+        </div>
+      </section>
+    </main>
+
+    <footer id="footer">
+      <div class="voice-section">
+        <button id="ptt-button" class="ptt-button" aria-label="Push to talk">
+          <svg class="mic-icon" viewBox="0 0 24 24" width="20" height="20">
+            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+          </svg>
+        </button>
+        <div class="waveform-container">
+          <canvas id="waveform-canvas" width="300" height="30" role="img"></canvas>
+        </div>
+        <div class="voice-status" id="voice-status" role="status" aria-live="polite">
+          <span class="voice-status-text">IDLE</span>
+        </div>
+        <div class="volume-control">
+          <label class="volume-label" for="tts-volume">VOL</label>
+          <input type="range" id="tts-volume" class="volume-slider" min="0" max="1" step="0.05" value="0.8">
+          <span class="volume-pct" id="volume-pct">80%</span>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <div id="command-toast-container" aria-live="polite"></div>
+  <audio id="tts-audio" preload="none"></audio>
+
+  <script src="/static/app.js"></script>
+  <script>
+    // Overlay status LED sync — mirror the hidden main LEDs to the visible overlay dots
+    (function() {
+      const ledMap = {
+        'status-simconnect': 'overlay-sim-led',
+        'status-whisper': 'overlay-stt-led',
+        'status-claude': 'overlay-llm-led',
+      };
+      const observer = new MutationObserver(() => {
+        for (const [srcId, dstId] of Object.entries(ledMap)) {
+          const srcEl = document.querySelector(`#${srcId} .led`);
+          const dstEl = document.getElementById(dstId);
+          if (srcEl && dstEl) {
+            const isGreen = srcEl.classList.contains('led-green');
+            dstEl.classList.toggle('green', isGreen);
+          }
+        }
+      });
+      // Observe the hidden header for LED class changes
+      const header = document.getElementById('header');
+      if (header) observer.observe(header, { subtree: true, attributes: true, attributeFilter: ['class'] });
+
+      // Hide welcome on first message
+      var chatMessages = document.getElementById('chat-messages');
+      if (chatMessages) {
+        var msgObserver = new MutationObserver(function() {
+          var welcome = document.getElementById('chat-welcome');
+          if (welcome && chatMessages.children.length > 1) {
+            welcome.style.display = 'none';
+            msgObserver.disconnect();
+          }
+        });
+        msgObserver.observe(chatMessages, { childList: true });
+      }
+    })();
+  </script>
+</body>
+</html>
