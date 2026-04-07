@@ -1422,6 +1422,139 @@
     dom.pttButton.addEventListener('touchcancel', pttUp);
   }
 
+  // ── Voice-Activated Mode (VAD) ─────────────────────────
+  //
+  // When enabled, the mic stays open and MERLIN listens continuously.
+  // Speech detection uses RMS energy — when you talk, it starts recording.
+  // When you stop talking (silence for VAD_SILENCE_MS), it sends the audio.
+  // While MERLIN is speaking (TTS playing), the mic is muted to prevent
+  // feedback loops.
+
+  const VAD_SPEECH_THRESHOLD = 0.015;  // RMS level to detect speech
+  const VAD_SILENCE_MS = 1200;         // Silence duration before sending
+  const VAD_MIN_SPEECH_MS = 300;       // Minimum speech duration to send
+
+  let _vadEnabled = localStorage.getItem('merlin_vad_enabled') === 'true';
+  let _vadStream = null;
+  let _vadContext = null;
+  let _vadAnalyser = null;
+  let _vadRecorder = null;
+  let _vadChunks = [];
+  let _vadSpeechStart = 0;
+  let _vadSilenceStart = 0;
+  let _vadIsListening = false;
+  let _vadIsSpeaking = false;  // True when speech detected
+  let _vadPollId = null;
+
+  async function enableVAD() {
+    if (_vadEnabled && _vadIsListening) return;
+    _vadEnabled = true;
+    localStorage.setItem('merlin_vad_enabled', 'true');
+
+    try {
+      if (!_vadStream) {
+        _vadStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+      _vadContext = new (window.AudioContext || window.webkitAudioContext)();
+      const source = _vadContext.createMediaStreamSource(_vadStream);
+      _vadAnalyser = _vadContext.createAnalyser();
+      _vadAnalyser.fftSize = 512;
+      source.connect(_vadAnalyser);
+
+      _vadIsListening = true;
+      setVoiceMode('idle');
+      addSystemMessage('Voice-activated mode ON — just talk, MERLIN is listening.');
+      pollVAD();
+    } catch (err) {
+      addSystemMessage(`Mic error: ${err.message}`);
+      _vadEnabled = false;
+    }
+  }
+
+  function disableVAD() {
+    _vadEnabled = false;
+    _vadIsListening = false;
+    localStorage.setItem('merlin_vad_enabled', 'false');
+    if (_vadPollId) { cancelAnimationFrame(_vadPollId); _vadPollId = null; }
+    if (_vadRecorder && _vadRecorder.state === 'recording') _vadRecorder.stop();
+    if (_vadContext) { _vadContext.close().catch(() => {}); _vadContext = null; }
+    addSystemMessage('Voice-activated mode OFF — use PTT.');
+    setVoiceMode('idle');
+  }
+
+  function toggleVAD() {
+    if (_vadEnabled) disableVAD();
+    else enableVAD();
+  }
+
+  function pollVAD() {
+    if (!_vadIsListening || !_vadAnalyser) return;
+
+    // Don't listen while MERLIN is speaking (prevent feedback)
+    if (state.isPlayingAudio || state.voiceMode === 'speaking') {
+      _vadPollId = requestAnimationFrame(pollVAD);
+      return;
+    }
+
+    const buf = new Float32Array(_vadAnalyser.fftSize);
+    _vadAnalyser.getFloatTimeDomainData(buf);
+    let sumSq = 0;
+    for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
+    const rms = Math.sqrt(sumSq / buf.length);
+
+    const now = Date.now();
+
+    if (rms > VAD_SPEECH_THRESHOLD) {
+      _vadSilenceStart = 0;
+
+      if (!_vadIsSpeaking) {
+        // Speech started
+        _vadIsSpeaking = true;
+        _vadSpeechStart = now;
+        _vadChunks = [];
+
+        // Start recording
+        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus' : 'audio/webm';
+        _vadRecorder = new MediaRecorder(_vadStream, { mimeType });
+        _vadRecorder.addEventListener('dataavailable', (e) => {
+          if (e.data.size > 0) _vadChunks.push(e.data);
+        });
+        _vadRecorder.addEventListener('stop', () => {
+          const duration = Date.now() - _vadSpeechStart;
+          if (duration >= VAD_MIN_SPEECH_MS && _vadChunks.length > 0) {
+            const blob = new Blob(_vadChunks, { type: _vadRecorder.mimeType });
+            if (state.chatWs && state.chatWs.readyState === WebSocket.OPEN) {
+              state.chatWs.send(JSON.stringify({ type: 'audio_start', mime: blob.type }));
+              state.chatWs.send(blob);
+              setVoiceMode('processing');
+            }
+          } else {
+            setVoiceMode('idle');
+          }
+          _vadIsSpeaking = false;
+        });
+
+        _vadRecorder.start(100);
+        setVoiceMode('recording');
+        bargeIn();  // Stop TTS if playing
+      }
+    } else if (_vadIsSpeaking) {
+      // Silence detected while speaking
+      if (_vadSilenceStart === 0) _vadSilenceStart = now;
+
+      if (now - _vadSilenceStart >= VAD_SILENCE_MS) {
+        // Enough silence — stop recording and send
+        if (_vadRecorder && _vadRecorder.state === 'recording') {
+          _vadRecorder.stop();
+        }
+        _vadSilenceStart = 0;
+      }
+    }
+
+    _vadPollId = requestAnimationFrame(pollVAD);
+  }
+
   // ── Configurable PTT (keyboard + gamepad/joystick) ────
   //
   // Keyboard: set via localStorage 'merlin_ptt_key' (default: 'Space')

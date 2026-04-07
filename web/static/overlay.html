@@ -243,7 +243,7 @@
           <div class="chat-messages" id="chat-messages" role="log" aria-live="polite">
             <div class="chat-welcome" id="chat-welcome">
               <span class="chat-welcome-callsign">MERLIN OVERLAY</span>
-              <span class="chat-welcome-prompt">Hold F13 or dbl-click mic to rebind PTT.</span>
+              <span class="chat-welcome-prompt">Click VAD for voice-activated mode, or hold F13 for PTT.</span>
             </div>
           </div>
         </div>
@@ -261,6 +261,7 @@
             <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
           </svg>
         </button>
+        <button id="vad-toggle" class="ptt-button" style="font-size:9px;padding:4px 8px;min-width:32px;" aria-label="Toggle voice activation" onclick="toggleVAD()">VAD</button>
         <div class="waveform-container">
           <canvas id="waveform-canvas" width="300" height="30" role="img"></canvas>
         </div>
