@@ -1422,10 +1422,53 @@
     dom.pttButton.addEventListener('touchcancel', pttUp);
   }
 
-  // ── Spacebar PTT ──────────────────────────────────────
+  // ── Configurable PTT (keyboard + gamepad/joystick) ────
+  //
+  // Keyboard: set via localStorage 'merlin_ptt_key' (default: 'Space')
+  //   To rebind: click "PTT" label in footer → press desired key
+  // Gamepad:  set via localStorage 'merlin_ptt_gamepad_button' (default: none)
+  //   To bind:  click "PTT" label in footer → press joystick/throttle button
+  //
+  // Throttle quadrant buttons show up as gamepad buttons in the browser
+  // via the Gamepad API when MSFS doesn't have exclusive access to them.
 
+  let _pttKeyCode = localStorage.getItem('merlin_ptt_key') || 'Space';
+  let _pttGamepadButton = parseInt(localStorage.getItem('merlin_ptt_gamepad_button') ?? '-1', 10);
+  let _pttBindMode = false;  // True when waiting for user to press new key
+  let _gamepadPttHeld = false;
+
+  function setPttKey(code) {
+    _pttKeyCode = code;
+    localStorage.setItem('merlin_ptt_key', code);
+    console.log(`[MERLIN] PTT key set to: ${code}`);
+  }
+
+  function setPttGamepadButton(index) {
+    _pttGamepadButton = index;
+    localStorage.setItem('merlin_ptt_gamepad_button', String(index));
+    console.log(`[MERLIN] PTT gamepad button set to: ${index}`);
+  }
+
+  // PTT bind mode — click the PTT button label to enter rebind mode
+  function enterPttBindMode() {
+    _pttBindMode = true;
+    const label = dom.pttButton?.querySelector('.ptt-label') || dom.pttButton;
+    if (label) label.textContent = 'PRESS KEY OR BUTTON...';
+    console.log('[MERLIN] PTT bind mode — press any key or gamepad button');
+  }
+
+  // Keyboard PTT
   document.addEventListener('keydown', (e) => {
-    if (e.code === 'Space' && !state.isSpaceHeld && document.activeElement !== dom.chatInput) {
+    if (_pttBindMode) {
+      e.preventDefault();
+      setPttKey(e.code);
+      _pttBindMode = false;
+      const label = dom.pttButton?.querySelector('.ptt-label') || dom.pttButton;
+      if (label) label.textContent = `PTT: ${e.code}`;
+      setTimeout(() => { if (label) label.textContent = 'PUSH TO TALK'; }, 2000);
+      return;
+    }
+    if (e.code === _pttKeyCode && !state.isSpaceHeld && document.activeElement !== dom.chatInput) {
       e.preventDefault();
       state.isSpaceHeld = true;
       startRecording();
@@ -1433,12 +1476,73 @@
   });
 
   document.addEventListener('keyup', (e) => {
-    if (e.code === 'Space' && state.isSpaceHeld) {
+    if (e.code === _pttKeyCode && state.isSpaceHeld) {
       e.preventDefault();
       state.isSpaceHeld = false;
       stopRecording();
     }
   });
+
+  // Gamepad PTT polling (for throttle buttons)
+  let _gamepadPollId = null;
+
+  function pollGamepad() {
+    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (const gp of gamepads) {
+      if (!gp) continue;
+
+      // Bind mode: detect any button press
+      if (_pttBindMode) {
+        for (let i = 0; i < gp.buttons.length; i++) {
+          if (gp.buttons[i].pressed) {
+            setPttGamepadButton(i);
+            _pttBindMode = false;
+            const label = dom.pttButton?.querySelector('.ptt-label') || dom.pttButton;
+            if (label) label.textContent = `PTT: Btn ${i}`;
+            setTimeout(() => { if (label) label.textContent = 'PUSH TO TALK'; }, 2000);
+            return;
+          }
+        }
+        continue;
+      }
+
+      // Normal mode: check configured button
+      if (_pttGamepadButton >= 0 && _pttGamepadButton < gp.buttons.length) {
+        const pressed = gp.buttons[_pttGamepadButton].pressed;
+        if (pressed && !_gamepadPttHeld) {
+          _gamepadPttHeld = true;
+          startRecording();
+        } else if (!pressed && _gamepadPttHeld) {
+          _gamepadPttHeld = false;
+          stopRecording();
+        }
+      }
+    }
+    _gamepadPollId = requestAnimationFrame(pollGamepad);
+  }
+
+  // Start gamepad polling when a gamepad connects
+  window.addEventListener('gamepadconnected', (e) => {
+    console.log(`[MERLIN] Gamepad connected: ${e.gamepad.id} (${e.gamepad.buttons.length} buttons)`);
+    if (!_gamepadPollId) pollGamepad();
+  });
+
+  window.addEventListener('gamepaddisconnected', () => {
+    console.log('[MERLIN] Gamepad disconnected');
+  });
+
+  // Start polling immediately if gamepads already connected
+  if (navigator.getGamepads && Array.from(navigator.getGamepads()).some(g => g)) {
+    pollGamepad();
+  }
+
+  // Double-click PTT button to enter bind mode
+  if (dom.pttButton) {
+    dom.pttButton.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      enterPttBindMode();
+    });
+  }
 
   // ── Keyboard Shortcuts Help ─────────────────────────────
 
