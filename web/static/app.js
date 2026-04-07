@@ -1432,7 +1432,9 @@
   // Throttle quadrant buttons show up as gamepad buttons in the browser
   // via the Gamepad API when MSFS doesn't have exclusive access to them.
 
-  let _pttKeyCode = localStorage.getItem('merlin_ptt_key') || 'Space';
+  // Default to F13 — ideal for throttle mapping (nothing else uses it, MSFS won't intercept)
+  // Users can rebind by double-clicking the PTT button
+  let _pttKeyCode = localStorage.getItem('merlin_ptt_key') || 'F13';
   let _pttGamepadButton = parseInt(localStorage.getItem('merlin_ptt_gamepad_button') ?? '-1', 10);
   let _pttBindMode = false;  // True when waiting for user to press new key
   let _gamepadPttHeld = false;
