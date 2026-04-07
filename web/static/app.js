@@ -1434,7 +1434,9 @@
   const VAD_SILENCE_MS = 1200;         // Silence duration before sending
   const VAD_MIN_SPEECH_MS = 300;       // Minimum speech duration to send
 
-  let _vadEnabled = localStorage.getItem('merlin_vad_enabled') === 'true';
+  // Don't auto-start VAD from localStorage — require explicit click each session
+  // (AudioContext needs user gesture to start on most browsers)
+  let _vadEnabled = false;
   let _vadStream = null;
   let _vadContext = null;
   let _vadAnalyser = null;
@@ -1483,9 +1485,12 @@
   }
 
   function toggleVAD() {
-    if (_vadEnabled) disableVAD();
+    if (_vadEnabled && _vadIsListening) disableVAD();
     else enableVAD();
   }
+
+  // Expose to global scope for inline onclick handlers
+  window.toggleVAD = toggleVAD;
 
   function pollVAD() {
     if (!_vadIsListening || !_vadAnalyser) return;
