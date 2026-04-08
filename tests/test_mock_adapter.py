@@ -514,6 +514,100 @@ class TestApplyCommandDeice:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# apply_command — Phase 3: mixture, propeller, additional trim & deice
+# ---------------------------------------------------------------------------
+
+
+class TestApplyCommandPhase3:
+    """Phase 3 commands used by procedures and command safety."""
+
+    def test_mixture_set_midrange(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("MIXTURE_SET", 8192)
+        assert "50" in desc or "49.9" in desc
+
+    def test_mixture_set_cutoff(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("MIXTURE_SET", 0)
+        assert "0" in desc
+
+    def test_prop_pitch_set_full(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("PROP_PITCH_SET", 16383)
+        assert "100" in desc
+
+    def test_elevator_trim_set(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("ELEVATOR_TRIM_SET", 500)
+        assert "500" in desc
+
+    def test_aileron_trim_left(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("AILERON_TRIM_LEFT", 0)
+        assert "LEFT" in desc
+
+    def test_aileron_trim_right(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("AILERON_TRIM_RIGHT", 0)
+        assert "RIGHT" in desc
+
+    def test_aileron_trim_set(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("AILERON_TRIM_SET", 100)
+        assert "100" in desc
+
+    def test_rudder_trim_set(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("RUDDER_TRIM_SET", 200)
+        assert "200" in desc
+
+    def test_propeller_deice_toggle(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("TOGGLE_PROPELLER_DEICE", 0)
+        assert "ropeller" in desc.lower() or "deice" in desc.lower()
+
+    def test_panel_lights_toggle(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("PANEL_LIGHTS_TOGGLE", 0)
+        assert "anel" in desc.lower() or "light" in desc.lower()
+
+    def test_fuel_selector_right(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("FUEL_SELECTOR_RIGHT", 0)
+        assert "RIGHT" in desc
+
+    def test_fuel_selector_set(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("FUEL_SELECTOR_SET", 2)
+        assert "2" in desc
+
+    def test_parking_brakes(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("PARKING_BRAKES", 0)
+        assert "ark" in desc.lower() or "brake" in desc.lower()
+
+    def test_spoilers_toggle(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("SPOILERS_TOGGLE", 0)
+        assert "poiler" in desc.lower() or "TOGGLE" in desc
+
+    def test_ap_mode_holds(self) -> None:
+        """All AP hold modes should return a valid description."""
+        state = MockAircraftState()
+        for cmd in [
+            "AP_HDG_HOLD", "AP_ALT_HOLD", "AP_VS_HOLD",
+            "AP_AIRSPEED_HOLD", "AP_NAV1_HOLD", "AP_APR_HOLD",
+        ]:
+            desc = state.apply_command(cmd, 0)
+            assert "engaged" in desc.lower()
+
+    def test_crossfeed_closed(self) -> None:
+        state = MockAircraftState()
+        desc = state.apply_command("CROSS_FEED_OFF", 0)
+        assert "CLOSED" in desc or "OFF" in desc
+
+
 class TestCommandAckFormat:
     """Verify the command_ack message structure as used by the mock adapter.
 
