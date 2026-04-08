@@ -10,7 +10,7 @@ MERLIN is a voice-interactive AI co-pilot powered by [Claude](https://www.anthro
 
 ## What MERLIN Can Do
 
-[![Alt Text](https://img.youtube.com/vi/VIDEO_ID/0.jpg)](https://www.youtube.com/watch?v=gc-5tbqGZDU)
+[![MSFS2024-Demo](https://img.youtube.com/vi/gc-5tbqGZDU/0.jpg)](https://www.youtube.com/watch?v=gc-5tbqGZDU)
 
 **Voice-Commanded Aircraft Control** -- Say "gear down" or "give me full flaps" and MERLIN executes immediately. 20 controllable systems, 72+ actions including flaps, gear, autopilot, throttle, lights, magnetos, fuel selector, trim, deice, and more. See [Aircraft Controls Reference](docs/AIRCRAFT_CONTROLS.md).
 
