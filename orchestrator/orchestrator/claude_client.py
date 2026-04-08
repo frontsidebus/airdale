@@ -12,7 +12,10 @@ from typing import Any
 
 import anthropic
 
+from .command_history import CommandHistory
+from .command_verifier import CommandVerifier
 from .context_store import ContextStore
+from .procedures import PROCEDURES, ProcedureExecutor, get_procedure
 from .sim_client import FlightPhase, SimState, TelemetryClient
 from .tools import (
     create_flight_plan,
@@ -21,6 +24,7 @@ from .tools import (
     lookup_airport,
     search_manual,
     set_aircraft_control,
+    undo_last_command,
 )
 
 logger = logging.getLogger(__name__)
@@ -410,6 +414,42 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "required": ["system", "action"],
         },
     },
+    {
+        "name": "execute_procedure",
+        "description": (
+            "Execute a named multi-step procedure that configures multiple aircraft "
+            "systems in sequence. Use when the Captain requests a configuration change "
+            "that involves multiple systems, such as 'configure for landing', 'clean up', "
+            "'go around', or 'shut down'. Available procedures: "
+            + ", ".join(PROCEDURES.keys())
+            + ". Report each step as it executes. If a step fails, report which step "
+            "failed — remaining steps still execute."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "procedure": {
+                    "type": "string",
+                    "description": ("Procedure name. One of: " + ", ".join(PROCEDURES.keys())),
+                },
+            },
+            "required": ["procedure"],
+        },
+    },
+    {
+        "name": "undo_last_command",
+        "description": (
+            "Reverse the last aircraft control command. Use when the Captain says "
+            "'cancel that', 'undo', 'never mind', 'put that back', or similar. "
+            "Reports what was undone. If nothing to undo or the command is not "
+            "reversible, reports that instead."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
 ]
 
 
@@ -450,6 +490,9 @@ class ClaudeClient:
         self._summary_max_tokens = summary_max_tokens
         self._conversation_summary: str = ""
         self._turns_since_summary: int = 0
+        self._command_history = CommandHistory()
+        self._command_verifier = CommandVerifier(sim_client)
+        self._procedure_executor = ProcedureExecutor(sim_client)
 
     def _build_system_prompt(
         self,
@@ -495,9 +538,7 @@ class ClaudeClient:
         )
 
         if self._conversation_summary:
-            dynamic_parts.append(
-                "\n--- FLIGHT SESSION SUMMARY ---\n" + self._conversation_summary
-            )
+            dynamic_parts.append("\n--- FLIGHT SESSION SUMMARY ---\n" + self._conversation_summary)
 
         if context_docs:
             dynamic_parts.append("\n--- RELEVANT REFERENCE MATERIAL ---")
@@ -670,6 +711,8 @@ class ClaudeClient:
         "get_checklist": 5.0,
         "create_flight_plan": 10.0,
         "set_aircraft_control": 5.0,
+        "undo_last_command": 5.0,
+        "execute_procedure": 30.0,
     }
     _DEFAULT_TOOL_TIMEOUT: float = 5.0
 
@@ -720,7 +763,22 @@ class ClaudeClient:
                 args["system"],
                 args["action"],
                 value=args.get("value"),
+                verifier=self._command_verifier,
+                command_history=self._command_history,
             )
+        elif name == "undo_last_command":
+            return await undo_last_command(
+                self._sim_client,
+                self._command_history,
+                verifier=self._command_verifier,
+            )
+        elif name == "execute_procedure":
+            proc = get_procedure(args["procedure"])
+            if proc is None:
+                available = ", ".join(PROCEDURES.keys())
+                return {"error": f"Unknown procedure: {args['procedure']}. Available: {available}"}
+            result = await self._procedure_executor.execute(proc)
+            return result.to_dict()
         else:
             return {"error": f"Unknown tool: {name}"}
 
@@ -728,6 +786,7 @@ class ClaudeClient:
         self._conversation.clear()
         self._conversation_summary = ""
         self._turns_since_summary = 0
+        self._command_history.clear()
 
     async def _maybe_summarize(self) -> None:
         """Generate a rolling summary of old conversation history.
