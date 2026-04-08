@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 import respx
+from orchestrator.command_verifier import CommandVerifier
 from orchestrator.sim_client import (
     EngineData,
     Engines,
@@ -15,6 +16,7 @@ from orchestrator.sim_client import (
     FuelState,
     Position,
     SimState,
+    SurfaceState,
     TelemetryClient,
 )
 from orchestrator.tools import (
@@ -458,7 +460,7 @@ class TestResolveCommand:
     """Test the command resolution from human-friendly names to SimConnect events."""
 
     def test_flaps_up(self) -> None:
-        assert _resolve_command("flaps", "up", None) == ("FLAPS_UP", 0)
+        assert _resolve_command("flaps", "up", None) == ("FLAPS_SET", 0)
 
     def test_flaps_1(self) -> None:
         assert _resolve_command("flaps", "1", None) == ("FLAPS_1", 0)
@@ -470,7 +472,7 @@ class TestResolveCommand:
         assert _resolve_command("flaps", "3", None) == ("FLAPS_3", 0)
 
     def test_flaps_full(self) -> None:
-        assert _resolve_command("flaps", "full", None) == ("FLAPS_FULL", 0)
+        assert _resolve_command("flaps", "full", None) == ("FLAPS_SET", 16383)
 
     def test_flaps_set_percentage(self) -> None:
         event, val = _resolve_command("flaps", "set", 50)
@@ -680,6 +682,7 @@ class TestSetAircraftControl:
     @pytest.mark.asyncio
     async def test_successful_command(self) -> None:
         mock_client = MagicMock(spec=TelemetryClient)
+        mock_client.get_state = AsyncMock(return_value=SimState())
         mock_client.send_command = AsyncMock(return_value={"success": True, "message": ""})
 
         result = await set_aircraft_control(mock_client, "flaps", "2")
@@ -701,6 +704,7 @@ class TestSetAircraftControl:
     @pytest.mark.asyncio
     async def test_critical_command_has_safety_note(self) -> None:
         mock_client = MagicMock(spec=TelemetryClient)
+        mock_client.get_state = AsyncMock(return_value=SimState())
         mock_client.send_command = AsyncMock(return_value={"success": True, "message": ""})
 
         result = await set_aircraft_control(mock_client, "gear", "down")
@@ -711,8 +715,76 @@ class TestSetAircraftControl:
     @pytest.mark.asyncio
     async def test_non_critical_command_no_safety_note(self) -> None:
         mock_client = MagicMock(spec=TelemetryClient)
+        mock_client.get_state = AsyncMock(return_value=SimState())
         mock_client.send_command = AsyncMock(return_value={"success": True, "message": ""})
 
         result = await set_aircraft_control(mock_client, "flaps", "2")
 
         assert "safety_note" not in result
+
+    @pytest.mark.asyncio
+    async def test_with_verifier_adds_verification(self) -> None:
+        mock_client = MagicMock(spec=TelemetryClient)
+        mock_client.send_command = AsyncMock(return_value={"success": True, "message": ""})
+        # get_state called twice: once before command (in set_aircraft_control),
+        # once during verification polling
+        mock_client.get_state = AsyncMock(
+            side_effect=[
+                SimState(surfaces=SurfaceState(gear_handle=False)),  # before
+                SimState(surfaces=SurfaceState(gear_handle=True)),  # after (verification)
+            ]
+        )
+
+        verifier = CommandVerifier(mock_client, timeout=1.0, poll_interval=0.1)
+        result = await set_aircraft_control(
+            mock_client, "gear", "down", verifier=verifier
+        )
+
+        assert result["success"] is True
+        assert "verification" in result
+        assert result["verification"]["verified"] is True
+        assert "verification_warning" not in result
+
+    @pytest.mark.asyncio
+    async def test_with_verifier_failed_verification(self) -> None:
+        mock_client = MagicMock(spec=TelemetryClient)
+        mock_client.send_command = AsyncMock(return_value={"success": True, "message": ""})
+        # Gear never extends
+        mock_client.get_state = AsyncMock(
+            return_value=SimState(surfaces=SurfaceState(gear_handle=False))
+        )
+
+        verifier = CommandVerifier(mock_client, timeout=0.3, poll_interval=0.1)
+        result = await set_aircraft_control(
+            mock_client, "gear", "down", verifier=verifier
+        )
+
+        assert "verification" in result
+        assert result["verification"]["verified"] is False
+        assert "verification_warning" in result
+
+    @pytest.mark.asyncio
+    async def test_without_verifier_no_verification(self) -> None:
+        mock_client = MagicMock(spec=TelemetryClient)
+        mock_client.send_command = AsyncMock(return_value={"success": True, "message": ""})
+
+        result = await set_aircraft_control(mock_client, "gear", "down")
+
+        assert "verification" not in result
+
+    @pytest.mark.asyncio
+    async def test_verifier_skipped_on_failed_command(self) -> None:
+        mock_client = MagicMock(spec=TelemetryClient)
+        mock_client.send_command = AsyncMock(
+            return_value={"success": False, "message": "SimConnect error"}
+        )
+        mock_client.get_state = AsyncMock(
+            return_value=SimState(surfaces=SurfaceState(gear_handle=False))
+        )
+
+        verifier = CommandVerifier(mock_client, timeout=1.0, poll_interval=0.1)
+        result = await set_aircraft_control(
+            mock_client, "gear", "down", verifier=verifier
+        )
+
+        assert "verification" not in result

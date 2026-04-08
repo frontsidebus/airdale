@@ -7,8 +7,14 @@ from typing import Any
 
 import httpx
 
+from .command_history import CommandHistory
+from .command_safety import CommandSafetyCheck
+from .command_verifier import CommandVerifier, VerificationResult
 from .context_store import ContextStore
-from .sim_client import FlightPhase, TelemetryClient
+from .sim_client import FlightPhase, SimState, TelemetryClient
+
+# Shared safety checker instance (uses default rules)
+_safety_check = CommandSafetyCheck()
 
 # ---------------------------------------------------------------------------
 # Aircraft control commands
@@ -212,20 +218,93 @@ async def set_aircraft_control(
     system: str,
     action: str,
     value: float | None = None,
+    verifier: CommandVerifier | None = None,
+    safety_check: CommandSafetyCheck | None = None,
+    command_history: CommandHistory | None = None,
 ) -> dict[str, Any]:
-    """Execute a sim control command via the telemetry service."""
+    """Execute a sim control command via the telemetry service.
+
+    Runs a pre-execution safety check against current telemetry. If the
+    check returns ``blocked``, the command is rejected immediately. If it
+    returns ``warning``, the command executes but the warning is included
+    in the result for Claude to relay to the pilot.
+
+    If a *verifier* is provided, captures the sim state before execution
+    and polls telemetry afterward to confirm the command took effect.
+
+    If a *command_history* is provided, the command is recorded with a
+    pre-execution state snapshot so it can be undone later.
+    """
     command, sim_value = _resolve_command(system, action, value)
 
     if command is None:
         return {"error": f"Unknown control: system={system}, action={action}"}
+
+    # --- Pre-execution safety check ---
+    checker = safety_check or _safety_check
+    safety_result = None
+    try:
+        sim_state = await sim_client.get_state()
+    except ConnectionError:
+        sim_state = None
+
+    if sim_state is not None:
+        aircraft_type = sim_state.aircraft or ""
+        safety_result = checker.check(command, sim_value, sim_state, aircraft_type)
+
+        if safety_result.severity == "blocked":
+            logger.warning("Command %s BLOCKED: %s", command, safety_result.reason)
+            return {
+                "error": safety_result.reason,
+                "command": command,
+                "blocked": True,
+                "severity": "blocked",
+            }
+
+    # Capture pre-command state for verification and undo
+    state_before = sim_state
+    if state_before is None and (verifier is not None or command_history is not None):
+        try:
+            state_before = await sim_client.get_state()
+        except ConnectionError:
+            pass
 
     result = await sim_client.send_command(command, sim_value)
     logger.info("Command result for %s: %s", command, result)
     result["command"] = command
     result["sim_value"] = sim_value
 
+    # Record in command history for undo support
+    if command_history is not None and result.get("success"):
+        command_history.record(
+            command=command,
+            value=sim_value,
+            system=system,
+            action=action,
+            state_before=state_before or SimState(),
+        )
+
+    # Attach safety warning if the command was allowed with caveats
+    if safety_result is not None and safety_result.severity == "warning":
+        result["safety_warning"] = safety_result.reason
+
     if command in CRITICAL_COMMANDS:
         result["safety_note"] = "Critical system change executed"
+
+    # Verify the command took effect if verifier is available and command succeeded
+    if verifier is not None and state_before is not None and result.get("success"):
+        verification = await verifier.verify_command(command, sim_value, state_before)
+        result["verification"] = {
+            "verified": verification.verified,
+            "expected": verification.expected,
+            "actual": verification.actual,
+            "message": verification.message,
+        }
+        if not verification.verified:
+            result["verification_warning"] = (
+                f"Warning: {verification.message} The aircraft may not have responded to the "
+                f"{command} command."
+            )
 
     return result
 
@@ -508,3 +587,50 @@ async def create_flight_plan(
         "status": "draft",
         "notes": "This is a draft plan. Verify airways, altitudes, and NOTAMs before use.",
     }
+
+
+async def undo_last_command(
+    sim_client: TelemetryClient,
+    command_history: CommandHistory,
+    verifier: CommandVerifier | None = None,
+    safety_check: CommandSafetyCheck | None = None,
+) -> dict[str, Any]:
+    """Reverse the last aircraft control command.
+
+    Looks up the most recent command in the history, determines the undo
+    action, executes it, and removes the command from the history stack.
+
+    Returns a dict describing what was undone (or an error if nothing to undo).
+    """
+    if len(command_history) == 0:
+        return {"error": "No commands to undo"}
+
+    undo_action = command_history.get_undo_action()
+    if undo_action is None:
+        last = command_history.last_command
+        cmd_name = last.command if last else "unknown"
+        return {"error": f"Cannot undo {cmd_name} — command is not reversible"}
+
+    system, action, value = undo_action
+    last = command_history.pop_last()
+    original_command = last.command if last else "unknown"
+
+    logger.info("Undoing command %s -> %s/%s/%s", original_command, system, action, value)
+
+    result = await set_aircraft_control(
+        sim_client,
+        system,
+        action,
+        value=value,
+        verifier=verifier,
+        safety_check=safety_check,
+        # Do not record the undo itself in history
+        command_history=None,
+    )
+
+    result["undone_command"] = original_command
+    result["undo_description"] = f"Reversed {original_command}: {system} {action}"
+    if value is not None:
+        result["undo_description"] += f" {value}"
+
+    return result
