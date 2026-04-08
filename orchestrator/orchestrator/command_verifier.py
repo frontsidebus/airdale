@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
 
 from .sim_client import SimState, TelemetryClient
 
@@ -234,7 +234,9 @@ class CommandVerifier:
 
         # Timed out — return the last check result (or a timeout result)
         if last_result is not None:
-            last_result.message = f"Verification timed out after {self._timeout}s: {last_result.message}"
+            last_result.message = (
+                f"Verification timed out after {self._timeout}s: {last_result.message}"
+            )
             logger.warning("Command %s verification timed out: %s", command, last_result.message)
             return last_result
 

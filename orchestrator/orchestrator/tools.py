@@ -216,6 +216,7 @@ async def set_aircraft_control(
     system: str,
     action: str,
     value: float | None = None,
+    verifier: CommandVerifier | None = None,
     command_history: CommandHistory | None = None,
     safety_check: CommandSafetyCheck | None = None,
 ) -> dict[str, Any]:
@@ -225,6 +226,9 @@ async def set_aircraft_control(
     check returns ``blocked``, the command is rejected immediately.  If it
     returns ``warning``, the command executes but the warning is included
     in the result for Claude to relay to the pilot.
+
+    If a *verifier* is provided, polls telemetry after execution to confirm
+    the command took effect.
 
     If a *command_history* is provided, the command is recorded with a
     pre-execution state snapshot so it can be undone later.
@@ -279,6 +283,21 @@ async def set_aircraft_control(
 
     if command in CRITICAL_COMMANDS:
         result["safety_note"] = "Critical system change executed"
+
+    # Verify the command took effect if verifier is available and command succeeded
+    if verifier is not None and state_before is not None and result.get("success"):
+        verification = await verifier.verify_command(command, sim_value, state_before)
+        result["verification"] = {
+            "verified": verification.verified,
+            "expected": verification.expected,
+            "actual": verification.actual,
+            "message": verification.message,
+        }
+        if not verification.verified:
+            result["verification_warning"] = (
+                f"Warning: {verification.message} The aircraft may not have responded "
+                f"to the {command} command."
+            )
 
     return result
 

@@ -13,6 +13,7 @@ from typing import Any
 import anthropic
 
 from .command_history import CommandHistory
+from .command_verifier import CommandVerifier
 from .context_store import ContextStore
 from .sim_client import FlightPhase, SimState, TelemetryClient
 from .tools import (
@@ -467,6 +468,7 @@ class ClaudeClient:
         self._conversation_summary: str = ""
         self._turns_since_summary: int = 0
         self._command_history = CommandHistory()
+        self._command_verifier = CommandVerifier(sim_client)
 
     def _build_system_prompt(
         self,
@@ -736,6 +738,7 @@ class ClaudeClient:
                 args["system"],
                 args["action"],
                 value=args.get("value"),
+                verifier=self._command_verifier,
                 command_history=self._command_history,
             )
         elif name == "undo_last_command":
