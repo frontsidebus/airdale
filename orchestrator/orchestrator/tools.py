@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
@@ -12,6 +13,8 @@ from .command_safety import CommandSafetyCheck
 from .command_verifier import CommandVerifier
 from .context_store import ContextStore
 from .sim_client import FlightPhase, SimState, TelemetryClient
+
+logger = logging.getLogger(__name__)
 
 # Shared safety checker instance (uses default rules)
 _safety_check = CommandSafetyCheck()
@@ -217,18 +220,18 @@ async def set_aircraft_control(
     action: str,
     value: float | None = None,
     verifier: CommandVerifier | None = None,
-    command_history: CommandHistory | None = None,
     safety_check: CommandSafetyCheck | None = None,
+    command_history: CommandHistory | None = None,
 ) -> dict[str, Any]:
     """Execute a sim control command via the telemetry service.
 
-    Runs a pre-execution safety check against current telemetry.  If the
-    check returns ``blocked``, the command is rejected immediately.  If it
+    Runs a pre-execution safety check against current telemetry. If the
+    check returns ``blocked``, the command is rejected immediately. If it
     returns ``warning``, the command executes but the warning is included
     in the result for Claude to relay to the pilot.
 
-    If a *verifier* is provided, polls telemetry after execution to confirm
-    the command took effect.
+    If a *verifier* is provided, captures the sim state before execution
+    and polls telemetry afterward to confirm the command took effect.
 
     If a *command_history* is provided, the command is recorded with a
     pre-execution state snapshot so it can be undone later.
@@ -259,8 +262,11 @@ async def set_aircraft_control(
                 "severity": "blocked",
             }
 
-    # Use the state we already fetched for undo support
+    # Capture pre-command state for verification and undo
     state_before = sim_state
+    if state_before is None and (verifier is not None or command_history is not None):
+        with contextlib.suppress(ConnectionError):
+            state_before = await sim_client.get_state()
 
     result = await sim_client.send_command(command, sim_value)
     logger.info("Command result for %s: %s", command, result)
@@ -295,57 +301,12 @@ async def set_aircraft_control(
         }
         if not verification.verified:
             result["verification_warning"] = (
-                f"Warning: {verification.message} The aircraft may not have responded "
-                f"to the {command} command."
+                f"Warning: {verification.message} The aircraft may not have responded to the "
+                f"{command} command."
             )
 
     return result
 
-
-async def undo_last_command(
-    sim_client: TelemetryClient,
-    command_history: CommandHistory,
-) -> dict[str, Any]:
-    """Reverse the last aircraft control command.
-
-    Looks up the most recent command in the history, determines the undo
-    action, executes it, and removes the command from the history stack.
-
-    Returns a dict describing what was undone (or an error if nothing to undo).
-    """
-    if len(command_history) == 0:
-        return {"error": "No commands to undo"}
-
-    undo_action = command_history.get_undo_action()
-    if undo_action is None:
-        last = command_history.last_command
-        cmd_name = last.command if last else "unknown"
-        return {"error": f"Cannot undo {cmd_name} — command is not reversible"}
-
-    system, action, value = undo_action
-    last = command_history.pop_last()
-    original_command = last.command if last else "unknown"
-
-    logger.info("Undoing command %s -> %s/%s/%s", original_command, system, action, value)
-
-    result = await set_aircraft_control(
-        sim_client,
-        system,
-        action,
-        value=value,
-        # Do not record the undo itself in history
-        command_history=None,
-    )
-
-    result["undone_command"] = original_command
-    result["undo_description"] = f"Reversed {original_command}: {system} {action}"
-    if value is not None:
-        result["undo_description"] += f" {value}"
-
-    return result
-
-
-logger = logging.getLogger(__name__)
 
 # Phase-appropriate checklists (simplified defaults; real ones come from the context store)
 DEFAULT_CHECKLISTS: dict[FlightPhase, list[str]] = {
@@ -624,3 +585,50 @@ async def create_flight_plan(
         "status": "draft",
         "notes": "This is a draft plan. Verify airways, altitudes, and NOTAMs before use.",
     }
+
+
+async def undo_last_command(
+    sim_client: TelemetryClient,
+    command_history: CommandHistory,
+    verifier: CommandVerifier | None = None,
+    safety_check: CommandSafetyCheck | None = None,
+) -> dict[str, Any]:
+    """Reverse the last aircraft control command.
+
+    Looks up the most recent command in the history, determines the undo
+    action, executes it, and removes the command from the history stack.
+
+    Returns a dict describing what was undone (or an error if nothing to undo).
+    """
+    if len(command_history) == 0:
+        return {"error": "No commands to undo"}
+
+    undo_action = command_history.get_undo_action()
+    if undo_action is None:
+        last = command_history.last_command
+        cmd_name = last.command if last else "unknown"
+        return {"error": f"Cannot undo {cmd_name} — command is not reversible"}
+
+    system, action, value = undo_action
+    last = command_history.pop_last()
+    original_command = last.command if last else "unknown"
+
+    logger.info("Undoing command %s -> %s/%s/%s", original_command, system, action, value)
+
+    result = await set_aircraft_control(
+        sim_client,
+        system,
+        action,
+        value=value,
+        verifier=verifier,
+        safety_check=safety_check,
+        # Do not record the undo itself in history
+        command_history=None,
+    )
+
+    result["undone_command"] = original_command
+    result["undo_description"] = f"Reversed {original_command}: {system} {action}"
+    if value is not None:
+        result["undo_description"] += f" {value}"
+
+    return result
