@@ -2,9 +2,13 @@
 
 The safety validation layer protects against two categories of risk: **time-critical emergencies** where LLM latency is unacceptable, and **numerical hallucinations** where Claude might state an incorrect V-speed, altitude, or frequency. Both operate independently of the LLM inference pipeline.
 
+The safety layer works in concert with the [Proactive Co-Pilot](PROACTIVE_COPILOT.md) system. Proactive monitoring (callouts, deviation alerts, checklist automation) provides continuous situational awareness, while the safety layer handles the most time-critical scenarios where LLM latency is unacceptable and numerical accuracy is non-negotiable.
+
 Source files:
 - `orchestrator/orchestrator/emergency.py` -- Emergency detection and fast-path responses
 - `orchestrator/orchestrator/validation.py` -- Response validation and telemetry sanity checks
+- `orchestrator/orchestrator/callouts.py` -- Proactive callout engine (warning callouts feed the safety layer)
+- `orchestrator/orchestrator/deviation_monitor.py` -- Deviation monitoring (warning-severity alerts)
 
 ---
 

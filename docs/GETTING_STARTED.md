@@ -343,6 +343,34 @@ Screen capture works best when running the orchestrator natively on Windows (not
 
 ---
 
+## Phase 4: Proactive Co-Pilot
+
+MERLIN now speaks first. The proactive monitoring system generates callouts, alerts, and checklist offers based on live telemetry -- no pilot input required for these features.
+
+### What Happens Automatically
+
+- **Takeoff callouts**: V1, Rotate, Positive Rate, Gear Up as you accelerate down the runway
+- **Altitude callouts**: Passing through each 1000 ft during climb, approach gates (1000/500/minimums/100/50/30/10 ft)
+- **Warning callouts**: Overspeed, bank angle, and sink rate alerts fire in any flight phase
+- **Deviation monitoring**: MERLIN warns about high approach speed, gear not down, altitude busts, stall proximity, and more
+- **Checklist offers**: When you transition to a new flight phase (e.g., taxi to takeoff), MERLIN offers the appropriate checklist
+
+### Checklist Voice Commands
+
+When MERLIN offers a checklist and you accept, use these voice commands to work through it:
+
+| Say This | What Happens |
+|---|---|
+| "Next" or "Check" | Marks the current item complete and reads the next one |
+| "Skip" | Skips the current item without completing it |
+| "Complete checklist" | Ends the session and reports a summary |
+
+### Emergency Auto-Response
+
+If MERLIN detects an emergency condition from telemetry (engine failure, fire, rapid decompression), it delivers immediate action items via TTS without waiting for the LLM. See [Proactive Co-Pilot](PROACTIVE_COPILOT.md) for the full feature reference and [Safety](SAFETY.md) for the detection pipeline.
+
+---
+
 ## What's New in v2
 
 - **Streaming voice pipeline** — Deepgram Nova-3 STT + Cartesia Sonic-3 TTS (~90ms TTFB), replacing batch Whisper + ElevenLabs
