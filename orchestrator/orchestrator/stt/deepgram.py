@@ -14,6 +14,7 @@ Supports:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -27,14 +28,47 @@ logger = logging.getLogger(__name__)
 
 # Aviation keywords for Deepgram's keyword boosting
 _AVIATION_KEYWORDS = [
-    "ATIS", "METAR", "TAF", "ILS", "VOR", "NDB", "DME", "GPS",
-    "RNAV", "SID", "STAR", "squawk", "altimeter", "QNH",
-    "roger", "wilco", "affirmative", "mayday", "pan-pan",
-    "heading", "altitude", "airspeed", "vertical speed",
-    "flaps", "gear", "trim", "throttle", "mixture",
-    "Cessna", "Boeing", "Airbus", "Piper",
-    "MERLIN", "Captain", "go-around", "missed approach",
-    "V1", "VR", "V2", "rotate", "positive rate",
+    "ATIS",
+    "METAR",
+    "TAF",
+    "ILS",
+    "VOR",
+    "NDB",
+    "DME",
+    "GPS",
+    "RNAV",
+    "SID",
+    "STAR",
+    "squawk",
+    "altimeter",
+    "QNH",
+    "roger",
+    "wilco",
+    "affirmative",
+    "mayday",
+    "pan-pan",
+    "heading",
+    "altitude",
+    "airspeed",
+    "vertical speed",
+    "flaps",
+    "gear",
+    "trim",
+    "throttle",
+    "mixture",
+    "Cessna",
+    "Boeing",
+    "Airbus",
+    "Piper",
+    "MERLIN",
+    "Captain",
+    "go-around",
+    "missed approach",
+    "V1",
+    "VR",
+    "V2",
+    "rotate",
+    "positive rate",
 ]
 
 
@@ -222,9 +256,7 @@ class DeepgramSTTClient:
 
                 try:
                     while True:
-                        result = await asyncio.wait_for(
-                            result_queue.get(), timeout=30.0
-                        )
+                        result = await asyncio.wait_for(result_queue.get(), timeout=30.0)
                         if result is None:
                             break
                         yield result
@@ -237,10 +269,8 @@ class DeepgramSTTClient:
                 for task in (send_task, recv_task):
                     if not task.done():
                         task.cancel()
-                        try:
+                        with contextlib.suppress(asyncio.CancelledError, Exception):
                             await task
-                        except (asyncio.CancelledError, Exception):
-                            pass
 
         except Exception as exc:
             logger.warning("Deepgram streaming failed: %s", exc)

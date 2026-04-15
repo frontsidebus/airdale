@@ -15,7 +15,6 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
-import pytest
 from httpx_ws import aconnect_ws
 from httpx_ws.transport import ASGIWebSocketTransport
 
@@ -125,7 +124,11 @@ async def test_chat_text_round_trip(test_app, mock_app_state):
                 ws, stop_types={"done", "error"}, min_dones=1, timeout=5.0
             )
 
-    text_chunks = [m["content"] for m in messages if isinstance(m, dict) and m.get("type") == "text"]
+    text_chunks = [
+        m["content"]
+        for m in messages
+        if isinstance(m, dict) and m.get("type") == "text"
+    ]
     assert "".join(text_chunks) == "Roger that."
     assert any(isinstance(m, dict) and m.get("type") == "done" for m in messages)
 
@@ -247,7 +250,9 @@ async def test_chat_with_tts_streaming(test_app, mock_app_state):
         for i, m in enumerate(messages)
         if isinstance(m, dict) and m.get("type") == "tts_audio"
     ]
-    assert tts_header_indices, f"expected at least one tts_audio header in {[type(m).__name__ for m in messages]}"
+    assert tts_header_indices, (
+        f"expected at least one tts_audio header in {[type(m).__name__ for m in messages]}"
+    )
 
     header_idx = tts_header_indices[0]
     header = messages[header_idx]

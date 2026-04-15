@@ -10,6 +10,7 @@ Satisfies the TTSClient protocol.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -104,9 +105,7 @@ class CartesiaClient:
         }
 
         try:
-            async with self._http.stream(
-                "POST", _REST_URL, headers=headers, json=payload
-            ) as resp:
+            async with self._http.stream("POST", _REST_URL, headers=headers, json=payload) as resp:
                 resp.raise_for_status()
                 async for chunk in resp.aiter_bytes(chunk_size=4096):
                     yield chunk
@@ -152,9 +151,7 @@ class CartesiaClient:
                                     if audio_data:
                                         import base64
 
-                                        await audio_queue.put(
-                                            base64.b64decode(audio_data)
-                                        )
+                                        await audio_queue.put(base64.b64decode(audio_data))
                                 elif data.get("type") == "done":
                                     break
                             elif isinstance(msg, bytes):
@@ -186,49 +183,51 @@ class CartesiaClient:
                             buffer = buffer[last_boundary + 1 :]
                             if sentence:
                                 await ws.send(
-                                    json.dumps({
-                                        "context_id": context_id,
-                                        "model_id": self._model_id,
-                                        "transcript": sentence,
-                                        "voice": {
-                                            "mode": "id",
-                                            "id": self._voice_id,
-                                        },
-                                        "output_format": {
-                                            "container": "raw",
-                                            "encoding": self._output_format,
-                                            "sample_rate": self._sample_rate,
-                                        },
-                                        "language": self._language,
-                                        "continue": True,
-                                    })
+                                    json.dumps(
+                                        {
+                                            "context_id": context_id,
+                                            "model_id": self._model_id,
+                                            "transcript": sentence,
+                                            "voice": {
+                                                "mode": "id",
+                                                "id": self._voice_id,
+                                            },
+                                            "output_format": {
+                                                "container": "raw",
+                                                "encoding": self._output_format,
+                                                "sample_rate": self._sample_rate,
+                                            },
+                                            "language": self._language,
+                                            "continue": True,
+                                        }
+                                    )
                                 )
 
                     # Flush remaining text
                     if buffer.strip():
                         await ws.send(
-                            json.dumps({
-                                "context_id": context_id,
-                                "model_id": self._model_id,
-                                "transcript": buffer.strip(),
-                                "voice": {"mode": "id", "id": self._voice_id},
-                                "output_format": {
-                                    "container": "raw",
-                                    "encoding": self._output_format,
-                                    "sample_rate": self._sample_rate,
-                                },
-                                "language": self._language,
-                                "continue": False,
-                            })
+                            json.dumps(
+                                {
+                                    "context_id": context_id,
+                                    "model_id": self._model_id,
+                                    "transcript": buffer.strip(),
+                                    "voice": {"mode": "id", "id": self._voice_id},
+                                    "output_format": {
+                                        "container": "raw",
+                                        "encoding": self._output_format,
+                                        "sample_rate": self._sample_rate,
+                                    },
+                                    "language": self._language,
+                                    "continue": False,
+                                }
+                            )
                         )
                 except Exception as exc:
                     logger.debug("Cartesia WS send error: %s", exc)
 
                 # Yield audio as it arrives
                 while True:
-                    audio = await asyncio.wait_for(
-                        audio_queue.get(), timeout=30.0
-                    )
+                    audio = await asyncio.wait_for(audio_queue.get(), timeout=30.0)
                     if audio is None:
                         break
                     yield audio
@@ -236,10 +235,8 @@ class CartesiaClient:
                 # Clean up
                 if not recv_task.done():
                     recv_task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
                         await recv_task
-                    except (asyncio.CancelledError, Exception):
-                        pass
 
         except Exception as exc:
             logger.warning("Cartesia WebSocket streaming failed: %s", exc)

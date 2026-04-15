@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+
 from orchestrator.audio_processing import AVIATION_PROMPT
 from orchestrator.whisper_client import (
     _DEFAULT_MODEL,

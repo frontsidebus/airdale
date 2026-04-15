@@ -7,6 +7,7 @@ SimConnect bridge) and receives telemetry state broadcasts.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -330,17 +331,13 @@ class TelemetryClient:
         self._auto_reconnect = False  # prevent reconnect during shutdown
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._heartbeat_task
-            except asyncio.CancelledError:
-                pass
             self._heartbeat_task = None
         if self._listen_task:
             self._listen_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._listen_task
-            except asyncio.CancelledError:
-                pass
             self._listen_task = None
         if self._ws:
             await self._ws.close()
@@ -375,13 +372,15 @@ class TelemetryClient:
         future: asyncio.Future[dict[str, Any]] = loop.create_future()
         self._pending_commands[command_id] = future
 
-        msg = json.dumps({
-            "type": "command",
-            "command_id": command_id,
-            "adapter_id": adapter_id,
-            "command": command,
-            "value": value,
-        })
+        msg = json.dumps(
+            {
+                "type": "command",
+                "command_id": command_id,
+                "adapter_id": adapter_id,
+                "command": command,
+                "value": value,
+            }
+        )
 
         try:
             await self._ws.send(msg)
@@ -522,10 +521,12 @@ class TelemetryClient:
                             cmd_id = data.get("command_id", "")
                             future = self._pending_commands.pop(cmd_id, None)
                             if future and not future.done():
-                                future.set_result({
-                                    "success": data.get("success", False),
-                                    "message": data.get("message", ""),
-                                })
+                                future.set_result(
+                                    {
+                                        "success": data.get("success", False),
+                                        "message": data.get("message", ""),
+                                    }
+                                )
                         elif "type" in data:
                             # Informational response (e.g. state_response).
                             logger.debug(

@@ -68,9 +68,7 @@ class TestChecklistPreservation:
 
     def test_procedure_steps_preserved(self) -> None:
         procedure = (
-            "Step 1: Check fuel quantity\n"
-            "Step 2: Verify oil level\n"
-            "Step 3: Check flight controls\n"
+            "Step 1: Check fuel quantity\nStep 2: Verify oil level\nStep 3: Check flight controls\n"
         )
         chunker = AviationChunker(max_chunk_chars=2000)
         chunks = chunker.chunk(procedure)

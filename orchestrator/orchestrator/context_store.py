@@ -149,9 +149,7 @@ class ContextStore:
                 metadata={"hnsw:space": "cosine"},
             )
             self._available = True
-            logger.info(
-                "Connected to ChromaDB at %s (collection: merlin_docs)", chromadb_url
-            )
+            logger.info("Connected to ChromaDB at %s (collection: merlin_docs)", chromadb_url)
         except Exception as exc:
             logger.warning(
                 "ChromaDB unavailable at %s (%s); context store disabled. "
@@ -275,9 +273,7 @@ class ContextStore:
 
             # Stage 1: Retrieve more candidates than needed for re-ranking
             retrieve_count = (
-                self._retrieve_k
-                if self._reranker and self._reranker.available
-                else n_results
+                self._retrieve_k if self._reranker and self._reranker.available else n_results
             )
 
             results = self._collection.query(

@@ -162,7 +162,9 @@ async def _prepopulate_tts_cache(state: AppState) -> None:
             )
             resp.raise_for_status()
             state.tts_cache[sanitized] = resp.content
-            logger.info("Cached TTS phrase: '%s' (%d bytes)", sanitized, len(resp.content))
+            logger.info(
+                "Cached TTS phrase: '%s' (%d bytes)", sanitized, len(resp.content)
+            )
         except Exception as exc:
             logger.debug("Failed to cache TTS phrase '%s': %s", sanitized, exc)
 
@@ -364,10 +366,14 @@ async def get_status(state: AppState = Depends(get_app_state)):
     return {
         "sim_connected": bridge_ok,
         "chromadb_available": chromadb_ok,
-        "chromadb_documents": (state.context_store.document_count if state.context_store else 0),
+        "chromadb_documents": (
+            state.context_store.document_count if state.context_store else 0
+        ),
         "stt_backend": stt_backend,
         "stt_available": (
-            state.deepgram_client is not None if stt_backend == "deepgram" else whisper_ok
+            state.deepgram_client is not None
+            if stt_backend == "deepgram"
+            else whisper_ok
         ),
         "tts_backend": tts_backend,
         "tts_available": (
@@ -434,7 +440,9 @@ async def transcribe_audio(file: UploadFile, state: AppState = Depends(get_app_s
         if not text and confidence == 0.0:
             logger.info("Direct webm transcription failed, falling back to ffmpeg")
             audio_bytes = await convert_webm_to_wav_normalized(audio_bytes)
-            text, confidence = await _transcribe_with_confidence(audio_bytes, state=state)
+            text, confidence = await _transcribe_with_confidence(
+                audio_bytes, state=state
+            )
     else:
         text, confidence = await _transcribe_with_confidence(audio_bytes, state=state)
 
@@ -556,7 +564,9 @@ async def ws_telemetry(ws: WebSocket, state: AppState = Depends(get_ws_app_state
                     )
                     # Bridge WS is open, but don't claim sim is connected
                     # until we receive data with connected=true from the bridge
-                    await ws.send_json({"type": "telemetry", "connected": False, "data": None})
+                    await ws.send_json(
+                        {"type": "telemetry", "connected": False, "data": None}
+                    )
 
                     async for raw_msg in bridge_ws:
                         try:
@@ -584,7 +594,9 @@ async def ws_telemetry(ws: WebSocket, state: AppState = Depends(get_ws_app_state
                             pass
 
             except (ConnectionRefusedError, OSError, Exception) as exc:
-                logger.debug("Telemetry service not available (%s), retrying in 3s", exc)
+                logger.debug(
+                    "Telemetry service not available (%s), retrying in 3s", exc
+                )
                 await ws.send_json(
                     {
                         "type": "telemetry",
@@ -794,7 +806,9 @@ async def _tts_cartesia_stream(
 
         # Check cache
         if clean_text in state.tts_cache:
-            await ws.send_json({"type": "tts_audio", "size": len(state.tts_cache[clean_text])})
+            await ws.send_json(
+                {"type": "tts_audio", "size": len(state.tts_cache[clean_text])}
+            )
             await ws.send_bytes(state.tts_cache[clean_text])
             continue
 
@@ -846,7 +860,9 @@ async def _tts_elevenlabs_stream(
 
         # Check cache
         if clean_text in state.tts_cache:
-            await ws.send_json({"type": "tts_audio", "size": len(state.tts_cache[clean_text])})
+            await ws.send_json(
+                {"type": "tts_audio", "size": len(state.tts_cache[clean_text])}
+            )
             await ws.send_bytes(state.tts_cache[clean_text])
             continue
 
@@ -1009,7 +1025,9 @@ async def _tts_websocket_stream(
                 recv_task.cancel()
 
     except Exception as exc:
-        logger.warning("ElevenLabs WebSocket TTS failed (%s), falling back to REST", exc)
+        logger.warning(
+            "ElevenLabs WebSocket TTS failed (%s), falling back to REST", exc
+        )
         # Fallback: drain the queue and use REST-based TTS
         await _tts_rest_fallback(ws, tts_queue, interrupt, state)
 
@@ -1280,7 +1298,9 @@ async def _transcribe_with_confidence(
             filename=filename,
             mime_type=mime_type,
         )
-        logger.info("Transcribed (confidence=%.2f): %s", result.confidence, result.text[:80])
+        logger.info(
+            "Transcribed (confidence=%.2f): %s", result.confidence, result.text[:80]
+        )
         return result.text, result.confidence
     except Exception as exc:
         logger.error("Whisper transcription failed: %s", exc)
