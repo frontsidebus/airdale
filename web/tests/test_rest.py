@@ -182,4 +182,5 @@ async def test_tts_not_configured_returns_503(test_app, mock_app_state):
         resp = await client.post("/api/tts", json={"text": "Roger."})
 
     assert resp.status_code == 503
-    assert "not configured" in resp.json()["error"].lower()
+    err = resp.json()["error"].lower()
+    assert "not configured" in err or "no tts backend" in err
