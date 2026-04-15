@@ -12,12 +12,12 @@ MERLIN v1.2 consolidates technical debt accumulated during rapid v1.0/v1.1 devel
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Housekeeping** - Independent bug fixes, config cleanup, and dependency pinning to establish a clean baseline
-- [ ] **Phase 2: TTS Integration** - Wire existing TTS abstraction into all consumers with streaming support and unified config
-- [ ] **Phase 3: Whisper Consolidation** - Replace three divergent transcription implementations with single async client
-- [ ] **Phase 4: Web Server Refactor** - Replace module-level globals with proper DI to make the web server testable
-- [ ] **Phase 5: Web Server Tests** - Add test coverage for all critical web server paths
-- [ ] **Phase 6: CI/CD Pipeline** - Automate lint, test, build, and Docker verification on every PR
+- [x] **Phase 1: Housekeeping** - Independent bug fixes, config cleanup, and dependency pinning to establish a clean baseline
+- [x] **Phase 2: TTS Integration** - Wire existing TTS abstraction into all consumers with streaming support and unified config
+- [x] **Phase 3: Whisper Consolidation** - Replace three divergent transcription implementations with single async client
+- [x] **Phase 4: Web Server Refactor** - Replace module-level globals with proper DI to make the web server testable
+- [x] **Phase 5: Web Server Tests** - Add test coverage for all critical web server paths
+- [x] **Phase 6: CI/CD Pipeline** - Automate lint, test, build, and Docker verification on every PR
 
 ## Phase Details
 
@@ -78,7 +78,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 04-01-PLAN.md — Define AppState dataclass, refactor lifespan, wire all handlers with Depends(get_app_state)
-- [ ] 04-02-PLAN.md — Smoke test and human verification of full web UI functionality
+- [x] 04-02-PLAN.md — Smoke test and human verification of full web UI functionality
 **UI hint**: yes
 
 ### Phase 5: Web Server Tests
@@ -94,7 +94,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 05-01-PLAN.md — Test infrastructure (conftest, pytest config) and REST endpoint tests (status, transcribe, TTS cache)
-- [ ] 05-02-PLAN.md — WebSocket tests (chat round-trip, barge-in, TTS streaming, telemetry proxy)
+- [x] 05-02-PLAN.md — WebSocket tests (chat round-trip, barge-in, TTS streaming, telemetry proxy)
 
 ### Phase 6: CI/CD Pipeline
 **Goal**: Every PR automatically runs lint, tests, and Docker build verification -- regressions are caught before merge, not during flight
