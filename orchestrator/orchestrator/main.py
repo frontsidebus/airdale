@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import logging
 import signal
 from typing import Any
@@ -425,13 +426,12 @@ async def async_main() -> None:
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
+        # Windows doesn't support add_signal_handler
+        with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(
                 sig,
                 lambda: asyncio.create_task(orchestrator.stop()),
             )
-        except NotImplementedError:
-            pass  # Windows doesn't support add_signal_handler
 
     try:
         await orchestrator.start()

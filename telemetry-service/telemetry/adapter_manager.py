@@ -198,18 +198,14 @@ class AdapterManager:
         )
         return True
 
-    async def route_command_ack(
-        self, command_id: str, success: bool, message: str = ""
-    ) -> None:
+    async def route_command_ack(self, command_id: str, success: bool, message: str = "") -> None:
         """Forward a command ack back to the consumer that sent the command."""
         consumer_ws = self._pending_commands.pop(command_id, None)
         if consumer_ws is None:
             logger.warning("Ack for unknown command_id: %s", command_id[:8])
             return
 
-        ack = ServiceCommandAck(
-            command_id=command_id, success=success, message=message
-        )
+        ack = ServiceCommandAck(command_id=command_id, success=success, message=message)
         try:
             await consumer_ws.send_text(ack.model_dump_json())
         except Exception:

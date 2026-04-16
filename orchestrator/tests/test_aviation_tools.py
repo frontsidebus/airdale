@@ -5,7 +5,6 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
-
 from orchestrator.aviation_tools import (
     _bearing_deg,
     _haversine_nm,
@@ -169,7 +168,8 @@ class TestGetAdsbTraffic:
                             "abc123",  # icao24
                             "UAL123 ",  # callsign
                             "US",  # origin
-                            None, None,
+                            None,
+                            None,
                             -73.9,  # lon
                             40.7,  # lat
                             3048,  # baro alt (m)
@@ -177,7 +177,10 @@ class TestGetAdsbTraffic:
                             120,  # velocity (m/s)
                             90,  # heading
                             5,  # vertical_rate (m/s)
-                            None, None, None, None,
+                            None,
+                            None,
+                            None,
+                            None,
                         ]
                     ]
                 },

@@ -575,9 +575,7 @@ class TestToolExecution:
             new_callable=AsyncMock,
             return_value=[],
         ) as mock_fn:
-            result = await claude_client._execute_tool(
-                "search_manual", {"query": "V-speeds"}, state
-            )
+            await claude_client._execute_tool("search_manual", {"query": "V-speeds"}, state)
             mock_fn.assert_awaited_once()
             call_kwargs = mock_fn.call_args
             assert call_kwargs[0][0] == "V-speeds"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from typing import Any
@@ -84,7 +85,7 @@ class TestSimStateParsing:
         assert state.flight_phase == FlightPhase.APPROACH
 
     def test_parse_invalid_flight_phase_raises(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 - any pydantic validation error
             SimState.model_validate({"flight_phase": "HOVERING"})
 
     def test_radios_defaults(self) -> None:
@@ -414,10 +415,8 @@ class TestReconnection:
         client._auto_reconnect = False
         if client._heartbeat_task:
             client._heartbeat_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await client._heartbeat_task
-            except asyncio.CancelledError:
-                pass
 
     @pytest.mark.asyncio
     async def test_reconnect_disabled_does_nothing(self) -> None:
@@ -457,10 +456,8 @@ class TestReconnection:
         client._auto_reconnect = False
         if client._heartbeat_task:
             client._heartbeat_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await client._heartbeat_task
-            except asyncio.CancelledError:
-                pass
 
     @pytest.mark.asyncio
     async def test_listen_loop_triggers_reconnect_on_close(
@@ -504,10 +501,8 @@ class TestReconnection:
             await asyncio.sleep(0.1)
             client._auto_reconnect = False
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
 
         # Should have attempted at least one reconnect
         assert client._reconnect_count >= 1

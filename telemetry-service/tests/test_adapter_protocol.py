@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
-
 from telemetry.adapter_protocol import (
     AdapterCommandAck,
     ConsumerCommand,
     ServiceCommand,
-    ServiceCommandAck,
     parse_adapter_message,
     parse_consumer_message,
 )

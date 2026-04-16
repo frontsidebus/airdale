@@ -5,7 +5,6 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
-
 from orchestrator.stt.deepgram import _AVIATION_KEYWORDS, DeepgramSTTClient
 
 # ---------------------------------------------------------------------------
@@ -112,9 +111,7 @@ class TestBatchTranscription:
     @pytest.mark.asyncio
     @respx.mock
     async def test_api_error(self) -> None:
-        respx.post("https://api.deepgram.com/v1/listen").mock(
-            return_value=httpx.Response(401)
-        )
+        respx.post("https://api.deepgram.com/v1/listen").mock(return_value=httpx.Response(401))
         client = DeepgramSTTClient(api_key="bad-key")
         result = await client.transcribe(b"audio")
 
@@ -181,13 +178,7 @@ class TestEmptyTranscriptionHandling:
                 200,
                 json={
                     "results": {
-                        "channels": [
-                            {
-                                "alternatives": [
-                                    {"transcript": "", "confidence": 0.0}
-                                ]
-                            }
-                        ]
+                        "channels": [{"alternatives": [{"transcript": "", "confidence": 0.0}]}]
                     },
                     "metadata": {"duration": 0.3},
                 },
@@ -209,13 +200,7 @@ class TestEmptyTranscriptionHandling:
                 200,
                 json={
                     "results": {
-                        "channels": [
-                            {
-                                "alternatives": [
-                                    {"transcript": "", "confidence": 0.0}
-                                ]
-                            }
-                        ]
+                        "channels": [{"alternatives": [{"transcript": "", "confidence": 0.0}]}]
                     },
                     "metadata": {"duration": 0.01},
                 },
@@ -241,9 +226,7 @@ class TestEmptyTranscriptionHandling:
             return_value=httpx.Response(
                 200,
                 json={
-                    "results": {
-                        "channels": [{"alternatives": []}]
-                    },
+                    "results": {"channels": [{"alternatives": []}]},
                     "metadata": {"duration": 0.5},
                 },
             )
@@ -286,13 +269,7 @@ class TestEmptyTranscriptionHandling:
                 200,
                 json={
                     "results": {
-                        "channels": [
-                            {
-                                "alternatives": [
-                                    {"transcript": "   ", "confidence": 0.1}
-                                ]
-                            }
-                        ]
+                        "channels": [{"alternatives": [{"transcript": "   ", "confidence": 0.1}]}]
                     },
                     "metadata": {"duration": 0.8},
                 },

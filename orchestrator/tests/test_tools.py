@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 import respx
-
 from orchestrator.command_verifier import CommandVerifier
 from orchestrator.sim_client import (
     EngineData,
@@ -500,7 +499,8 @@ class TestResolveCommand:
         assert _resolve_command("autopilot", "altitude", 5000) == ("AP_ALT_VAR_SET_ENGLISH", 5000)
 
     def test_autopilot_vs(self) -> None:
-        assert _resolve_command("autopilot", "vertical_speed", -500) == ("AP_VS_VAR_SET_ENGLISH", -500)
+        result = _resolve_command("autopilot", "vertical_speed", -500)
+        assert result == ("AP_VS_VAR_SET_ENGLISH", -500)
 
     def test_throttle_set(self) -> None:
         event, val = _resolve_command("throttle", "set", 75)
@@ -736,9 +736,7 @@ class TestSetAircraftControl:
         )
 
         verifier = CommandVerifier(mock_client, timeout=1.0, poll_interval=0.1)
-        result = await set_aircraft_control(
-            mock_client, "gear", "down", verifier=verifier
-        )
+        result = await set_aircraft_control(mock_client, "gear", "down", verifier=verifier)
 
         assert result["success"] is True
         assert "verification" in result
@@ -755,9 +753,7 @@ class TestSetAircraftControl:
         )
 
         verifier = CommandVerifier(mock_client, timeout=0.3, poll_interval=0.1)
-        result = await set_aircraft_control(
-            mock_client, "gear", "down", verifier=verifier
-        )
+        result = await set_aircraft_control(mock_client, "gear", "down", verifier=verifier)
 
         assert "verification" in result
         assert result["verification"]["verified"] is False
@@ -784,8 +780,6 @@ class TestSetAircraftControl:
         )
 
         verifier = CommandVerifier(mock_client, timeout=1.0, poll_interval=0.1)
-        result = await set_aircraft_control(
-            mock_client, "gear", "down", verifier=verifier
-        )
+        result = await set_aircraft_control(mock_client, "gear", "down", verifier=verifier)
 
         assert "verification" not in result

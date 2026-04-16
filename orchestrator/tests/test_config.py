@@ -120,7 +120,7 @@ class TestSettingsValidation:
         # Clear all potentially set env vars
         for key in ("ANTHROPIC_API_KEY",):
             monkeypatch.delenv(key, raising=False)
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 - any pydantic validation error is acceptable
             Settings()
 
     def test_screen_capture_enabled_parses_true(

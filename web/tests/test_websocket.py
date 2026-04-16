@@ -47,7 +47,7 @@ async def test_chat_text_message_streams_response(test_app, mock_app_state):
     """Sending a text message via /ws/chat streams Claude response back."""
 
     # Mock Claude client to yield chunks
-    async def mock_chat(text, sim_state=None):
+    async def mock_chat(text, sim_state=None, on_tool_result=None):
         yield "Roger"
         yield " that."
 
@@ -141,7 +141,7 @@ async def test_chat_interrupt_message(test_app, mock_app_state):
             await ws.send_text(json.dumps({"type": "interrupt"}))
 
             # Send a normal message to verify connection still works
-            async def mock_chat(text, sim_state=None):
+            async def mock_chat(text, sim_state=None, on_tool_result=None):
                 yield "Still here."
 
             mock_app_state.claude_client.chat = mock_chat
@@ -164,16 +164,17 @@ async def test_chat_interrupt_message(test_app, mock_app_state):
     assert len(text_msgs) >= 1
 
 
-async def test_chat_audio_start_marker(test_app, mock_app_state):
+async def test_chat_audio_start_marker(test_app, mock_app_state, monkeypatch):
     """Sending audio_start sets pending mime and waits for binary data."""
     mock_app_state.settings.elevenlabs_api_key = ""
     mock_app_state.settings.voice_id = ""
 
-    mock_app_state.whisper_client.transcribe_with_confidence.return_value = (
-        _FakeTranscriptionResult(text="check heading", confidence=0.90)
-    )
+    async def fake_transcribe(audio_bytes, mime_type, state):
+        return "check heading", 0.90
 
-    async def mock_chat(text, sim_state=None):
+    monkeypatch.setattr("web.server._transcribe_audio_bytes_with_confidence", fake_transcribe)
+
+    async def mock_chat(text, sim_state=None, on_tool_result=None):
         yield "Heading two seven zero."
 
     mock_app_state.claude_client.chat = mock_chat
@@ -252,7 +253,7 @@ async def test_chat_claude_error_sends_error_message(test_app, mock_app_state):
     mock_app_state.settings.voice_id = ""
     mock_app_state.sim_connected = False
 
-    async def mock_chat_error(text, sim_state=None):
+    async def mock_chat_error(text, sim_state=None, on_tool_result=None):
         yield "Starting..."
         raise RuntimeError("API rate limit exceeded")
 

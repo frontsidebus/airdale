@@ -57,9 +57,11 @@ class TestStartStop:
     @pytest.mark.asyncio
     async def test_start_without_mss_disables(self) -> None:
         cm = CaptureManager(enabled=True)
-        with patch.dict("sys.modules", {"mss": None}):
-            with patch("builtins.__import__", side_effect=ImportError("no mss")):
-                await cm.start()
+        with (
+            patch.dict("sys.modules", {"mss": None}),
+            patch("builtins.__import__", side_effect=ImportError("no mss")),
+        ):
+            await cm.start()
         assert cm.enabled is False
 
     @pytest.mark.asyncio
@@ -161,21 +163,24 @@ class TestGrabFrame:
 
         cm = CaptureManager(enabled=True)
 
-        with patch.dict(
-            "sys.modules", {"mss": mock_mss_module, "PIL": mock_pil, "PIL.Image": mock_pil.Image}
-        ):
-            with patch(
+        with (
+            patch.dict(
+                "sys.modules",
+                {"mss": mock_mss_module, "PIL": mock_pil, "PIL.Image": mock_pil.Image},
+            ),
+            patch(
                 "builtins.__import__",
                 side_effect=lambda name, *args, **kwargs: {
                     "mss": mock_mss_module,
                     "PIL": mock_pil,
                     "PIL.Image": mock_pil.Image,
                 }.get(name, __builtins__.__import__(name, *args, **kwargs)),
-            ):
-                # Just test that the method handles errors gracefully
-                result = cm._grab_frame()
-                # May be None or a string depending on mock fidelity
-                # The important thing is it doesn't crash
+            ),
+        ):
+            # Just test that the method handles errors gracefully
+            cm._grab_frame()
+            # May be None or a string depending on mock fidelity
+            # The important thing is it doesn't crash
 
     def test_returns_none_on_import_error(self) -> None:
         cm = CaptureManager(enabled=True)

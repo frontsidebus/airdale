@@ -6,7 +6,6 @@ import tempfile
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from orchestrator.context_store import PHASE_TOPICS, ContextStore
 from orchestrator.sim_client import FlightPhase, SimState
 
@@ -32,7 +31,7 @@ class TestTextSplitting:
     def test_full_overlap_would_loop(self) -> None:
         # overlap == chunk_size means step=0 which would infinite loop
         # The code does chunk_size - overlap = 0 step. Let's verify behavior.
-        text = "ABC"
+        pass
         # step = 3 - 3 = 0 would be infinite, but let's see what actually happens.
         # Actually start += 0 means infinite loop. This is a known edge case.
         # Skip this as it's a limitation.
@@ -240,7 +239,7 @@ class TestGetRelevantContext:
                 aircraft="Cessna 172",
                 flight_phase=FlightPhase.TAKEOFF,
             )
-            results = await store.get_relevant_context(state)
+            await store.get_relevant_context(state)
 
         # Should have queried the collection
         assert mock_chromadb_collection.query.called
@@ -313,7 +312,7 @@ class TestPhaseTopics:
             assert phase in PHASE_TOPICS, f"Missing topics for {phase.value}"
 
     def test_topics_are_non_empty_lists(self) -> None:
-        for phase, topics in PHASE_TOPICS.items():
+        for _phase, topics in PHASE_TOPICS.items():
             assert isinstance(topics, list)
             assert len(topics) > 0
 

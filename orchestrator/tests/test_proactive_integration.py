@@ -12,7 +12,6 @@ order with the right properties.
 from __future__ import annotations
 
 import pytest
-
 from orchestrator.flight_phase import FlightPhaseDetector, PhaseThresholds
 from orchestrator.sim_client import (
     Attitude,
@@ -128,8 +127,11 @@ def _state(
         surfaces=SurfaceState(gear_handle=gear, flaps_percent=flaps),
         fuel=FuelState(total_gallons=42, total_weight_lbs=252),
         environment=Environment(
-            wind_speed_kts=5, wind_direction=270, visibility_sm=10,
-            temperature_c=25, barometer_inhg=29.92,
+            wind_speed_kts=5,
+            wind_direction=270,
+            visibility_sm=10,
+            temperature_c=25,
+            barometer_inhg=29.92,
         ),
     )
 
@@ -147,23 +149,60 @@ def make_takeoff_sequence() -> list[SimState]:
     """
     return [
         # 0: Parked, engines running
-        _state(phase=FlightPhase.TAKEOFF, ias=0.0, ground_speed=0.0,
-               altitude_agl=0.0, vertical_speed=0.0, rpm=2700),
+        _state(
+            phase=FlightPhase.TAKEOFF,
+            ias=0.0,
+            ground_speed=0.0,
+            altitude_agl=0.0,
+            vertical_speed=0.0,
+            rpm=2700,
+        ),
         # 1: Beginning ground roll
-        _state(phase=FlightPhase.TAKEOFF, ias=30.0, ground_speed=30.0,
-               altitude_agl=0.0, vertical_speed=0.0, rpm=2700),
+        _state(
+            phase=FlightPhase.TAKEOFF,
+            ias=30.0,
+            ground_speed=30.0,
+            altitude_agl=0.0,
+            vertical_speed=0.0,
+            rpm=2700,
+        ),
         # 2: Accelerating past V1 (default threshold ~60kt)
-        _state(phase=FlightPhase.TAKEOFF, ias=62.0, ground_speed=62.0,
-               altitude_agl=0.0, vertical_speed=0.0, rpm=2700),
+        _state(
+            phase=FlightPhase.TAKEOFF,
+            ias=62.0,
+            ground_speed=62.0,
+            altitude_agl=0.0,
+            vertical_speed=0.0,
+            rpm=2700,
+        ),
         # 3: Crossing rotate speed (~65kt)
-        _state(phase=FlightPhase.TAKEOFF, ias=68.0, ground_speed=68.0,
-               altitude_agl=0.0, vertical_speed=0.0, rpm=2700),
+        _state(
+            phase=FlightPhase.TAKEOFF,
+            ias=68.0,
+            ground_speed=68.0,
+            altitude_agl=0.0,
+            vertical_speed=0.0,
+            rpm=2700,
+        ),
         # 4: Liftoff - positive rate (VS > 100, AGL > 20)
-        _state(phase=FlightPhase.TAKEOFF, ias=75.0, ground_speed=72.0,
-               altitude_agl=50.0, vertical_speed=500.0, rpm=2700),
+        _state(
+            phase=FlightPhase.TAKEOFF,
+            ias=75.0,
+            ground_speed=72.0,
+            altitude_agl=50.0,
+            vertical_speed=500.0,
+            rpm=2700,
+        ),
         # 5: Climbing through 150ft - gear up territory (VS > 300, AGL > 100)
-        _state(phase=FlightPhase.TAKEOFF, ias=85.0, ground_speed=82.0,
-               altitude_agl=200.0, vertical_speed=800.0, rpm=2700, gear=False),
+        _state(
+            phase=FlightPhase.TAKEOFF,
+            ias=85.0,
+            ground_speed=82.0,
+            altitude_agl=200.0,
+            vertical_speed=800.0,
+            rpm=2700,
+            gear=False,
+        ),
     ]
 
 
@@ -174,26 +213,75 @@ def make_approach_sequence() -> list[SimState]:
     """
     return [
         # 0: Established on approach at 3000ft AGL
-        _state(phase=FlightPhase.APPROACH, ias=100.0, altitude_msl=3100.0,
-               altitude_agl=3000.0, vertical_speed=-500.0, gear=True, flaps=20.0),
+        _state(
+            phase=FlightPhase.APPROACH,
+            ias=100.0,
+            altitude_msl=3100.0,
+            altitude_agl=3000.0,
+            vertical_speed=-500.0,
+            gear=True,
+            flaps=20.0,
+        ),
         # 1: Descending through ~1500ft
-        _state(phase=FlightPhase.APPROACH, ias=95.0, altitude_msl=1600.0,
-               altitude_agl=1500.0, vertical_speed=-500.0, gear=True, flaps=30.0),
+        _state(
+            phase=FlightPhase.APPROACH,
+            ias=95.0,
+            altitude_msl=1600.0,
+            altitude_agl=1500.0,
+            vertical_speed=-500.0,
+            gear=True,
+            flaps=30.0,
+        ),
         # 2: Crossing 1000ft AGL
-        _state(phase=FlightPhase.APPROACH, ias=90.0, altitude_msl=1080.0,
-               altitude_agl=980.0, vertical_speed=-500.0, gear=True, flaps=30.0),
+        _state(
+            phase=FlightPhase.APPROACH,
+            ias=90.0,
+            altitude_msl=1080.0,
+            altitude_agl=980.0,
+            vertical_speed=-500.0,
+            gear=True,
+            flaps=30.0,
+        ),
         # 3: Crossing 500ft AGL
-        _state(phase=FlightPhase.APPROACH, ias=85.0, altitude_msl=580.0,
-               altitude_agl=480.0, vertical_speed=-400.0, gear=True, flaps=40.0),
+        _state(
+            phase=FlightPhase.APPROACH,
+            ias=85.0,
+            altitude_msl=580.0,
+            altitude_agl=480.0,
+            vertical_speed=-400.0,
+            gear=True,
+            flaps=40.0,
+        ),
         # 4: Crossing 200ft AGL (minimums)
-        _state(phase=FlightPhase.APPROACH, ias=75.0, altitude_msl=280.0,
-               altitude_agl=180.0, vertical_speed=-350.0, gear=True, flaps=40.0),
+        _state(
+            phase=FlightPhase.APPROACH,
+            ias=75.0,
+            altitude_msl=280.0,
+            altitude_agl=180.0,
+            vertical_speed=-350.0,
+            gear=True,
+            flaps=40.0,
+        ),
         # 5: Crossing 100ft AGL
-        _state(phase=FlightPhase.APPROACH, ias=70.0, altitude_msl=180.0,
-               altitude_agl=80.0, vertical_speed=-300.0, gear=True, flaps=40.0),
+        _state(
+            phase=FlightPhase.APPROACH,
+            ias=70.0,
+            altitude_msl=180.0,
+            altitude_agl=80.0,
+            vertical_speed=-300.0,
+            gear=True,
+            flaps=40.0,
+        ),
         # 6: At 50ft
-        _state(phase=FlightPhase.LANDING, ias=68.0, altitude_msl=130.0,
-               altitude_agl=30.0, vertical_speed=-200.0, gear=True, flaps=40.0),
+        _state(
+            phase=FlightPhase.LANDING,
+            ias=68.0,
+            altitude_msl=130.0,
+            altitude_agl=30.0,
+            vertical_speed=-200.0,
+            gear=True,
+            flaps=40.0,
+        ),
     ]
 
 
@@ -288,14 +376,22 @@ class TestApproachWithDeviation:
 
         # Start high, descend through 1000ft at too-high speed
         high = _state(
-            phase=FlightPhase.APPROACH, ias=180.0,
-            altitude_msl=1200.0, altitude_agl=1100.0,
-            vertical_speed=-500.0, gear=True, flaps=10.0,
+            phase=FlightPhase.APPROACH,
+            ias=180.0,
+            altitude_msl=1200.0,
+            altitude_agl=1100.0,
+            vertical_speed=-500.0,
+            gear=True,
+            flaps=10.0,
         )
         crossing_1000 = _state(
-            phase=FlightPhase.APPROACH, ias=180.0,
-            altitude_msl=1080.0, altitude_agl=980.0,
-            vertical_speed=-500.0, gear=True, flaps=10.0,
+            phase=FlightPhase.APPROACH,
+            ias=180.0,
+            altitude_msl=1080.0,
+            altitude_agl=980.0,
+            vertical_speed=-500.0,
+            gear=True,
+            flaps=10.0,
         )
 
         await monitor.on_telemetry_update(high)
@@ -312,8 +408,7 @@ class TestApproachWithDeviation:
 
         # Overspeed deviation
         overspeed = [
-            e for e in deviation_events
-            if "Overspeed" in e.message or "speed" in e.message.lower()
+            e for e in deviation_events if "Overspeed" in e.message or "speed" in e.message.lower()
         ]
         assert len(overspeed) >= 1, f"Expected speed deviation. Got deviations: {deviation_events}"
 
@@ -335,12 +430,18 @@ class TestEmergencyDuringCruise:
         monitor = ProactiveMonitor(emergency_detector=detector)
 
         healthy = _state(
-            phase=FlightPhase.CRUISE, ias=120.0, rpm=2400.0,
-            altitude_msl=6500.0, altitude_agl=6400.0,
+            phase=FlightPhase.CRUISE,
+            ias=120.0,
+            rpm=2400.0,
+            altitude_msl=6500.0,
+            altitude_agl=6400.0,
         )
         engine_out = _state(
-            phase=FlightPhase.CRUISE, ias=120.0, rpm=0.0,
-            altitude_msl=6500.0, altitude_agl=6400.0,
+            phase=FlightPhase.CRUISE,
+            ias=120.0,
+            rpm=0.0,
+            altitude_msl=6500.0,
+            altitude_agl=6400.0,
         )
 
         await monitor.on_telemetry_update(healthy)
@@ -363,12 +464,16 @@ class TestEmergencyDuringCruise:
         monitor = ProactiveMonitor(emergency_detector=detector)
 
         healthy = _state(
-            phase=FlightPhase.CRUISE, rpm=2400.0,
-            altitude_msl=6500.0, altitude_agl=6400.0,
+            phase=FlightPhase.CRUISE,
+            rpm=2400.0,
+            altitude_msl=6500.0,
+            altitude_agl=6400.0,
         )
         engine_out = _state(
-            phase=FlightPhase.CRUISE, rpm=0.0,
-            altitude_msl=6500.0, altitude_agl=6400.0,
+            phase=FlightPhase.CRUISE,
+            rpm=0.0,
+            altitude_msl=6500.0,
+            altitude_agl=6400.0,
         )
 
         await monitor.on_telemetry_update(healthy)
@@ -398,10 +503,12 @@ class TestPhaseTransitionChecklistOffer:
     async def test_taxi_to_takeoff_generates_checklist_offer(self) -> None:
         monitor = ProactiveMonitor()
 
-        taxi = _state(phase=FlightPhase.TAXI, ias=10.0, ground_speed=10.0,
-                      altitude_agl=0.0, rpm=1800.0)
-        takeoff = _state(phase=FlightPhase.TAKEOFF, ias=45.0, ground_speed=45.0,
-                         altitude_agl=0.0, rpm=2700.0)
+        taxi = _state(
+            phase=FlightPhase.TAXI, ias=10.0, ground_speed=10.0, altitude_agl=0.0, rpm=1800.0
+        )
+        takeoff = _state(
+            phase=FlightPhase.TAKEOFF, ias=45.0, ground_speed=45.0, altitude_agl=0.0, rpm=2700.0
+        )
 
         await monitor.on_telemetry_update(taxi)
         await _drain_events(monitor)  # clear initial events
@@ -434,7 +541,8 @@ class TestPhaseTransitionChecklistOffer:
         checklist_events = [e for e in events if e.type == "checklist_offer"]
         # At minimum, TAXI -> TAKEOFF should produce an offer
         taxi_to_takeoff = [
-            e for e in checklist_events
+            e
+            for e in checklist_events
             if e.data.get("from_phase") == "TAXI" and e.data.get("to_phase") == "TAKEOFF"
         ]
         assert len(taxi_to_takeoff) >= 1
@@ -456,37 +564,51 @@ class TestCalloutOneShotBehavior:
         )
 
         # First descent through 500ft
-        above = _state(phase=FlightPhase.APPROACH, altitude_agl=550.0,
-                       altitude_msl=650.0, vertical_speed=-400.0, gear=True)
-        below = _state(phase=FlightPhase.APPROACH, altitude_agl=480.0,
-                       altitude_msl=580.0, vertical_speed=-400.0, gear=True)
+        above = _state(
+            phase=FlightPhase.APPROACH,
+            altitude_agl=550.0,
+            altitude_msl=650.0,
+            vertical_speed=-400.0,
+            gear=True,
+        )
+        below = _state(
+            phase=FlightPhase.APPROACH,
+            altitude_agl=480.0,
+            altitude_msl=580.0,
+            vertical_speed=-400.0,
+            gear=True,
+        )
 
         await monitor.on_telemetry_update(above)
         await monitor.on_telemetry_update(below)
 
         events_pass1 = await _drain_events(monitor)
-        callouts_500_pass1 = [
-            e for e in events_pass1
-            if e.type == "callout" and "500" in e.message
-        ]
+        callouts_500_pass1 = [e for e in events_pass1 if e.type == "callout" and "500" in e.message]
         assert len(callouts_500_pass1) == 1, "First crossing should produce exactly 1 callout"
 
         # Climb back above 500ft (go-around or bobble), still in APPROACH phase
-        back_above = _state(phase=FlightPhase.APPROACH, altitude_agl=550.0,
-                            altitude_msl=650.0, vertical_speed=300.0, gear=True)
+        back_above = _state(
+            phase=FlightPhase.APPROACH,
+            altitude_agl=550.0,
+            altitude_msl=650.0,
+            vertical_speed=300.0,
+            gear=True,
+        )
         await monitor.on_telemetry_update(back_above)
         await _drain_events(monitor)  # clear
 
         # Second descent through 500ft, same phase
-        below_again = _state(phase=FlightPhase.APPROACH, altitude_agl=480.0,
-                             altitude_msl=580.0, vertical_speed=-400.0, gear=True)
+        below_again = _state(
+            phase=FlightPhase.APPROACH,
+            altitude_agl=480.0,
+            altitude_msl=580.0,
+            vertical_speed=-400.0,
+            gear=True,
+        )
         await monitor.on_telemetry_update(below_again)
 
         events_pass2 = await _drain_events(monitor)
-        callouts_500_pass2 = [
-            e for e in events_pass2
-            if e.type == "callout" and "500" in e.message
-        ]
+        callouts_500_pass2 = [e for e in events_pass2 if e.type == "callout" and "500" in e.message]
         assert len(callouts_500_pass2) == 0, (
             "Second crossing in same phase should NOT produce another 500ft callout"
         )
@@ -507,8 +629,9 @@ class TestCalloutOneShotBehavior:
         assert v1_count_1 == 1
 
         # Transition to climb
-        climb = _state(phase=FlightPhase.CLIMB, altitude_agl=500.0,
-                       altitude_msl=600.0, vertical_speed=800.0)
+        climb = _state(
+            phase=FlightPhase.CLIMB, altitude_agl=500.0, altitude_msl=600.0, vertical_speed=800.0
+        )
         await monitor.on_telemetry_update(climb)
         await _drain_events(monitor)
 
@@ -548,9 +671,13 @@ class TestDeviationCooldown:
 
         # Create an approach state with high speed (>160kt triggers speed_high_approach)
         fast_approach = _state(
-            phase=FlightPhase.APPROACH, ias=180.0,
-            altitude_msl=1500.0, altitude_agl=1400.0,
-            vertical_speed=-500.0, gear=True, flaps=30.0,
+            phase=FlightPhase.APPROACH,
+            ias=180.0,
+            altitude_msl=1500.0,
+            altitude_agl=1400.0,
+            vertical_speed=-500.0,
+            gear=True,
+            flaps=30.0,
         )
 
         # First check: should fire
@@ -589,14 +716,20 @@ class TestPriorityOrdering:
 
         # Set up: approach at high speed, about to cross 1000ft
         high = _state(
-            phase=FlightPhase.APPROACH, ias=170.0,
-            altitude_msl=1200.0, altitude_agl=1100.0,
-            vertical_speed=-500.0, gear=True,
+            phase=FlightPhase.APPROACH,
+            ias=170.0,
+            altitude_msl=1200.0,
+            altitude_agl=1100.0,
+            vertical_speed=-500.0,
+            gear=True,
         )
         crossing = _state(
-            phase=FlightPhase.APPROACH, ias=170.0,
-            altitude_msl=1080.0, altitude_agl=980.0,
-            vertical_speed=-500.0, gear=True,
+            phase=FlightPhase.APPROACH,
+            ias=170.0,
+            altitude_msl=1080.0,
+            altitude_agl=980.0,
+            vertical_speed=-500.0,
+            gear=True,
         )
 
         await monitor.on_telemetry_update(high)
@@ -612,12 +745,8 @@ class TestPriorityOrdering:
 
         # Since events are drained from a PriorityQueue, higher priority comes first.
         # Deviation (priority 2) should appear before callout (priority 0).
-        first_deviation_idx = next(
-            i for i, e in enumerate(events) if e.type == "deviation"
-        )
-        first_callout_idx = next(
-            i for i, e in enumerate(events) if e.type == "callout"
-        )
+        first_deviation_idx = next(i for i, e in enumerate(events) if e.type == "deviation")
+        first_callout_idx = next(i for i, e in enumerate(events) if e.type == "callout")
         assert first_deviation_idx < first_callout_idx, (
             f"Deviation (idx {first_deviation_idx}) should be delivered before "
             f"callout (idx {first_callout_idx}). Events: {[(e.type, e.priority) for e in events]}"
@@ -631,20 +760,27 @@ class TestPriorityOrdering:
         monitor = ProactiveMonitor(
             emergency_detector=detector,
             callout_thresholds=CalloutThresholds(
-                v1_speed=60.0, altitude_callout_levels=(1000.0,),
+                v1_speed=60.0,
+                altitude_callout_levels=(1000.0,),
             ),
             deviation_thresholds=DeviationThresholds(overspeed_ias=100.0),
         )
 
         # Healthy cruise state
         healthy = _state(
-            phase=FlightPhase.CRUISE, rpm=2400.0, ias=90.0,
-            altitude_msl=6500.0, altitude_agl=6400.0,
+            phase=FlightPhase.CRUISE,
+            rpm=2400.0,
+            ias=90.0,
+            altitude_msl=6500.0,
+            altitude_agl=6400.0,
         )
         # Engine failure + overspeed simultaneously
         crisis = _state(
-            phase=FlightPhase.CRUISE, rpm=0.0, ias=200.0,
-            altitude_msl=6500.0, altitude_agl=6400.0,
+            phase=FlightPhase.CRUISE,
+            rpm=0.0,
+            ias=200.0,
+            altitude_msl=6500.0,
+            altitude_agl=6400.0,
         )
 
         await monitor.on_telemetry_update(healthy)
@@ -716,9 +852,7 @@ class TestPhaseDetectorIntegration:
 # ============================================================================
 
 
-@pytest.mark.skipif(
-    CalloutEngine is None, reason="callouts module not available"
-)
+@pytest.mark.skipif(CalloutEngine is None, reason="callouts module not available")
 class TestCalloutEngineIntegration:
     """Test the standalone CalloutEngine through approach sequences."""
 
@@ -746,10 +880,22 @@ class TestCalloutEngineIntegration:
         engine = CalloutEngine()
         engine.on_phase_change(FlightPhase.APPROACH)
 
-        above = _state(phase=FlightPhase.APPROACH, altitude_agl=550.0,
-                       altitude_msl=650.0, vertical_speed=-400.0, gear=True, flaps=30.0)
-        below = _state(phase=FlightPhase.APPROACH, altitude_agl=480.0,
-                       altitude_msl=580.0, vertical_speed=-400.0, gear=True, flaps=30.0)
+        above = _state(
+            phase=FlightPhase.APPROACH,
+            altitude_agl=550.0,
+            altitude_msl=650.0,
+            vertical_speed=-400.0,
+            gear=True,
+            flaps=30.0,
+        )
+        below = _state(
+            phase=FlightPhase.APPROACH,
+            altitude_agl=480.0,
+            altitude_msl=580.0,
+            vertical_speed=-400.0,
+            gear=True,
+            flaps=30.0,
+        )
 
         engine.update(below, above)
 
@@ -766,9 +912,7 @@ class TestCalloutEngineIntegration:
 # ============================================================================
 
 
-@pytest.mark.skipif(
-    ChecklistManager is None, reason="checklist_manager module not available"
-)
+@pytest.mark.skipif(ChecklistManager is None, reason="checklist_manager module not available")
 class TestChecklistManagerIntegration:
     """Verify that ChecklistManager and ProactiveMonitor both generate
     appropriate outputs for the same phase transition.
@@ -802,9 +946,9 @@ class TestChecklistManagerIntegration:
         # to TAXI phase for "Before takeoff checklist")
         # The ChecklistManager maps phases differently, but at least one system
         # should provide the offer.
-        assert (
-            len(monitor_checklists) >= 1 or checklist_offer is not None
-        ), "At least one system should offer a checklist for this transition"
+        assert len(monitor_checklists) >= 1 or checklist_offer is not None, (
+            "At least one system should offer a checklist for this transition"
+        )
 
 
 # ============================================================================
@@ -841,17 +985,45 @@ class TestFullFlightSegment:
             # Past V1 and rotate
             _state(ias=70.0, ground_speed=70.0, altitude_agl=0.0, rpm=2700.0),
             # Climbing
-            _state(ias=85.0, ground_speed=82.0, altitude_agl=200.0,
-                   altitude_msl=300.0, vertical_speed=800.0, rpm=2700.0, gear=False),
+            _state(
+                ias=85.0,
+                ground_speed=82.0,
+                altitude_agl=200.0,
+                altitude_msl=300.0,
+                vertical_speed=800.0,
+                rpm=2700.0,
+                gear=False,
+            ),
             # Cruise
-            _state(ias=120.0, ground_speed=135.0, altitude_agl=6400.0,
-                   altitude_msl=6500.0, vertical_speed=0.0, rpm=2400.0, gear=False),
+            _state(
+                ias=120.0,
+                ground_speed=135.0,
+                altitude_agl=6400.0,
+                altitude_msl=6500.0,
+                vertical_speed=0.0,
+                rpm=2400.0,
+                gear=False,
+            ),
             # Approach
-            _state(ias=90.0, ground_speed=88.0, altitude_agl=1100.0,
-                   altitude_msl=1200.0, vertical_speed=-500.0, gear=True, flaps=30.0),
+            _state(
+                ias=90.0,
+                ground_speed=88.0,
+                altitude_agl=1100.0,
+                altitude_msl=1200.0,
+                vertical_speed=-500.0,
+                gear=True,
+                flaps=30.0,
+            ),
             # Crossing 1000ft on approach
-            _state(ias=85.0, ground_speed=83.0, altitude_agl=980.0,
-                   altitude_msl=1080.0, vertical_speed=-500.0, gear=True, flaps=30.0),
+            _state(
+                ias=85.0,
+                ground_speed=83.0,
+                altitude_agl=980.0,
+                altitude_msl=1080.0,
+                vertical_speed=-500.0,
+                gear=True,
+                flaps=30.0,
+            ),
         ]
 
         all_events: list[ProactiveEvent] = []

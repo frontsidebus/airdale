@@ -378,8 +378,7 @@ async def get_status(state: AppState = Depends(get_app_state)):
         # Legacy fields for backward compat
         "whisper_available": whisper_ok,
         "elevenlabs_configured": bool(
-            state.settings.elevenlabs_api_key
-            and getattr(state.settings, "elevenlabs_voice_id", "")
+            state.settings.elevenlabs_api_key and getattr(state.settings, "elevenlabs_voice_id", "")
         ),
         "claude_model": state.settings.claude_model,
         "telemetry_service_url": state.settings.telemetry_service_url,
@@ -1048,8 +1047,7 @@ async def _stream_response(
     user barges in.
     """
     tts_enabled = state.cartesia_client is not None or bool(
-        state.settings.elevenlabs_api_key
-        and getattr(state.settings, "elevenlabs_voice_id", "")
+        state.settings.elevenlabs_api_key and getattr(state.settings, "elevenlabs_voice_id", "")
     )
     sentence_buffer = ""
     full_response = ""
@@ -1066,9 +1064,7 @@ async def _stream_response(
     elif tts_enabled:
         # ElevenLabs: REST per-sentence (WS streaming causes garbled audio
         # from chunk fragmentation in the browser playback pipeline)
-        tts_task = asyncio.create_task(
-            _tts_elevenlabs_stream(ws, tts_queue, interrupt, state)
-        )
+        tts_task = asyncio.create_task(_tts_elevenlabs_stream(ws, tts_queue, interrupt, state))
     else:
         tts_task = None
 
@@ -1087,9 +1083,7 @@ async def _stream_response(
         # directly; instead it queues messages we drain after each chunk.
         command_status_queue: list[dict[str, Any]] = []
 
-        def _on_tool_result(
-            tool_name: str, tool_input: dict[str, Any], tool_result: Any
-        ) -> None:
+        def _on_tool_result(tool_name: str, tool_input: dict[str, Any], tool_result: Any) -> None:
             if tool_name != "set_aircraft_control":
                 return
             system = tool_input.get("system", "unknown")

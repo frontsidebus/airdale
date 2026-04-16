@@ -5,7 +5,6 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
-
 from orchestrator.tts.cartesia import CartesiaClient
 
 # ---------------------------------------------------------------------------
@@ -51,9 +50,7 @@ class TestCartesiaSynthesize:
     @pytest.mark.asyncio
     @respx.mock
     async def test_api_error_returns_empty(self) -> None:
-        respx.post("https://api.cartesia.ai/tts/bytes").mock(
-            return_value=httpx.Response(500)
-        )
+        respx.post("https://api.cartesia.ai/tts/bytes").mock(return_value=httpx.Response(500))
         client = CartesiaClient(api_key="key", voice_id="voice")
         audio = await client.synthesize("test")
         assert audio == b""

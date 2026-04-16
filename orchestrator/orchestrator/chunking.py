@@ -20,6 +20,7 @@ from typing import Any
 # Chunk model
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Chunk:
     """A single chunk of text with metadata."""
@@ -221,14 +222,13 @@ class AviationChunker:
             if not block.strip():
                 continue
 
-            if (
-                current_text
-                and len(current_text) + len(block) + 2 > self.max_chunk_chars
-            ):
-                chunks.append(Chunk(
-                    text=current_text.strip(),
-                    metadata={**metadata, "chunk_index": len(chunks)},
-                ))
+            if current_text and len(current_text) + len(block) + 2 > self.max_chunk_chars:
+                chunks.append(
+                    Chunk(
+                        text=current_text.strip(),
+                        metadata={**metadata, "chunk_index": len(chunks)},
+                    )
+                )
                 # Add overlap from end of previous chunk
                 if self.overlap_chars > 0 and len(current_text) > self.overlap_chars:
                     overlap = current_text[-self.overlap_chars :]
@@ -245,10 +245,12 @@ class AviationChunker:
         # Always include the final chunk — never silently drop document tail
         # (could contain critical limitations or warnings)
         if current_text.strip():
-            chunks.append(Chunk(
-                text=current_text.strip(),
-                metadata={**metadata, "chunk_index": len(chunks)},
-            ))
+            chunks.append(
+                Chunk(
+                    text=current_text.strip(),
+                    metadata={**metadata, "chunk_index": len(chunks)},
+                )
+            )
 
         return chunks
 
