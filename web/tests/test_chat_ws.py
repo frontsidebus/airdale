@@ -120,14 +120,10 @@ async def test_chat_text_round_trip(test_app, mock_app_state):
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         async with aconnect_ws("http://test/ws/chat", client) as ws:
             await ws.send_json({"text": "Hello MERLIN"})
-            messages = await _recv_all(
-                ws, stop_types={"done", "error"}, min_dones=1, timeout=5.0
-            )
+            messages = await _recv_all(ws, stop_types={"done", "error"}, min_dones=1, timeout=5.0)
 
     text_chunks = [
-        m["content"]
-        for m in messages
-        if isinstance(m, dict) and m.get("type") == "text"
+        m["content"] for m in messages if isinstance(m, dict) and m.get("type") == "text"
     ]
     assert "".join(text_chunks) == "Roger that."
     assert any(isinstance(m, dict) and m.get("type") == "done" for m in messages)
@@ -188,18 +184,14 @@ async def test_barge_in_cancels_active_response(test_app, mock_app_state):
             # Barge in immediately with a second message
             await ws.send_json({"text": "Never mind, second question"})
 
-            messages = await _recv_all(
-                ws, stop_types={"done", "error"}, min_dones=1, timeout=5.0
-            )
+            messages = await _recv_all(ws, stop_types={"done", "error"}, min_dones=1, timeout=5.0)
 
     types = [m.get("type") for m in messages if isinstance(m, dict)]
     assert "interrupted" in types, f"expected interrupted in {types}"
     assert "done" in types, f"expected done in {types}"
     # Second response should have produced text
     text_chunks = [
-        m["content"]
-        for m in messages
-        if isinstance(m, dict) and m.get("type") == "text"
+        m["content"] for m in messages if isinstance(m, dict) and m.get("type") == "text"
     ]
     assert any("Second" in c or "response" in c for c in text_chunks)
 
@@ -240,15 +232,11 @@ async def test_chat_with_tts_streaming(test_app, mock_app_state):
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         async with aconnect_ws("http://test/ws/chat", client) as ws:
             await ws.send_json({"text": "Say hi"})
-            messages = await _recv_all(
-                ws, stop_types={"done", "error"}, min_dones=1, timeout=10.0
-            )
+            messages = await _recv_all(ws, stop_types={"done", "error"}, min_dones=1, timeout=10.0)
 
     # Find a tts_audio header followed by a binary frame
     tts_header_indices = [
-        i
-        for i, m in enumerate(messages)
-        if isinstance(m, dict) and m.get("type") == "tts_audio"
+        i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("type") == "tts_audio"
     ]
     assert tts_header_indices, (
         f"expected at least one tts_audio header in {[type(m).__name__ for m in messages]}"

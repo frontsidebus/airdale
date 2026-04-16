@@ -70,9 +70,7 @@ async def test_telemetry_proxy_forwards_data(test_app, mock_app_state):
 
     transport = ASGIWebSocketTransport(app=test_app)
     with patch("web.server.ws_lib.connect", side_effect=_fake_connect):
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             async with aconnect_ws("http://test/ws/telemetry", client) as ws:
                 # 1. Initial "not yet confirmed" frame
                 first = await asyncio.wait_for(ws.receive_json(), timeout=5.0)
@@ -96,9 +94,7 @@ async def test_telemetry_proxy_handles_upstream_failure(test_app, mock_app_state
 
     transport = ASGIWebSocketTransport(app=test_app)
     with patch("web.server.ws_lib.connect", side_effect=_raise):
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             async with aconnect_ws("http://test/ws/telemetry", client) as ws:
                 frame = await asyncio.wait_for(ws.receive_json(), timeout=5.0)
                 assert frame["type"] == "telemetry"

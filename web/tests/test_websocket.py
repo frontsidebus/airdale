@@ -172,9 +172,7 @@ async def test_chat_audio_start_marker(test_app, mock_app_state, monkeypatch):
     async def fake_transcribe(audio_bytes, mime_type, state):
         return "check heading", 0.90
 
-    monkeypatch.setattr(
-        "web.server._transcribe_audio_bytes_with_confidence", fake_transcribe
-    )
+    monkeypatch.setattr("web.server._transcribe_audio_bytes_with_confidence", fake_transcribe)
 
     async def mock_chat(text, sim_state=None, on_tool_result=None):
         yield "Heading two seven zero."
@@ -188,9 +186,7 @@ async def test_chat_audio_start_marker(test_app, mock_app_state, monkeypatch):
     ) as client:
         async with aconnect_ws("/ws/chat", client) as ws:
             # Send audio_start marker
-            await ws.send_text(
-                json.dumps({"type": "audio_start", "mime": "audio/webm"})
-            )
+            await ws.send_text(json.dumps({"type": "audio_start", "mime": "audio/webm"}))
 
             # Send binary audio data
             await ws.send_bytes(b"\x1a\x45\xdf\xa3" + b"\x00" * 100)
@@ -219,9 +215,7 @@ async def test_chat_audio_start_marker(test_app, mock_app_state, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="Flaky in CI — CancelledError race condition with WebSocket audio flow"
-)
+@pytest.mark.skip(reason="Flaky in CI — CancelledError race condition with WebSocket audio flow")
 async def test_chat_audio_transcription_failure(test_app, mock_app_state):
     """When transcription fails, returns error message via WebSocket."""
     mock_app_state.settings.elevenlabs_api_key = ""
@@ -237,9 +231,7 @@ async def test_chat_audio_transcription_failure(test_app, mock_app_state):
     ) as client:
         async with aconnect_ws("/ws/chat", client) as ws:
             # Send audio_start + binary
-            await ws.send_text(
-                json.dumps({"type": "audio_start", "mime": "audio/webm"})
-            )
+            await ws.send_text(json.dumps({"type": "audio_start", "mime": "audio/webm"}))
             await ws.send_bytes(b"\x00" * 50)
 
             # Should get an error about transcription
@@ -295,14 +287,10 @@ async def test_chat_claude_error_sends_error_message(test_app, mock_app_state):
 # ---------------------------------------------------------------------------
 
 
-async def test_telemetry_ws_sends_disconnected_on_connect_failure(
-    test_app, mock_app_state
-):
+async def test_telemetry_ws_sends_disconnected_on_connect_failure(test_app, mock_app_state):
     """When telemetry service is unreachable, /ws/telemetry sends disconnected status."""
     # Patch websockets.connect to raise ConnectionRefusedError
-    with patch(
-        "web.server.ws_lib.connect", side_effect=ConnectionRefusedError("refused")
-    ):
+    with patch("web.server.ws_lib.connect", side_effect=ConnectionRefusedError("refused")):
         async with httpx.AsyncClient(
             transport=ASGIWebSocketTransport(app=test_app),
             base_url="http://test",

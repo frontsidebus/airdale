@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 from telemetry.adapter_protocol import (
     AdapterCommandAck,
     ConsumerCommand,
