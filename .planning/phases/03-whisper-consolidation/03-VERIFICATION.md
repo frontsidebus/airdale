@@ -172,3 +172,20 @@ The WhisperClient itself (Plan 01) is fully correct and all 35 unit tests pass. 
 
 _Verified: 2026-03-26_
 _Verifier: Claude (gsd-verifier)_
+
+---
+
+## Post-hoc Resolution
+
+_Added: 2026-04-18 during /gsd-next spot-check before v1.2 milestone close-out._
+
+All four FAIL items above were fixed in subsequent work (likely during Phase 04/05 and the `8587ba5 fix: unblock python CI + close out v1.2 (#71)` commit). Current codebase evidence:
+
+| Original FAIL | Current Resolution | Status |
+|---|---|---|
+| `voice.py:197` — `asyncio.to_thread(self._whisper_client.transcribe, wav_bytes)` on async def | `orchestrator/orchestrator/voice.py:184` — `text = await self._whisper_client.transcribe(wav_bytes)` | RESOLVED |
+| `main.py:166` — `_whisper_client.close()` (AttributeError) | `orchestrator/orchestrator/main.py:148` — `await self._whisper_client.aclose()` | RESOLVED |
+| `server.py:234` — `_whisper_client.close()` (AttributeError) | `web/server.py:279` — `await state.whisper_client.aclose()` | RESOLVED |
+| `_transcribe_with_confidence()` in server.py does not call `transcribe_with_confidence()` | `web/server.py:1272` — `result = await state.whisper_client.transcribe_with_confidence(...)` | RESOLVED |
+
+**Override:** These FAILs are superseded by current-code verification. No outstanding Phase 03 verification gaps remain.
