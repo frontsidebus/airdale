@@ -1,34 +1,46 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.2
-milestone_name: milestone
-status: verifying
-stopped_at: Completed 06-02-PLAN.md
-last_updated: "2026-03-28T22:17:21.681Z"
-last_activity: 2026-03-28
+milestone_name: Consolidation & Quality
+status: shipped
+stopped_at: v1.2 milestone closed
+last_updated: "2026-04-18T00:00:00.000Z"
+last_activity: 2026-04-18
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 14
-  completed_plans: 13
-  percent: 0
+  completed_plans: 14
+  percent: 100
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-26)
+See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** MERLIN's voice and text responses must be fast, high-quality, and contextually accurate during flight
-**Current focus:** Phase 06 — ci-cd-pipeline
+**Current focus:** v1.2 shipped — next milestone planning (v1.3 Agent Copilot Control, Phase 1 already complete, Phases 2-4 planned)
 
 ## Current Position
 
-Phase: 06
-Plan: Not started
-Status: Phase complete — ready for verification
-Last activity: 2026-03-28
+Milestone: v1.2 (shipped 2026-04-18)
+Status: Milestone complete — ready for /gsd-new-milestone or continue v1.3
+Last activity: 2026-04-18
+
+## Deferred Items
+
+Items acknowledged and deferred at v1.2 milestone close on 2026-04-18:
+
+| Category | Item | Status |
+|----------|------|--------|
+| verification | Phase 03 — 4 FAILs annotated as resolved in-file under `## Post-hoc Resolution` | acknowledged (tool still reads `gaps_found`; evidence in 03-VERIFICATION.md) |
+| refactor | `web/server.py` early-boot module state — tests monkeypatch globals rather than use DI overrides | acknowledged (acceptable for v1.2; revisit if logging infra changes) |
+
+## Scope Divergence Note
+
+Recent commits (Phase 4 integration tests, proactive copilot, checklist manager, callouts engine) reference work not captured in the current ROADMAP for either v1.2 or v1.3. Before starting v1.3 Phase 2, reconcile: is this v1.3 Phase 1 expansion, a new Phase 1.5, or its own milestone?
 
 Progress: [░░░░░░░░░░] 0%
 
