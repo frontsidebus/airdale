@@ -11,7 +11,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 import pytest
-
 from orchestrator.config import Settings
 from orchestrator.stt import (
     SUPPORTED_BACKENDS,

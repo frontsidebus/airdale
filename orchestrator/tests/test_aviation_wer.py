@@ -8,7 +8,6 @@ mishears an altitude must not, even if its headline WER is lower.
 from __future__ import annotations
 
 import pytest
-
 from orchestrator.eval.aviation_wer import (
     AviationScore,
     classify,

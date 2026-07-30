@@ -18,7 +18,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from orchestrator.tts.base import TTSClient
 from orchestrator.voice import VoiceOutput
 
