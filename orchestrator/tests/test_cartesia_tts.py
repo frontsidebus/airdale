@@ -5,7 +5,6 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
-
 from orchestrator.tts.cartesia import CartesiaClient
 
 # ---------------------------------------------------------------------------

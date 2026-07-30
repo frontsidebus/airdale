@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 import respx
-
 from orchestrator.command_verifier import CommandVerifier
 from orchestrator.sim_client import (
     EngineData,

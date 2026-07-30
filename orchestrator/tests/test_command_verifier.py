@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from orchestrator.command_verifier import (
     VERIFICATION_CHECKS,
     CommandVerifier,

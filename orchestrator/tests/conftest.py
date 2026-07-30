@@ -7,7 +7,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from orchestrator.sim_client import (
     Attitude,
     AutopilotState,
