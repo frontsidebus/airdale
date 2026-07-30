@@ -24,11 +24,16 @@ if TYPE_CHECKING:
     from ..config import Settings
 
 __all__ = [
+    "CartesiaClient",
     "ElevenLabsClient",
     "KokoroClient",
     "TTSClient",
     "create_tts_client",
 ]
+
+#: Backends ``create_tts_client`` knows how to build. Keep in sync with the
+#: branches below and with ``Settings.tts_configured`` / ``Settings.voice_id``.
+SUPPORTED_BACKENDS = ("cartesia", "elevenlabs", "local")
 
 
 def create_tts_client(settings: Settings) -> TTSClient:
@@ -36,7 +41,8 @@ def create_tts_client(settings: Settings) -> TTSClient:
 
     Reads ``settings.tts_backend`` to decide which backend to use:
 
-    - ``"elevenlabs"`` (default) -- ElevenLabs cloud API.
+    - ``"cartesia"`` (default) -- Cartesia cloud API, lowest latency.
+    - ``"elevenlabs"`` -- ElevenLabs cloud API.
     - ``"local"`` -- Local Kokoro TTS server.
 
     Returns:
@@ -46,6 +52,15 @@ def create_tts_client(settings: Settings) -> TTSClient:
         ValueError: If ``tts_backend`` is not a recognised value.
     """
     backend = settings.tts_backend.lower().strip()
+
+    if backend == "cartesia":
+        from .cartesia import CartesiaClient
+
+        return CartesiaClient(
+            api_key=settings.cartesia_api_key,
+            voice_id=settings.cartesia_voice_id,
+            model_id=settings.cartesia_model_id,
+        )
 
     if backend == "elevenlabs":
         from .elevenlabs import ElevenLabsClient
@@ -67,11 +82,16 @@ def create_tts_client(settings: Settings) -> TTSClient:
             voice_id=settings.tts_voice_id_local,
         )
 
-    raise ValueError(f"Unknown TTS backend: {backend!r}. Expected 'elevenlabs' or 'local'.")
+    expected = ", ".join(repr(b) for b in SUPPORTED_BACKENDS)
+    raise ValueError(f"Unknown TTS backend: {backend!r}. Expected one of {expected}.")
 
 
-# Lazy imports so the module doesn't pull in both clients at import time.
+# Lazy imports so the module doesn't pull in every client at import time.
 def __getattr__(name: str) -> type:
+    if name == "CartesiaClient":
+        from .cartesia import CartesiaClient
+
+        return CartesiaClient
     if name == "ElevenLabsClient":
         from .elevenlabs import ElevenLabsClient
 

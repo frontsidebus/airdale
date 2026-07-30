@@ -199,17 +199,40 @@ class Settings(BaseSettings):
 
     @property
     def tts_configured(self) -> bool:
-        """Whether TTS is configured for the selected backend."""
-        if self.tts_backend == "local":
+        """Whether TTS is configured for the *selected* backend.
+
+        Each backend is checked against its own credentials -- never another
+        backend's. Adding a backend to ``tts/__init__.py`` requires a branch
+        here too, or the new backend silently reports itself unconfigured.
+        """
+        backend = self.tts_backend.lower().strip()
+        if backend == "local":
             return bool(self.tts_local_url)
-        return bool(self.elevenlabs_api_key and self.elevenlabs_voice_id)
+        if backend == "cartesia":
+            return bool(self.cartesia_api_key and self.cartesia_voice_id)
+        if backend == "elevenlabs":
+            return bool(self.elevenlabs_api_key and self.elevenlabs_voice_id)
+        return False
 
     @property
     def voice_id(self) -> str:
         """Return the voice ID appropriate for the selected TTS backend."""
-        if self.tts_backend == "local":
+        backend = self.tts_backend.lower().strip()
+        if backend == "local":
             return self.tts_voice_id_local
+        if backend == "cartesia":
+            return self.cartesia_voice_id
         return self.elevenlabs_voice_id
+
+    @property
+    def stt_configured(self) -> bool:
+        """Whether STT is configured for the *selected* backend."""
+        backend = self.stt_backend.lower().strip()
+        if backend == "whisper":
+            return bool(self.whisper_url)
+        if backend == "deepgram":
+            return bool(self.deepgram_api_key)
+        return False
 
 
 def load_settings() -> Settings:
