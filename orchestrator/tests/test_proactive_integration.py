@@ -12,6 +12,7 @@ order with the right properties.
 from __future__ import annotations
 
 import pytest
+
 from orchestrator.flight_phase import FlightPhaseDetector, PhaseThresholds
 from orchestrator.sim_client import (
     Attitude,

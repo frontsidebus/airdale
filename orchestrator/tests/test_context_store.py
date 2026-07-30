@@ -6,6 +6,7 @@ import tempfile
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from orchestrator.context_store import PHASE_TOPICS, ContextStore
 from orchestrator.sim_client import FlightPhase, SimState
 

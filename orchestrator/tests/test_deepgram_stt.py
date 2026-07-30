@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
+
 from orchestrator.stt.deepgram import _AVIATION_KEYWORDS, DeepgramSTTClient
 
 # ---------------------------------------------------------------------------

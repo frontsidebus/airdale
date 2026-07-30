@@ -7,6 +7,7 @@ import base64
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from orchestrator.screen_capture import CaptureManager
 
 # ---------------------------------------------------------------------------
