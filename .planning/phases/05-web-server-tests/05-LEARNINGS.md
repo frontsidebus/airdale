@@ -246,11 +246,11 @@ Plan 05-02 found `_stream_response` routing on `cartesia_client is None` and goi
 **Impact:** Attributable to the plan pre-solving the mocking shapes (including the dead ends) and pre-specifying the timeout discipline. Contrast with plan 05-01, which hit two blocking deviations on straightforward infrastructure.
 **Source:** 05-02-SUMMARY.md
 
-### The phase was declared test-complete with four red tests and a follow-up plan that was never written
+### The phase was declared test-complete with four red tests, and the follow-up plan it asked for was never written — the fixes arrived anyway, unattributed
 05-02's summary says "Phase 5 scope is test-complete modulo the deferred legacy-test cleanup" and recommends "a small cleanup plan (Plan 05-03 or similar)."
 
-**Impact:** No 05-03 exists, and v1.2 shipped at 14/14 plans with the four failures still present. All four have documented one-line fixes. The deferred-items log preserved the knowledge but nothing scheduled the work — the same pattern that left Phase 03's gaps open for three weeks.
-**Source:** deferred-items.md, 05-02-SUMMARY.md, .planning/STATE.md
+**Impact:** No 05-03 was ever created. The four failures were nonetheless fixed inside `8587ba5 fix: unblock python CI + close out v1.2 (#71)` — before v1.2 shipped — using exactly the one-line fixes `deferred-items.md` had suggested. Nothing linked that commit back to the record, so the log continued to read as outstanding for three months until a 2026-07-29 re-check. This is the same shape as Phase 03's gaps: real work closed by unrelated work, with the tracking artifact never updated. The knowledge survived; the resolution did not.
+**Source:** deferred-items.md (`## Resolution`), 05-02-SUMMARY.md, git `8587ba5`
 
 ### The phase that added the test suite has neither a verification report nor a UAT
 `gsd-sdk` reports `has_verification: false` for Phase 05, and no `05-UAT.md` exists — coverage of WTST-01 through WTST-07 is asserted only in the plan summaries themselves.

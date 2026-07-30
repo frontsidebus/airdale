@@ -129,10 +129,10 @@ All four FAILs were resolved during Phase 04/05 and the `8587ba5` CI-unblocking 
 **Source:** 03-VERIFICATION.md
 
 ### Annotating a resolution in the file body does not change the machine-readable status
-The frontmatter still reads `status: gaps_found` and `score: 6/9`, so tooling continues to report Phase 03 as having gaps even though the body documents all four as RESOLVED with evidence.
+For three months the frontmatter read `status: gaps_found` and `score: 6/9` while the body's `## Post-hoc Resolution` documented every FAIL as resolved with file:line evidence. `gsd-sdk` reports on the frontmatter, so the phase kept surfacing as blocked.
 
-**Context:** Acknowledged as a deferred item at milestone close: "tool still reads `gaps_found`; evidence in 03-VERIFICATION.md." Frontmatter and body can disagree, and automation trusts the frontmatter.
-**Source:** 03-VERIFICATION.md, .planning/STATE.md
+**Context:** Acknowledged as a deferred item at milestone close — "tool still reads `gaps_found`; evidence in 03-VERIFICATION.md" — and only reconciled on 2026-07-29, when the frontmatter was set to `status: passed`, `score: 9/9`, `gaps: []`, with the original entries moved to a `resolved_gaps:` key so the history survives without tooling reading it as debt. Confirmed against `phase.cjs`, which regexes `/status: gaps_found/` over `*-VERIFICATION.md` only. The durable lesson: prose is for humans, frontmatter is the API — resolving one without the other leaves the record half-closed.
+**Source:** 03-VERIFICATION.md (`### Re-verification: 2026-07-29`), .planning/STATE.md
 
 ### The fix for a whole class of async/sync defects can be purely mechanical
 The verifier could state all four repairs as literal find-and-replace pairs and explicitly noted "No human verification required for these gaps."
