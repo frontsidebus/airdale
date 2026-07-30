@@ -21,13 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** MERLIN's voice and text responses must be fast, high-quality, and contextually accurate during flight
-**Current focus:** v1.2 shipped — next milestone planning (v1.3 Agent Copilot Control, Phase 1 already complete, Phases 2-4 planned)
+**Current focus:** v1.3 Agent Copilot Control — roadmap reconciled 2026-07-29; Phase 2 rescoped and ready to plan
 
 ## Current Position
 
-Milestone: v1.2 (shipped 2026-04-18)
-Status: Milestone complete — ready for /gsd-new-milestone or continue v1.3
+Milestone: v1.3 (in progress; v1.2 shipped 2026-04-18)
+Status: Reconciliation complete — Phase 2 (AUTH-01…08) ready to plan
 Last activity: 2026-07-29
+
+Next: plan v1.3 Phase 2, or start Voice Architecture VARC-01 (semantic turn
+detection). Both are unblocked.
 
 ## Deferred Items
 
@@ -39,9 +42,39 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-04-18:
 | testing | Phase 05 — 4 pre-existing web test failures logged in `deferred-items.md` | **CLOSED 2026-07-29** — fixed in `8587ba5` before v1.2 shipped; `web/tests/` now 38 passed, 1 skipped |
 | refactor | `web/server.py` early-boot module state — tests monkeypatch globals rather than use DI overrides | acknowledged (acceptable for v1.2; revisit if logging infra changes) |
 
-## Scope Divergence Note
+## Scope Divergence Note — RESOLVED 2026-07-29
 
-Recent commits (Phase 4 integration tests, proactive copilot, checklist manager, callouts engine) reference work not captured in the current ROADMAP for either v1.2 or v1.3. Before starting v1.3 Phase 2, reconcile: is this v1.3 Phase 1 expansion, a new Phase 1.5, or its own milestone?
+> Original: "Recent commits (Phase 4 integration tests, proactive copilot,
+> checklist manager, callouts engine) reference work not captured in the current
+> ROADMAP for either v1.2 or v1.3. Before starting v1.3 Phase 2, reconcile: is
+> this v1.3 Phase 1 expansion, a new Phase 1.5, or its own milestone?"
+
+**Answer: v1.3 Phase 1 expansion.** The undocumented work is all command-control
+and proactive-output infrastructure that belongs to the Agent Copilot Control
+theme, not a separate milestone. It is now recorded as two completed unplanned
+workstreams in ROADMAP.md (Command Safety & Integrity, Proactive Co-Pilot) with
+retroactive requirement IDs SAFE-01…08 and PROA-01…06.
+
+**Root cause identified and fixed:** v1.3 had no `REQUIREMENTS.md`. v1.2 had 36
+requirement IDs that every plan declared and every verifier traced; with no IDs
+there was nothing for a phase to claim and nothing for verification to check
+coverage against, so ~3,900 lines landed silently. `.planning/REQUIREMENTS.md`
+now exists with 61 requirements.
+
+**Also corrected:** Phase 2 was rescoped — two of its four deliverables had
+already shipped with Phase 1. `CLAUDE.md` was updated for 13 missing modules and
+10 missing docs. See `.planning/v1.3-RECONCILIATION.md` for the full audit.
+
+## Open Decisions
+
+These need a call before or during Phase 2 planning:
+
+| Decision | Context |
+|---|---|
+| `docs/phase2-controls` + `feat/fuel-controls` | Two stale branches (62 commits behind) adding engine-management and fuel-selection command *types*. If wanted, they expand the surface AUTH-01…08 must gate — decide before planning Phase 2, not after. Re-implementing on `main` is likely cheaper than rebasing. |
+| RIO / v2 direction | `rio/phase-1`, `feature/claude-perf-tuning`, `feature/local-inference-architecture` (all 210 commits behind) plus `docs/MIGRATION_V1_V2.md` and `chore/v2-ci-updates` describe an LLM-abstraction / local-inference direction against a separate `rio` remote. Needs an explicit accept-or-abandon. |
+| 11 `worktree-agent-*` branches | ~30 commits of leftover agent worktrees. Triage or delete. |
+| Speech-to-speech | Requires replacing Claude, `validation.py`, and failure attribution. Should be an ADR if ever pursued, not an incremental slide. See `TECH-STACK-REVIEW.md` §2. |
 
 Progress: [░░░░░░░░░░] 0%
 
