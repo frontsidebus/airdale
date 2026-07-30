@@ -13,11 +13,17 @@
 | Telemetry Service | Python / FastAPI (universal hub for sim adapters) |
 | MSFS Adapter | C# / .NET 8 (out-of-process exe, event-driven message pump) |
 | AI Inference | Anthropic Claude API with tool use |
-| Vector Store / RAG | ChromaDB with sentence-transformers embeddings |
-| Speech-to-Text | faster-whisper (CTranslate2) `medium` model via Docker |
-| Text-to-Speech | ElevenLabs streaming API (`eleven_multilingual_v2` model) |
+| Vector Store / RAG | ChromaDB with sentence-transformers embeddings, cross-encoder re-ranking, semantic chunking |
+| Speech-to-Text | Pluggable via `stt_backend`: Deepgram (cloud streaming, **default**) or faster-whisper `large-v3-turbo` (local batch, via Docker) |
+| Text-to-Speech | Pluggable via `tts_backend`: Cartesia (**default**), ElevenLabs, or local Kokoro |
+| Voice Activity Detection | Silero VAD (neural), with RMS-threshold fallback when torch is absent |
 | IPC | WebSocket (JSON) between adapters, telemetry service, and consumers |
 | Config | pydantic-settings with .env files |
+
+Both STT and TTS are selected by config behind protocols (`stt/base.py`,
+`tts/base.py`) with factories (`create_stt_client`, `create_tts_client`). Adding
+a backend means adding a module and a factory branch — never touching consumers.
+See "Voice backends" under Architectural Decisions.
 
 ## Directory Structure
 
@@ -48,18 +54,50 @@ airdale/
 ├── orchestrator/                # Python package -- the brain
 │   ├── orchestrator/            # Source package
 │   │   ├── __init__.py
-│   │   ├── audio_processing.py  # Audio preprocessing (high-pass, trim, normalize)
-│   │   ├── claude_client.py     # Anthropic API wrapper with MERLIN persona + tools
-│   │   ├── config.py            # Pydantic settings from .env
-│   │   ├── context_store.py     # ChromaDB RAG store with query cache
-│   │   ├── flight_phase.py      # State-machine flight phase detector
 │   │   ├── main.py              # CLI entry point
-│   │   ├── screen_capture.py    # Optional screen capture for vision analysis
+│   │   ├── config.py            # Pydantic settings from .env
+│   │   ├── claude_client.py     # Anthropic API wrapper with MERLIN persona + tools
 │   │   ├── sim_client.py        # Telemetry client, models, health monitor
-│   │   ├── tools.py             # Claude tool implementations
+│   │   ├── flight_phase.py      # State-machine flight phase detector
+│   │   │
+│   │   ├── tools.py             # Claude tool implementations (incl. set_aircraft_control)
+│   │   ├── aviation_tools.py    # NOTAM, METAR/TAF, ADS-B, charts, performance, airspace
+│   │   │
+│   │   ├── command_safety.py    # PRE-execution safety rules; gates the write path
+│   │   ├── command_verifier.py  # POST-execution telemetry confirmation
+│   │   ├── command_history.py   # Recent commands + generated undo actions
+│   │   ├── procedures.py        # Multi-step compound command execution
+│   │   │
+│   │   ├── proactive_monitor.py # Unified telemetry evaluation (callouts+deviations+emergency)
+│   │   ├── callouts.py          # Aviation callout engine (V1, rotate, minimums)
+│   │   ├── deviation_monitor.py # Phase-aware deviation rules and alerts
+│   │   ├── checklist_manager.py # Interactive checklists driven by phase transitions
+│   │   ├── emergency.py         # Emergency detection; pre-validated LLM-bypass responses
+│   │   ├── validation.py        # Validates Claude's V-speeds/altitudes/frequencies
+│   │   │
+│   │   ├── context_store.py     # ChromaDB RAG store with query cache
+│   │   ├── chunking.py          # Structure-aware semantic chunking
+│   │   ├── reranker.py          # Cross-encoder two-stage retrieval
+│   │   │
+│   │   ├── voice.py             # Voice I/O (PTT, VAD, barge-in, playback)
+│   │   ├── audio_processing.py  # Preprocessing (high-pass, trim, normalize) + AVIATION_PROMPT
+│   │   ├── whisper_client.py    # Whisper ASR HTTP client with retry logic
 │   │   ├── tts_preprocessor.py  # ICAO-compliant aviation text preprocessing for TTS
-│   │   ├── voice.py             # Voice I/O (PTT, VAD, barge-in, streaming TTS)
-│   │   └── whisper_client.py    # Whisper ASR HTTP client with retry logic
+│   │   ├── screen_capture.py    # Optional screen capture for vision analysis
+│   │   │
+│   │   ├── stt/                 # Speech-to-text backends behind STTClient
+│   │   │   ├── base.py          # STTClient protocol + TranscriptionResult
+│   │   │   ├── __init__.py      # create_stt_client factory + aviation_keywords()
+│   │   │   ├── deepgram.py      # Cloud streaming backend
+│   │   │   └── whisper_adapter.py # Adapts batch WhisperClient onto the protocol
+│   │   ├── tts/                 # Text-to-speech backends behind TTSClient
+│   │   │   ├── base.py          # TTSClient protocol
+│   │   │   ├── __init__.py      # create_tts_client factory
+│   │   │   ├── cartesia.py      # Low-latency cloud backend
+│   │   │   ├── elevenlabs.py    # Cloud backend with native WS streaming
+│   │   │   └── kokoro.py        # Local backend
+│   │   └── eval/                # Offline evaluation; NOT imported by runtime code
+│   │       └── aviation_wer.py  # Aviation-weighted ASR scoring (WER/CTER/value-recall)
 │   ├── tests/                   # Unit tests (pytest + pytest-asyncio)
 │   ├── Dockerfile
 │   └── pyproject.toml           # Build config, dependencies, ruff settings
@@ -73,6 +111,8 @@ airdale/
 │       └── style.css
 ├── data/
 │   ├── checklists/              # YAML checklist files (generic_single_engine, etc.)
+│   ├── eval/                    # Evaluation fixtures
+│   │   └── aviation_stt_corpus.yaml  # Reference phrases for STT backend gating
 │   └── prompts/                 # System prompt templates
 │       ├── merlin_system.md     # MERLIN persona definition
 │       └── merlin_emergency.md  # Emergency procedure prompt overlay
@@ -81,10 +121,21 @@ airdale/
 ├── tools/                       # Developer utilities
 │   ├── download_faa_data.py     # FAA data fetcher for RAG ingestion
 │   ├── ingest.py                # Document ingestion into ChromaDB
-│   └── test_tts.py              # ElevenLabs TTS smoke test
+│   ├── stt_bench.py             # Gate STT backend swaps on aviation-term WER
+│   └── test_tts.py              # TTS smoke test
 ├── docs/                        # Project documentation
 │   ├── ARCHITECTURE.md          # System design and data flows
 │   ├── API.md                   # WebSocket protocol reference
+│   ├── AIRCRAFT_CONTROLS.md     # Supported control systems and SimConnect mapping
+│   ├── SMART_CONTROLS.md        # Command safety severity model and rule reference
+│   ├── SAFETY.md                # Emergency fast paths and numerical validation
+│   ├── PROACTIVE_COPILOT.md     # Callouts, deviation alerts, checklist automation
+│   ├── AVIATION_TOOLS.md        # NOTAM/METAR/ADS-B tool reference
+│   ├── RAG_SYSTEM.md            # Retrieval, chunking, re-ranking
+│   ├── VOICE_PIPELINE.md        # STT/TTS backends, VAD, barge-in
+│   ├── CONFIGURATION.md         # Full config field reference
+│   ├── TESTING.md               # Test layout and conventions
+│   ├── MIGRATION_V1_V2.md       # v1 -> v2 architecture migration notes
 │   ├── GETTING_STARTED.md
 │   └── INSTALL.md
 ├── docker-compose.yml           # Production service stack
@@ -249,7 +300,7 @@ TELEMETRY_SERVICE_HOST=$(hostname).local       # WSL2 native
 
 15. **Query cache for ChromaDB** -- The `ContextStore` uses a TTL-based cache (60s default) keyed by query text, result count, and filter hash. Within a single flight phase, relevant documents rarely change, so this avoids redundant round-trips to ChromaDB.
 
-16. **faster-whisper over stock Whisper** -- CTranslate2 backend is 3-4x faster with identical accuracy. Uses the `medium` model for better recognition of aviation terminology.
+16. **faster-whisper over stock Whisper** -- CTranslate2 backend is 3-4x faster with identical accuracy. Uses `large-v3-turbo`, which is both more accurate and roughly 3x faster than `medium`. Dev compose overrides to `tiny` for startup time.
 
 17. **Silero VAD over RMS threshold** -- Neural voice activity detection reduces silence timeout from 1.5s to 400ms, making voice interaction feel snappy without cutting off speech.
 
@@ -259,14 +310,43 @@ TELEMETRY_SERVICE_HOST=$(hostname).local       # WSL2 native
 
 20. **Aviation TTS preprocessor** -- Converts LLM output into speakable text following ICAO phraseology: digit-by-digit pronunciation for flight levels, headings, frequencies, runway designators, and squawk codes.
 
+21. **Voice backends behind protocols** -- STT and TTS are selected by `stt_backend` / `tts_backend` config. Each has a protocol (`stt/base.py`, `tts/base.py`), one module per backend, and a factory. Consumers hold the protocol, never a provider: `VoiceOutput` takes a `TTSClient` and contains no URLs, credentials, or voice settings. Adding a backend means a module plus a factory branch, and requires adding a branch to `Settings.tts_configured` / `voice_id` too — `SUPPORTED_BACKENDS` exists to keep those in sync. This abstraction was silently reverted once (`a1b508a`) and went undetected for four months; `test_voice.py` now carries structural guards against a repeat.
+
+22. **Safety layers are independent of the LLM** -- Three separate guards, none of which depend on Claude behaving well. `command_safety.py` validates proposed commands against live telemetry *before* execution (`blocked` stops it, `warning` proceeds with an advisory). `command_verifier.py` polls telemetry *after* to confirm the aircraft actually changed. `validation.py` scans Claude's response text for V-speeds, altitudes, and frequencies against per-aircraft limits. `emergency.py` bypasses the LLM entirely for time-critical conditions. This is the primary reason the cascade architecture is retained over speech-to-speech — see `.planning/TECH-STACK-REVIEW.md`.
+
+23. **Aviation-term WER over published WER** -- STT backend swaps are gated on `orchestrator/eval/aviation_wer.py`, which reports critical-token error rate and value recall alongside standard WER. Published leaderboard WER is dominated by conversational filler and cannot distinguish a backend that drops "uh" from one that hears "one zero thousand" as "one thousand". Run `tools/stt_bench.py` before changing STT.
+
 ## Testing Approach
 
-- **361 tests passing** across Python and C# test suites.
+- **~1,066 tests passing** across Python and C# suites: 990 orchestrator, 38 web, 38 telemetry-service, plus the C# adapter test project.
 - **Python:** pytest + pytest-asyncio for async tests. Mock the WebSocket connection and Claude API in unit tests.
 - **C#:** xUnit. Mock SimConnect for unit tests. Integration tests require MSFS running.
 - **No sim required for most tests** -- Record telemetry snapshots as JSON fixtures and replay them through the orchestrator.
-- **Test categories include:** unit tests (config, flight phase, tools, Claude client, Whisper client, context store, screen capture), integration tests (WebSocket reconnection, health monitor, delta detection, query classification, orchestrator end-to-end, tool chain, Whisper pipeline).
+- **Web tests** live in `web/tests/` with their own `web/pyproject.toml`; they use `httpx` + `ASGITransport` for REST and `httpx-ws` + `ASGIWebSocketTransport` for WebSocket, all in-process with no live server.
+- **Test categories:** config, flight phase, tools, Claude client, STT/TTS backends and factories, voice pipeline, command safety/verifier/history, procedures, callouts, deviation monitor, proactive monitor, checklist manager, emergency, validation, aviation tools, context store, chunking, re-ranker, screen capture, aviation-WER scoring; plus root-level integration tests (WebSocket reconnection, health monitor, delta detection, orchestrator end-to-end, tool chain, Whisper pipeline).
+
+### Running lint the way CI does
+
+CI runs ruff from the **repo root** with the orchestrator config:
+
+```bash
+ruff check orchestrator/ telemetry-service/ web/ --config orchestrator/pyproject.toml \
+  --extend-ignore SIM105,SIM117,F841,B008,B017,B007,UP041
+ruff format --check orchestrator/ telemetry-service/ web/ --config orchestrator/pyproject.toml
+```
+
+Use these exact commands. `ruff check .` from inside `orchestrator/` **disagrees
+with CI**: isort's `src` setting is unset, so it defaults to `["."]` resolved
+against the current working directory, which flips whether `orchestrator` counts
+as first-party and therefore whether a blank line is wanted before
+`from orchestrator...` imports. Running the local form and pushing has broken CI
+before.
 
 ## Environment Variables
 
 All config flows through `.env` files loaded by `pydantic-settings`. See `.env.example` for the complete list with documentation. Never commit `.env` to version control.
+
+Config properties that branch on a backend selector (`tts_configured`,
+`voice_id`, `stt_configured`) must have a branch for **every** supported backend.
+A missing branch does not error — it silently reports the feature unconfigured,
+which is how a Cartesia-only setup reported `tts_configured: False` for months.

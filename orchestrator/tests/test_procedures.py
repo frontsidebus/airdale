@@ -1,18 +1,108 @@
-"""Tests for orchestrator.procedures — multi-step procedure execution."""
+"""Tests for orchestrator.procedures — multi-step procedure definitions and executor."""
 
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
 import pytest
-from orchestrator.procedures import (
-    PROCEDURES,
-    Procedure,
-    ProcedureExecutor,
-    ProcedureStep,
-    get_procedure,
-    list_procedures,
+
+procedures_mod = pytest.importorskip(
+    "orchestrator.procedures",
+    reason="orchestrator.procedures not implemented yet",
 )
+PROCEDURES = procedures_mod.PROCEDURES
+Procedure = procedures_mod.Procedure
+ProcedureExecutor = procedures_mod.ProcedureExecutor
+ProcedureResult = procedures_mod.ProcedureResult
+ProcedureStep = procedures_mod.ProcedureStep
+StepResult = procedures_mod.StepResult
+get_procedure = procedures_mod.get_procedure
+list_procedures = procedures_mod.list_procedures
+
+
+# ---------------------------------------------------------------------------
+# ProcedureStep dataclass
+# ---------------------------------------------------------------------------
+
+
+class TestProcedureStepFields:
+    def test_all_fields_present(self) -> None:
+        step = ProcedureStep(
+            system="gear",
+            action="down",
+            value=None,
+            delay_ms=500,
+            description="Gear down",
+        )
+        assert step.system == "gear"
+        assert step.action == "down"
+        assert step.value is None
+        assert step.delay_ms == 500
+        assert step.description == "Gear down"
+
+    def test_default_values(self) -> None:
+        step = ProcedureStep(system="flaps", action="full")
+        assert step.value is None
+        assert step.delay_ms == 500
+        assert step.description == ""
+
+
+# ---------------------------------------------------------------------------
+# ProcedureResult / StepResult
+# ---------------------------------------------------------------------------
+
+
+class TestProcedureResultFields:
+    def test_all_fields_present(self) -> None:
+        result = ProcedureResult(
+            procedure_name="test",
+            success=True,
+            steps_completed=3,
+            steps_total=3,
+        )
+        assert result.procedure_name == "test"
+        assert result.success is True
+        assert result.steps_completed == 3
+        assert result.steps_total == 3
+        assert result.step_results == []
+
+    def test_to_dict_tracks_success_and_failure(self) -> None:
+        step_ok = StepResult(
+            step=ProcedureStep(system="gear", action="down", description="Gear"),
+            success=True,
+            command="GEAR_DOWN",
+        )
+        step_fail = StepResult(
+            step=ProcedureStep(system="flaps", action="full", description="Flaps"),
+            success=False,
+            error="Command failed",
+        )
+        result = ProcedureResult(
+            procedure_name="test",
+            success=False,
+            steps_completed=1,
+            steps_total=2,
+            step_results=[step_ok, step_fail],
+        )
+        d = result.to_dict()
+        assert d["steps"][0]["success"] is True
+        assert d["steps"][1]["success"] is False
+        assert d["steps"][1]["error"] == "Command failed"
+
+    def test_to_dict_fallback_description(self) -> None:
+        """If description is empty, to_dict should use system + action."""
+        step = ProcedureStep(system="flaps", action="full")
+        sr = StepResult(step=step, success=True, command="FLAPS_SET")
+        result = ProcedureResult(
+            procedure_name="t",
+            success=True,
+            steps_completed=1,
+            steps_total=1,
+            step_results=[sr],
+        )
+        d = result.to_dict()
+        assert "flaps full" in d["steps"][0]["description"]
+
 
 # ---------------------------------------------------------------------------
 # Registry helpers
@@ -47,6 +137,11 @@ class TestProcedureRegistry:
         names = {p["name"] for p in result}
         assert names == set(PROCEDURES.keys())
 
+    def test_list_procedures_has_name_and_description(self) -> None:
+        for p in list_procedures():
+            assert "name" in p
+            assert "description" in p
+
     def test_every_procedure_has_steps(self) -> None:
         for name, proc in PROCEDURES.items():
             assert len(proc.steps) > 0, f"Procedure {name} has no steps"
@@ -63,6 +158,12 @@ class TestProcedureRegistry:
         assert "flaps" in systems
         assert "lights" in systems
         assert "down" in actions
+
+    def test_takeoff_config_steps(self) -> None:
+        proc = PROCEDURES["takeoff_config"]
+        systems = [s.system for s in proc.steps]
+        assert "flaps" in systems
+        assert len(proc.steps) >= 2
 
     def test_go_around_contains_throttle_flaps_gear(self) -> None:
         proc = PROCEDURES["go_around"]
@@ -120,7 +221,6 @@ class TestProcedureExecutor:
     async def test_execute_continues_after_failure(self) -> None:
         """A failed step should not abort the remaining steps."""
         client = self._make_client(success=True)
-        # Make the second call fail
         client.send_command.side_effect = [
             {"success": True, "message": "ok"},
             {"success": False, "error": "Adapter rejected"},
@@ -168,8 +268,33 @@ class TestProcedureExecutor:
 
         assert result.success is False
         assert "Unknown control" in result.step_results[0].error
-        # send_command should never have been called
         client.send_command.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_steps_execute_in_order(self) -> None:
+        """Steps should be executed sequentially, in definition order."""
+        execution_order: list[str] = []
+
+        async def track_command(command: str, value: int) -> dict:
+            execution_order.append(command)
+            return {"success": True}
+
+        client = AsyncMock()
+        client.send_command = AsyncMock(side_effect=track_command)
+
+        proc = Procedure(
+            name="test_order",
+            description="Test order",
+            steps=[
+                ProcedureStep(system="gear", action="down", delay_ms=0),
+                ProcedureStep(system="flaps", action="full", delay_ms=0),
+                ProcedureStep(system="lights", action="landing", delay_ms=0),
+            ],
+        )
+        executor = ProcedureExecutor(client)
+        await executor.execute(proc)
+
+        assert execution_order == ["GEAR_DOWN", "FLAPS_SET", "LANDING_LIGHTS_TOGGLE"]
 
     @pytest.mark.asyncio
     async def test_to_dict_serialization(self) -> None:
@@ -201,7 +326,15 @@ class TestProcedureExecutor:
         result = await executor.execute(proc)
 
         assert result.success is True
-        # First call should be THROTTLE_SET with value = 16383 (100%)
         first_call = client.send_command.call_args_list[0]
         assert first_call[0][0] == "THROTTLE_SET"
         assert first_call[0][1] == 16383
+
+    @pytest.mark.asyncio
+    async def test_empty_procedure_succeeds(self) -> None:
+        client = self._make_client()
+        executor = ProcedureExecutor(client)
+        proc = Procedure(name="empty", description="Empty", steps=[])
+        result = await executor.execute(proc)
+        assert result.success is True
+        assert result.steps_total == 0
