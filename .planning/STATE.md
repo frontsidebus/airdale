@@ -35,7 +35,8 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-04-18:
 
 | Category | Item | Status |
 |----------|------|--------|
-| verification | Phase 03 — 4 FAILs annotated as resolved in-file under `## Post-hoc Resolution` | acknowledged (tool still reads `gaps_found`; evidence in 03-VERIFICATION.md) |
+| verification | Phase 03 — 6 call-site defects (4 logged + 2 `is_available`) in Whisper consumer wiring | **CLOSED 2026-07-29** — all 6 re-verified against current code; 03-VERIFICATION.md frontmatter now `status: passed`, 9/9 |
+| testing | Phase 05 — 4 pre-existing web test failures logged in `deferred-items.md` | **CLOSED 2026-07-29** — fixed in `8587ba5` before v1.2 shipped; `web/tests/` now 38 passed, 1 skipped |
 | refactor | `web/server.py` early-boot module state — tests monkeypatch globals rather than use DI overrides | acknowledged (acceptable for v1.2; revisit if logging infra changes) |
 
 ## Scope Divergence Note

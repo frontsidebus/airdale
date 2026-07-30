@@ -1,9 +1,12 @@
 ---
 phase: 03-whisper-consolidation
 verified: 2026-03-26T00:00:00Z
-status: gaps_found
-score: 6/9 must-haves verified
-gaps:
+re_verified: 2026-07-29T00:00:00Z
+status: passed
+score: 9/9 must-haves verified (3 originally failed, all resolved post-hoc)
+re_verification: true
+gaps: []
+resolved_gaps:
   - truth: "VoiceInput.transcribe() delegates to the injected async WhisperClient instead of inline httpx"
     status: failed
     reason: "voice.py uses asyncio.to_thread(self._whisper_client.transcribe, wav_bytes) but transcribe() is async def. asyncio.to_thread wraps a coroutine object and passes it to a thread — the coroutine never executes. Transcription returns the coroutine object or raises, silently breaking voice input."
@@ -41,9 +44,14 @@ gaps:
 # Phase 03: Whisper Consolidation Verification Report
 
 **Phase Goal:** A single async WhisperClient with unified confidence scoring and retry logic replaces all three transcription implementations
-**Verified:** 2026-03-26
-**Status:** gaps_found — consumer wiring uses sync call patterns against an async client
-**Re-verification:** No — initial verification
+**Verified:** 2026-03-26 (initial) · 2026-07-29 (re-verified)
+**Status:** passed — all originally-failing consumer wiring resolved; see `## Post-hoc Resolution`
+**Re-verification:** Yes — see `## Post-hoc Resolution` for current-code evidence
+
+> **Reading this report:** the Observable Truths, Anti-Patterns, and Gaps Summary sections below
+> record the state as of 2026-03-26 and are preserved unedited as history. Every FAIL and BLOCKER
+> in them has since been fixed — the `## Post-hoc Resolution` section at the end maps each one to
+> the current file:line that resolves it.
 
 ---
 
@@ -189,3 +197,29 @@ All four FAIL items above were fixed in subsequent work (likely during Phase 04/
 | `_transcribe_with_confidence()` in server.py does not call `transcribe_with_confidence()` | `web/server.py:1272` — `result = await state.whisper_client.transcribe_with_confidence(...)` | RESOLVED |
 
 **Override:** These FAILs are superseded by current-code verification. No outstanding Phase 03 verification gaps remain.
+
+### Re-verification: 2026-07-29
+
+_Added during /gsd-extract-learnings follow-up. Frontmatter `status` flipped `gaps_found` → `passed`._
+
+The 2026-04-18 spot-check listed four items. The original report's **Anti-Patterns Found** table
+actually recorded **six** defects — it also flagged `is_available()` being wrapped in
+`asyncio.to_thread` at `main.py:176` and `server.py:291`. All six were re-checked against the
+current codebase:
+
+| # | Original defect | Current code | Status |
+|---|---|---|---|
+| 1 | `voice.py:197` — `asyncio.to_thread(...transcribe, wav_bytes)` on an `async def` | `orchestrator/orchestrator/voice.py:184` — `await self._whisper_client.transcribe(wav_bytes)` | RESOLVED |
+| 2 | `main.py:166` — `_whisper_client.close()` (AttributeError) | `orchestrator/orchestrator/main.py:148` — `await self._whisper_client.aclose()` | RESOLVED |
+| 3 | `main.py:176` — `await asyncio.to_thread(...is_available)` on an `async def` | `orchestrator/orchestrator/main.py:158` — `available = await self._whisper_client.is_available()` | RESOLVED |
+| 4 | `server.py:234` — `_whisper_client.close()` (AttributeError) | `web/server.py:279` — `await state.whisper_client.aclose()` | RESOLVED |
+| 5 | `server.py:291` — `await asyncio.to_thread(...is_available)` on an `async def` | `web/server.py:349` — `whisper_ok = await state.whisper_client.is_available()` | RESOLVED |
+| 6 | `server.py:989` — `asyncio.to_thread(...transcribe_with_confidence, audio_bytes)` | `web/server.py:1272` — `await state.whisper_client.transcribe_with_confidence(...)` | RESOLVED |
+
+Negative check: `grep -rn "to_thread.*whisper\|whisper.*to_thread" orchestrator/ web/` returns zero
+matches — no `asyncio.to_thread` wrapper on any WhisperClient method remains anywhere in the tree.
+
+**Score reconciliation:** three Observable Truths (5, 6, 7) were scored FAILED or PARTIAL solely
+because of these six call-site defects. With all six resolved, the score is 9/9. Frontmatter
+`gaps:` is now `[]`; the original entries are preserved under `resolved_gaps:` so the history
+survives without tooling reading the phase as blocked.
