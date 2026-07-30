@@ -1,7 +1,10 @@
-"""Voice pipeline: microphone input with Whisper STT and ElevenLabs TTS.
+"""Voice pipeline: microphone input and speech output via pluggable backends.
 
-Includes audio preprocessing, aviation-vocabulary-biased transcription,
-confidence scoring, and cancellable TTS playback for barge-in support.
+STT is delegated to a ``WhisperClient``; TTS is delegated to any client
+satisfying the ``TTSClient`` protocol, so the synthesis backend is a config
+choice rather than a code dependency. Includes audio preprocessing,
+aviation-vocabulary-biased transcription, confidence scoring, and cancellable
+playback for barge-in support.
 """
 
 from __future__ import annotations
@@ -11,7 +14,6 @@ import logging
 from collections.abc import AsyncIterator
 from enum import StrEnum
 
-import httpx
 import numpy as np
 
 from .audio_processing import (
@@ -19,6 +21,7 @@ from .audio_processing import (
     preprocess_audio,
     samples_to_wav_bytes,
 )
+from .tts import TTSClient
 from .whisper_client import WhisperClient, WhisperClientError
 
 logger = logging.getLogger(__name__)
@@ -198,7 +201,11 @@ class VoiceInput:
 
 
 class VoiceOutput:
-    """ElevenLabs TTS with streaming playback via ffmpeg for MP3 decoding.
+    """TTS playback via the TTSClient protocol, with backend-aware decoding.
+
+    Audio format is taken from ``tts_client.audio_content_type`` rather than
+    assumed -- MP3 backends (ElevenLabs) are decoded via ffmpeg, while WAV/PCM
+    backends (Kokoro, Cartesia in pcm mode) are played without a subprocess.
 
     Supports cancellation for barge-in: call cancel() to stop the current
     playback immediately when the user starts speaking.
@@ -206,14 +213,10 @@ class VoiceOutput:
 
     def __init__(
         self,
-        api_key: str,
-        voice_id: str,
-        model_id: str = "eleven_multilingual_v2",
+        tts_client: TTSClient,
         sample_rate: int = 24000,
     ) -> None:
-        self._api_key = api_key
-        self._voice_id = voice_id
-        self._model_id = model_id
+        self._tts = tts_client
         self._sample_rate = sample_rate
         self._cancelled = False
         self._playing = False
@@ -242,27 +245,19 @@ class VoiceOutput:
 
     async def speak(self, text: str) -> None:
         """Convert text to speech and play through default audio output."""
-        if not self._api_key or not self._voice_id:
-            logger.warning("TTS not configured (missing api_key or voice_id)")
-            return
-
         if not text.strip():
             return
 
         self.reset()
-        mp3_data = await self._synthesize(text)
-        if mp3_data and not self._cancelled:
-            await self._play_mp3(mp3_data)
+        audio = await self._synthesize(text)
+        if audio and not self._cancelled:
+            await self._play_audio(audio)
 
     async def speak_streamed(self, text_stream: AsyncIterator[str]) -> None:
         """Buffer text into sentences, synthesize each, and play sequentially.
 
         Respects cancellation: stops synthesizing and playing if cancel() is called.
         """
-        if not self._api_key or not self._voice_id:
-            logger.warning("TTS not configured, skipping speech output")
-            return
-
         self.reset()
         buffer = ""
         sentence_endings = ".!?\n"
@@ -283,49 +278,39 @@ class VoiceOutput:
                 sentence = buffer[: last_boundary + 1].strip()
                 buffer = buffer[last_boundary + 1 :]
                 if sentence and not self._cancelled:
-                    mp3_data = await self._synthesize(sentence)
-                    if mp3_data and not self._cancelled:
-                        await self._play_mp3(mp3_data)
+                    audio = await self._synthesize(sentence)
+                    if audio and not self._cancelled:
+                        await self._play_audio(audio)
 
         # Flush remaining
         if buffer.strip() and not self._cancelled:
-            mp3_data = await self._synthesize(buffer.strip())
-            if mp3_data and not self._cancelled:
-                await self._play_mp3(mp3_data)
+            audio = await self._synthesize(buffer.strip())
+            if audio and not self._cancelled:
+                await self._play_audio(audio)
 
     async def _synthesize(self, text: str) -> bytes | None:
-        """Call ElevenLabs API and return MP3 audio bytes."""
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}"
-        headers = {
-            "xi-api-key": self._api_key,
-            "Content-Type": "application/json",
-            "Accept": "audio/mpeg",
-        }
-        payload = {
-            "text": text,
-            "model_id": self._model_id,
-            "voice_settings": {
-                "stability": 0.5,
-                "similarity_boost": 0.75,
-                "style": 0.3,
-            },
-        }
+        """Delegate synthesis to the injected TTSClient.
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                resp = await client.post(url, headers=headers, json=payload)
-                resp.raise_for_status()
-                logger.info("TTS synthesized %d bytes for: %s", len(resp.content), text[:60])
-                return resp.content
-            except httpx.HTTPError as e:
-                logger.warning("TTS synthesis failed: %s", e)
-                return None
+        Voice settings, credentials, model selection, and endpoint URLs are all
+        the backend's concern -- this method only handles degradation on failure.
+        """
+        try:
+            audio = await self._tts.synthesize(text)
+        except Exception as exc:  # noqa: BLE001 - degrade gracefully, never crash the loop
+            logger.warning("TTS synthesis failed: %s", exc)
+            return None
+        logger.info("TTS synthesized %d bytes for: %s", len(audio), text[:60])
+        return audio
 
-    async def _play_mp3(self, mp3_data: bytes) -> None:
-        """Decode MP3 via ffmpeg subprocess and play as PCM through sounddevice."""
+    async def _play_audio(self, audio: bytes) -> None:
+        """Play synthesized audio, decoding first if the backend emits MP3."""
         loop = asyncio.get_running_loop()
         try:
-            pcm_data = await self._decode_mp3(mp3_data)
+            content_type = getattr(self._tts, "audio_content_type", "audio/mpeg")
+            if "mpeg" in content_type or "mp3" in content_type:
+                pcm_data = await self._decode_mp3(audio)
+            else:
+                pcm_data = self._decode_pcm(audio)
             if pcm_data is not None and not self._cancelled:
                 self._playing = True
                 await loop.run_in_executor(None, self._play_pcm, pcm_data)
@@ -333,6 +318,21 @@ class VoiceOutput:
         except Exception:
             self._playing = False
             logger.exception("Audio playback failed")
+
+    @staticmethod
+    def _decode_pcm(audio: bytes) -> np.ndarray | None:
+        """Interpret WAV/PCM bytes as float32 samples without spawning ffmpeg.
+
+        A 44-byte RIFF header is skipped when present; otherwise the payload is
+        treated as raw signed 16-bit little-endian PCM.
+        """
+        payload = audio[44:] if audio[:4] == b"RIFF" else audio
+        if not payload:
+            return None
+        # Guard against an odd trailing byte, which would break the int16 view.
+        if len(payload) % 2:
+            payload = payload[:-1]
+        return np.frombuffer(payload, dtype=np.int16).astype(np.float32) / 32768.0
 
     async def _decode_mp3(self, mp3_data: bytes) -> np.ndarray | None:
         """Decode MP3 to PCM float32 array using ffmpeg."""

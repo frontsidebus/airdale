@@ -239,13 +239,51 @@ class TestKokoroClient:
 class TestTTSConfig:
     """Test that TTS config fields work correctly."""
 
-    def test_tts_configured_elevenlabs(self, mock_env_vars: dict[str, str]) -> None:
+    def test_default_backend_is_cartesia(self, mock_env_vars: dict[str, str]) -> None:
         from orchestrator.config import load_settings
 
         settings = load_settings()
         assert settings.tts_backend == "cartesia"  # v2 default
-        # Test ElevenLabs configured when explicitly set
+
+    def test_tts_configured_elevenlabs(
+        self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from orchestrator.config import load_settings
+
+        monkeypatch.setenv("TTS_BACKEND", "elevenlabs")
+        settings = load_settings()
         assert settings.elevenlabs_api_key  # from mock_env_vars
+        assert settings.tts_configured is True
+
+    def test_tts_configured_cartesia(
+        self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cartesia must be judged on its own credentials, not ElevenLabs'."""
+        from orchestrator.config import load_settings
+
+        monkeypatch.setenv("TTS_BACKEND", "cartesia")
+        monkeypatch.setenv("CARTESIA_API_KEY", "")
+        monkeypatch.setenv("CARTESIA_VOICE_ID", "")
+        settings = load_settings()
+        # ElevenLabs is fully configured via mock_env_vars, but that is
+        # irrelevant to the selected backend.
+        assert settings.elevenlabs_api_key
+        assert settings.tts_configured is False
+
+        monkeypatch.setenv("CARTESIA_API_KEY", "ct-test-key")
+        monkeypatch.setenv("CARTESIA_VOICE_ID", "ct-voice")
+        settings = load_settings()
+        assert settings.tts_configured is True
+        assert settings.voice_id == "ct-voice"
+
+    def test_tts_configured_unknown_backend_is_false(
+        self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from orchestrator.config import load_settings
+
+        monkeypatch.setenv("TTS_BACKEND", "nonexistent")
+        settings = load_settings()
+        assert settings.tts_configured is False
 
     def test_tts_configured_local(
         self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
@@ -268,9 +306,12 @@ class TestTTSConfig:
         settings = load_settings()
         assert settings.voice_id == "am_adam"
 
-    def test_voice_id_elevenlabs_backend(self, mock_env_vars: dict[str, str]) -> None:
+    def test_voice_id_elevenlabs_backend(
+        self, mock_env_vars: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from orchestrator.config import load_settings
 
+        monkeypatch.setenv("TTS_BACKEND", "elevenlabs")
         settings = load_settings()
         assert settings.voice_id == "test-voice-id"
 
@@ -279,6 +320,7 @@ class TestTTSConfig:
     ) -> None:
         from orchestrator.config import load_settings
 
+        monkeypatch.setenv("TTS_BACKEND", "elevenlabs")
         monkeypatch.setenv("ELEVENLABS_API_KEY", "")
         settings = load_settings()
         assert settings.tts_configured is False

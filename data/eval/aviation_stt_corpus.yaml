@@ -1,0 +1,153 @@
+# Aviation STT reference corpus for backend gating.
+#
+# Purpose: decide STT backend swaps on aviation-term accuracy rather than
+# published WER, per .planning/TECH-STACK-REVIEW.md Step 2.
+#
+# Each entry is a reference transcript in the phraseology MERLIN actually
+# receives. Categories exist so a regression can be attributed -- a backend that
+# is fine on plain readbacks but loses squawk codes is a specific, fixable
+# finding rather than a single number.
+#
+# To use: record audio for each phrase (your own voice, cockpit ambience if you
+# have it), place it at `audio:`, then run:
+#
+#   python3 tools/stt_bench.py --corpus data/eval/aviation_stt_corpus.yaml
+#
+# Entries without an `audio:` path are skipped with a notice, so the corpus can
+# be filled in incrementally. Text-only pairs can still be scored via
+# `--pairs` for comparing two transcripts directly.
+
+meta:
+  version: 1
+  notes: >
+    Thresholds are starting points, not established baselines. Record the
+    incumbent backend first (deepgram, and whisper large-v3-turbo), then set
+    thresholds relative to measured incumbent performance.
+  gates:
+    # A candidate backend must not regress these versus the incumbent.
+    value_recall_min: 0.98   # safety metric -- values must survive
+    cter_max: 0.05           # critical token error rate
+    wer_max: 0.15            # headline WER, informational
+
+phrases:
+  # --- Altitude and flight level: the canonical dangerous-error category ---
+  - id: alt-001
+    category: altitude
+    text: "Descend and maintain one zero thousand feet"
+    audio: null
+    note: "The 'one zero thousand' vs 'one thousand' failure mode."
+  - id: alt-002
+    category: altitude
+    text: "Climb and maintain flight level three five zero"
+    audio: null
+  - id: alt-003
+    category: altitude
+    text: "Descend at pilot's discretion to six thousand five hundred"
+    audio: null
+
+  # --- Headings and vectors ---
+  - id: hdg-001
+    category: heading
+    text: "Turn left heading two seven zero"
+    audio: null
+  - id: hdg-002
+    category: heading
+    text: "Fly heading zero one five vectors for the ILS"
+    audio: null
+
+  # --- Squawk codes: four digits, no redundancy, high consequence ---
+  - id: sqk-001
+    category: squawk
+    text: "Squawk seven seven zero zero"
+    audio: null
+    note: "Emergency code. A single digit error changes meaning entirely."
+  - id: sqk-002
+    category: squawk
+    text: "Squawk four six three one and ident"
+    audio: null
+
+  # --- Frequencies: decimals plus digit strings ---
+  - id: frq-001
+    category: frequency
+    text: "Contact tower on one one eight point one"
+    audio: null
+  - id: frq-002
+    category: frequency
+    text: "Ground point eight when ready to taxi"
+    audio: null
+  - id: frq-003
+    category: frequency
+    text: "Altimeter two niner niner two"
+    audio: null
+
+  # --- Callsigns: phonetic alphabet mixed with digits ---
+  - id: cal-001
+    category: callsign
+    text: "November one two three alpha bravo cleared to land"
+    audio: null
+  - id: cal-002
+    category: callsign
+    text: "Cessna seven five niner sierra tango hold short runway two seven"
+    audio: null
+
+  # --- Runways ---
+  - id: rwy-001
+    category: runway
+    text: "Cleared for takeoff runway two seven left"
+    audio: null
+  - id: rwy-002
+    category: runway
+    text: "Line up and wait runway one six right"
+    audio: null
+
+  # --- V-speeds: MERLIN's validation layer checks these against AircraftLimits ---
+  - id: vsp-001
+    category: vspeed
+    text: "Rotate at VR seven one knots"
+    audio: null
+  - id: vsp-002
+    category: vspeed
+    text: "Approach speed VREF plus five"
+    audio: null
+  - id: vsp-003
+    category: vspeed
+    text: "Do not exceed VNE one six three knots"
+    audio: null
+
+  # --- Configuration commands: these reach set_aircraft_control ---
+  - id: cfg-001
+    category: command
+    text: "Flaps ten gear down"
+    audio: null
+  - id: cfg-002
+    category: command
+    text: "Set mixture full rich and prop full forward"
+    audio: null
+  - id: cfg-003
+    category: command
+    text: "Gear up positive rate of climb"
+    audio: null
+
+  # --- Emergency phraseology: must never be mistranscribed ---
+  - id: emg-001
+    category: emergency
+    text: "Mayday mayday mayday engine failure"
+    audio: null
+  - id: emg-002
+    category: emergency
+    text: "Pan pan pan we have an electrical problem"
+    audio: null
+  - id: emg-003
+    category: emergency
+    text: "Declaring an emergency request immediate return to field"
+    audio: null
+
+  # --- Conversational: verifies filler-word errors are not over-penalized ---
+  - id: cnv-001
+    category: conversational
+    text: "Hey MERLIN what is the weather looking like at the destination"
+    audio: null
+  - id: cnv-002
+    category: conversational
+    text: "Roger that thanks"
+    audio: null
