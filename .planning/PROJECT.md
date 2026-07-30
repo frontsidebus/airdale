@@ -1,4 +1,4 @@
-# MERLIN v1.2 — Consolidation & Quality
+# MERLIN — Airdale
 
 ## What This Is
 
@@ -26,19 +26,23 @@ MERLIN's voice and text responses must be fast, high-quality, and contextually a
 - ✓ Auto-reconnection with exponential backoff — existing
 - ✓ Docker Compose deployment stack — existing
 - ✓ Event-driven SimConnect message pump — existing
+- ✓ TTS abstraction wired into web server and CLI voice module with streaming — v1.2
+- ✓ Single async Whisper client replacing three divergent implementations — v1.2
+- ✓ Unified TTS voice settings from config across all consumers — v1.2
+- ✓ Deprecated SimConnect config fields and backward-compat aliases removed — v1.2
+- ✓ Telemetry consumer list asyncio.Lock race condition fixed — v1.2
+- ✓ ChromaDB and Whisper Docker images pinned to patch versions — v1.2
+- ✓ Python version standardized across all Dockerfiles — v1.2
+- ✓ Web server globals refactored to `AppState` + FastAPI DI — v1.2
+- ✓ Web server tests covering chat, barge-in, TTS, transcription, telemetry, status — v1.2
+- ✓ GitHub Actions CI/CD (lint, test, Docker build, path-based filtering, merge gating) — v1.2
+- ✓ Bidirectional command protocol and `set_aircraft_control` Claude tool (v1.3 Phase 1) — v1.3
 
 ### Active
 
-- [x] Integrate TTS abstraction layer into web server and CLI voice module — Phase 2
-- [x] Consolidate duplicated Whisper transcription logic into single async client — Phase 3
-- [x] Consolidate duplicated TTS voice settings into shared config — Phase 2
-- [x] Remove deprecated SimConnect config fields and backward-compat aliases — Phase 1
-- [x] Fix race condition in telemetry consumer list (asyncio.Lock) — Phase 1
-- [x] Pin ChromaDB and Whisper Docker image versions — Phase 1
-- [x] Standardize Python version across Dockerfiles — Phase 1
-- [x] Refactor web server global state into proper DI / app.state — Phase 4
-- [x] Add web server test coverage (chat flow, barge-in, TTS, transcription) — Phase 5
-- [x] Create GitHub Actions CI/CD pipeline (lint, test, build, Docker) — Phase 6
+- [ ] Authority & safety layer — configurable authority levels, pilot override detection, watchdog, phase-aware gating — v1.3 Phase 2
+- [ ] Automated maneuvers with PID control loops (takeoff/landing/go-around) — v1.3 Phase 3
+- [ ] Vision cockpit reading with DXcam and Claude vision — v1.3 Phase 4
 
 ### Out of Scope
 
@@ -51,13 +55,13 @@ MERLIN's voice and text responses must be fast, high-quality, and contextually a
 
 ## Context
 
-- Project is at v1.1.0 across orchestrator, adapter, and web UI
-- Codebase has 361+ tests passing but no CI — regressions only caught manually
-- A TTS abstraction layer (`orchestrator/orchestrator/tts/`) with ElevenLabs and Kokoro backends exists but is not wired into the web server or CLI voice module. Both still use inline httpx calls with hardcoded, inconsistent voice settings
-- Web server (`web/server.py`) is 1,057 lines with module-level global state and zero test coverage — it's the primary user-facing component
-- Whisper transcription + confidence scoring is implemented in 3 separate places with subtle differences
+- Project at v1.2 (shipped 2026-04-18) across orchestrator, adapter, and web UI
+- v1.3 active — Phase 1 (Discrete Command Control) complete; Phases 2-4 planned
+- All Python tests pass under GitHub Actions CI; .NET tests and Docker build verified per PR
+- TTS and Whisper consumers all route through shared async clients with persistent httpx connections
+- `web/server.py` uses `AppState` dataclass + FastAPI DI; web tests mock dependencies and run in isolation
 - Development happens in WSL2; MSFS adapter runs on Windows host
-- TTS integration is motivated by code cleanliness, lower latency (persistent HTTP clients), and consistent speech quality
+- Recent commits (`test: add Phase 4 integration tests`, `feat: proactive co-pilot`, checklist manager, callouts engine) reference proactive-copilot work not yet captured in ROADMAP — requires reconciliation before starting v1.3 Phase 2
 
 ## Constraints
 
@@ -71,10 +75,11 @@ MERLIN's voice and text responses must be fast, high-quality, and contextually a
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Housekeeping as point releases before major phases | Clean foundation before building on it — avoids carrying tech debt through refactors | — Pending |
-| TTS integration driven by latency + quality, not just architecture | Persistent connections reduce TTFB; consistent voice settings fix audible inconsistencies | — Pending |
-| Web server refactor + tests as single phase | Refactoring globals into DI first makes the code testable; testing the old shape would mean rewriting tests after refactor | — Pending |
-| CI/CD as final phase | Tests and code quality must exist before CI can enforce them | — Pending |
+| Housekeeping as point releases before major phases | Clean foundation before building on it — avoids carrying tech debt through refactors | ✓ Good — shipped v1.2 with no regressions |
+| TTS integration driven by latency + quality, not just architecture | Persistent connections reduce TTFB; consistent voice settings fix audible inconsistencies | ✓ Good — WebSocket streaming live |
+| Web server refactor + tests as single phase | Refactoring globals into DI first makes the code testable; testing the old shape would mean rewriting tests after refactor | ✓ Good — DI + tests both shipped |
+| CI/CD as final phase | Tests and code quality must exist before CI can enforce them | ✓ Good — CI gating on every PR since v1.2 |
+| Bidirectional command protocol with ack tracking (v1.3 Phase 1) | Enable MERLIN to control aircraft systems while maintaining deterministic command/ack contract | ✓ Good — 30+ SimConnect events supported |
 
 ## Evolution
 
@@ -94,4 +99,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-28 after Phase 6 (CI/CD Pipeline) — v1.2 milestone complete*
+*Last updated: 2026-04-18 after v1.2 milestone close-out — archive written, REQUIREMENTS.md reset for next milestone*
