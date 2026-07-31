@@ -96,6 +96,12 @@ airdale/
 │   │   │   ├── cartesia.py      # Low-latency cloud backend
 │   │   │   ├── elevenlabs.py    # Cloud backend with native WS streaming
 │   │   │   └── kokoro.py        # Local backend
+│   │   ├── turn/                # End-of-turn detection behind TurnDetector
+│   │   │   ├── base.py          # TurnDetector protocol + TurnDecision
+│   │   │   ├── __init__.py      # create_turn_detector factory
+│   │   │   ├── silence.py       # Fixed-silence threshold (fallback, no deps)
+│   │   │   ├── smart_turn.py    # Semantic detection via Smart Turn v3 ONNX
+│   │   │   └── features.py      # Whisper log-mel in numpy (pinned to golden values)
 │   │   └── eval/                # Offline evaluation; NOT imported by runtime code
 │   │       └── aviation_wer.py  # Aviation-weighted ASR scoring (WER/CTER/value-recall)
 │   ├── tests/                   # Unit tests (pytest + pytest-asyncio)
@@ -121,6 +127,7 @@ airdale/
 ├── tools/                       # Developer utilities
 │   ├── download_faa_data.py     # FAA data fetcher for RAG ingestion
 │   ├── ingest.py                # Document ingestion into ChromaDB
+│   ├── fetch_turn_model.py      # Download the Smart Turn model (enables semantic turns)
 │   ├── stt_bench.py             # Gate STT backend swaps on aviation-term WER
 │   └── test_tts.py              # TTS smoke test
 ├── docs/                        # Project documentation
@@ -314,7 +321,9 @@ TELEMETRY_SERVICE_HOST=$(hostname).local       # WSL2 native
 
 22. **Safety layers are independent of the LLM** -- Three separate guards, none of which depend on Claude behaving well. `command_safety.py` validates proposed commands against live telemetry *before* execution (`blocked` stops it, `warning` proceeds with an advisory). `command_verifier.py` polls telemetry *after* to confirm the aircraft actually changed. `validation.py` scans Claude's response text for V-speeds, altitudes, and frequencies against per-aircraft limits. `emergency.py` bypasses the LLM entirely for time-critical conditions. This is the primary reason the cascade architecture is retained over speech-to-speech — see `.planning/TECH-STACK-REVIEW.md`.
 
-23. **Aviation-term WER over published WER** -- STT backend swaps are gated on `orchestrator/eval/aviation_wer.py`, which reports critical-token error rate and value recall alongside standard WER. Published leaderboard WER is dominated by conversational filler and cannot distinguish a backend that drops "uh" from one that hears "one zero thousand" as "one thousand". Run `tools/stt_bench.py` before changing STT.
+23. **Semantic turn detection gated by acoustic VAD** -- Silero VAD finds *candidate* endpoints cheaply and decides *when* to ask; the `TurnDetector` decides *whether* the turn is actually over. Without that gate a semantic model would run on every 1024-sample chunk. Smart Turn v3 reads the waveform (not a transcript), so it works identically on the local and streaming paths. Fixed-silence detection remains as the always-available fallback: a threshold short enough to feel responsive cuts off mid-sentence pauses, and aviation phraseology is full of them ("descend and maintain... one zero thousand").
+
+24. **Aviation-term WER over published WER** -- STT backend swaps are gated on `orchestrator/eval/aviation_wer.py`, which reports critical-token error rate and value recall alongside standard WER. Published leaderboard WER is dominated by conversational filler and cannot distinguish a backend that drops "uh" from one that hears "one zero thousand" as "one thousand". Run `tools/stt_bench.py` before changing STT.
 
 ## Testing Approach
 

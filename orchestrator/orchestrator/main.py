@@ -25,6 +25,7 @@ from .sim_client import (
     TelemetryClient,
 )
 from .tts import create_tts_client
+from .turn import create_turn_detector
 from .voice import InputMode, VoiceInput, VoiceOutput
 from .whisper_client import WhisperClient
 
@@ -57,9 +58,11 @@ class Orchestrator:
             base_url=settings.whisper_url,
             model=settings.whisper_model,
         )
+        self._turn_detector = create_turn_detector(settings)
         self._voice_input = VoiceInput(
             whisper_client=self._whisper_client,
             mode=InputMode.PUSH_TO_TALK,
+            turn_detector=self._turn_detector,
         )
         self._tts_client = create_tts_client(settings)
         self._voice_output = VoiceOutput(tts_client=self._tts_client)

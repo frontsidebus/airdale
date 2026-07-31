@@ -125,7 +125,7 @@ Those are SAFE-* territory and already exist.
 
 Sequenced after Phase 2. Step 0 shipped in PR #75 as VOIC-03…09 and EVAL-01…04.
 
-- [ ] **VARC-01**: Semantic turn detection replaces the fixed 400ms silence timeout
+- [x] **VARC-01**: Semantic turn detection replaces the fixed 400ms silence timeout — Smart Turn v3 ONNX behind a `TurnDetector` protocol, with automatic fallback to fixed-silence
 - [ ] **VARC-02**: Local streaming STT available as the default with cloud fallback, gated on aviation-term WER (EVAL-01…04), not published WER
 - [ ] **VARC-03**: Local TTS confirmed at parity for time-to-first-audio and ICAO-preprocessor compatibility
 - [ ] **VARC-04**: Architecture selection is flight-phase-routed — low-stakes phases may take a fast path; numerical, procedural, and command content always takes the validated cascade
@@ -152,9 +152,9 @@ incremental slide. See `TECH-STACK-REVIEW.md` §2.
 | AUTH (Phase 2) | 8 | 0 | 8 |
 | MNVR (Phase 3) | 4 | 0 | 4 |
 | VIS (Phase 4) | 4 | 0 | 4 |
-| VARC (voice arch) | 5 | 0 | 5 |
-| **Total** | **61** | **39** | **22** |
+| VARC (voice arch) | 5 | 1 | 4 |
+| **Total** | **61** | **40** | **21** |
 
-35 of the 39 completed requirements are retroactive — they describe work that
+35 of the 40 completed requirements are retroactive — they describe work that
 existed before this file did. That ratio is the measure of the drift being
 corrected here.
