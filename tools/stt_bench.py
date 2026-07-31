@@ -56,6 +56,40 @@ def load_corpus(path: Path) -> dict[str, Any]:
         return yaml.safe_load(fh)
 
 
+async def transcribe_items(backend: str, items: list) -> list[tuple[str, str, str]]:
+    """Transcribe CorpusItems. Returns (id, reference, hypothesis)."""
+    from orchestrator.config import load_settings
+    from orchestrator.stt import create_stt_client
+
+    settings = load_settings()
+    object.__setattr__(settings, "stt_backend", backend)
+    if not settings.stt_configured:
+        sys.exit(
+            f"STT backend {backend!r} is not configured. "
+            "Check the relevant credentials in .env before benchmarking."
+        )
+
+    client = create_stt_client(settings)
+    results: list[tuple[str, str, str]] = []
+    skipped = 0
+    try:
+        for item in items:
+            if not item.has_audio:
+                skipped += 1
+                continue
+            result = await client.transcribe(item.audio_path.read_bytes())
+            results.append((item.id, item.transcript, result.text))
+    finally:
+        await client.aclose()
+
+    if skipped:
+        print(
+            f"  {skipped} item(s) skipped for missing audio.",
+            file=sys.stderr,
+        )
+    return results
+
+
 async def transcribe_all(backend: str, phrases: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
     """Return (id, reference, hypothesis) for every phrase with usable audio."""
     from orchestrator.config import load_settings
@@ -167,15 +201,90 @@ def load_pairs(path: Path) -> list[tuple[str, str]]:
     return pairs
 
 
+def snr_sweep(backend: str, manifests: list[Path]) -> int:
+    """Score a backend across degradation conditions and print the curve.
+
+    Absolute numbers on synthetic audio are not trustworthy, but the *shape* of
+    the degradation is: a backend that holds value recall as SNR falls is the one
+    that will survive a cockpit. Read the curve, not any single row.
+    """
+    from orchestrator.eval.corpus import load_manifest
+
+    print(f"\n=== SNR sweep: {backend} ===")
+    print(f"{'condition':>14}  {'WER':>8} {'CTER':>8} {'value-recall':>13}  {'n':>4}")
+    rows: list[tuple[str, float]] = []
+    for manifest in manifests:
+        items = load_manifest(manifest)
+        results = asyncio.run(transcribe_items(backend, items))
+        if not results:
+            print(f"{manifest.parent.name:>14}  (no audio)")
+            continue
+        score = score_corpus([(ref, hyp) for _pid, ref, hyp in results])
+        print(
+            f"{manifest.parent.name:>14}  {score.wer:7.2%} {score.cter:7.2%} "
+            f"{score.value_recall:12.2%}  {len(results):4d}"
+        )
+        rows.append((manifest.parent.name, score.value_recall))
+
+    if len(rows) >= 2:
+        drop = rows[0][1] - rows[-1][1]
+        print(
+            f"\n  value recall falls {drop:.1%} from {rows[0][0]} to {rows[-1][0]}. "
+            "Compare this drop across backends rather than any single score."
+        )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--backend", help="STT backend to benchmark (deepgram, whisper)")
     parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
     parser.add_argument("--pairs", type=Path, help="Score a reference/hypothesis TSV instead")
+    parser.add_argument("--manifest", type=Path, help="Score a corpus manifest (audio<TAB>transcript)")
+    parser.add_argument(
+        "--paired-dir",
+        type=Path,
+        help="Score a directory of *.wav each beside a same-stem *.txt transcript. "
+        "Use for external corpora (ATCOSIM, ATCO2, UWB-ATCC) you have obtained yourself.",
+    )
+    parser.add_argument(
+        "--snr-sweep",
+        nargs="+",
+        type=Path,
+        metavar="MANIFEST",
+        help="Score across several manifests and print the degradation curve",
+    )
     parser.add_argument("--json", type=Path, help="Write full results here")
     parser.add_argument("--compare", nargs=2, type=Path, metavar=("A", "B"),
                         help="Compare two saved --json runs")
     args = parser.parse_args()
+
+    if args.snr_sweep:
+        if not args.backend:
+            parser.error("--snr-sweep requires --backend")
+        return snr_sweep(args.backend, args.snr_sweep)
+
+    if args.manifest or args.paired_dir:
+        if not args.backend:
+            parser.error("--manifest/--paired-dir requires --backend")
+        from orchestrator.eval.corpus import load_manifest, load_paired_directory
+
+        if args.manifest:
+            items = load_manifest(args.manifest)
+            label = f"{args.backend} @ {args.manifest.parent.name}"
+        else:
+            items = load_paired_directory(args.paired_dir)
+            label = f"{args.backend} @ {args.paired_dir.name}"
+        if not items:
+            print("No usable items found.", file=sys.stderr)
+            return 1
+        results = asyncio.run(transcribe_items(args.backend, items))
+        if not results:
+            print("No audio could be transcribed.", file=sys.stderr)
+            return 1
+        phrase_meta = [{"id": i.id, "category": i.category} for i in items]
+        _overall, passed = report(label, results, phrase_meta, {})
+        return 0 if passed else 1
 
     if args.compare:
         a, b = (json.loads(p.read_text()) for p in args.compare)

@@ -151,6 +151,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-28T22:16:28.300Z
-Stopped at: Completed 06-02-PLAN.md
-Resume file: None
+Last session: 2026-07-31
+Stopped at: PR #78 open (mergeable, CI green); v1.3 reconciled, voice Steps 0-1 shipped
+Resume file: .planning/.continue-here.md (+ .planning/HANDOFF.json)

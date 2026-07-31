@@ -77,7 +77,9 @@ Backend abstraction restored and extended (PR #75).
 - [x] **EVAL-02**: Normalization folds spoken digits into runs so `two seven zero` and `270` compare equal, including ICAO variants (`niner`, `tree`, `fife`)
 - [x] **EVAL-03**: Reference corpus of aviation phraseology across altitude, squawk, frequency, callsign, V-speed, emergency, and conversational categories — `data/eval/aviation_stt_corpus.yaml`
 - [x] **EVAL-04**: `tools/stt_bench.py` scores a backend against the corpus with per-category attribution and pass/fail gates
-- [ ] **EVAL-05**: Corpus audio recorded for all phrases, and thresholds set from measured incumbent performance rather than placeholders
+- [x] **EVAL-05**: Synthetic corpus generation via TTS with cockpit/VHF channel simulation and SNR sweep — `tools/gen_stt_corpus.py`, `eval/audio_augment.py`. Explicitly scoped to CI regression and degradation curves, not threshold setting.
+- [x] **EVAL-06**: External corpus ingest so public ATC datasets (ATCOSIM, ATCO2, UWB-ATCC) can be scored — `stt_bench.py --paired-dir/--manifest`, `eval/corpus.py`. Deliberately no auto-download; licence terms vary and are the user's to accept.
+- [ ] **EVAL-07**: Thresholds calibrated against real speech — a public ATC corpus for backend selection, plus a small set of own-voice/own-headset recordings for final calibration
 
 ## RAG Enhancements ✅ COMPLETE (undocumented until now)
 
@@ -147,14 +149,14 @@ incremental slide. See `TECH-STACK-REVIEW.md` §2.
 | PROA | 6 | 6 | 0 |
 | VALD | 3 | 3 | 0 |
 | VOIC | 9 | 9 | 0 |
-| EVAL | 5 | 4 | 1 |
+| EVAL | 7 | 6 | 1 |
 | RAG | 3 | 3 | 0 |
 | AUTH (Phase 2) | 8 | 0 | 8 |
 | MNVR (Phase 3) | 4 | 0 | 4 |
 | VIS (Phase 4) | 4 | 0 | 4 |
 | VARC (voice arch) | 5 | 1 | 4 |
-| **Total** | **61** | **40** | **21** |
+| **Total** | **63** | **42** | **21** |
 
-35 of the 40 completed requirements are retroactive — they describe work that
+35 of the 42 completed requirements are retroactive — they describe work that
 existed before this file did. That ratio is the measure of the drift being
 corrected here.

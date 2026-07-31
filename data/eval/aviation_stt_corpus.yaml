@@ -8,10 +8,32 @@
 # is fine on plain readbacks but loses squawk codes is a specific, fixable
 # finding rather than a single number.
 #
-# To use: record audio for each phrase (your own voice, cockpit ambience if you
-# have it), place it at `audio:`, then run:
+# Three ways to get audio, in increasing order of how much you should trust the
+# resulting numbers:
 #
-#   python3 tools/stt_bench.py --corpus data/eval/aviation_stt_corpus.yaml
+# 1. SYNTHETIC (no recording). Generate via TTS and degrade to cockpit
+#    conditions:
+#      python3 tools/gen_stt_corpus.py --snr-sweep 30,20,15,10,5
+#      python3 tools/stt_bench.py --backend whisper --snr-sweep \
+#        data/eval/generated/headset/snr*/manifest.tsv
+#    Good for CI regression and degradation curves. Do NOT set thresholds from
+#    it: clean TTS is studio-quality so every backend scores near-perfect, and
+#    synthetic speech is common ASR training augmentation, which can flatter
+#    cloud backends over local ones.
+#
+# 2. PUBLIC ATC CORPORA (no recording). Real aviation speech, already
+#    transcribed. Obtain one yourself, then:
+#      python3 tools/stt_bench.py --backend whisper --paired-dir /path/to/corpus
+#    ATCOSIM is the closest structural match -- 10 h recorded on a close-talk
+#    headset, the same channel MERLIN hears. ATCO2 offers a free 1 h test set;
+#    UWB-ATCC is free under CC BY-NC-SA. Check each corpus's terms yourself;
+#    this project deliberately does not auto-download them.
+#
+# 3. YOUR OWN RECORDINGS. The only source that captures your voice, your
+#    headset, and your cockpit noise floor -- so this is what calibrates the
+#    thresholds below. Set `audio:` on each entry. You do not need all 25: the
+#    squawk, altitude, frequency, and callsign entries carry most of the signal,
+#    since those are where one digit changes meaning.
 #
 # Entries without an `audio:` path are skipped with a notice, so the corpus can
 # be filled in incrementally. Text-only pairs can still be scored via
