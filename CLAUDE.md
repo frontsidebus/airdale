@@ -103,7 +103,9 @@ airdale/
 │   │   │   ├── smart_turn.py    # Semantic detection via Smart Turn v3 ONNX
 │   │   │   └── features.py      # Whisper log-mel in numpy (pinned to golden values)
 │   │   └── eval/                # Offline evaluation; NOT imported by runtime code
-│   │       └── aviation_wer.py  # Aviation-weighted ASR scoring (WER/CTER/value-recall)
+│   │       ├── aviation_wer.py  # Aviation-weighted ASR scoring (WER/CTER/value-recall)
+│   │       ├── audio_augment.py # Cockpit/VHF channel simulation + SNR mixing
+│   │       └── corpus.py        # Corpus loading (manifest, paired-dir) + WAV I/O
 │   ├── tests/                   # Unit tests (pytest + pytest-asyncio)
 │   ├── Dockerfile
 │   └── pyproject.toml           # Build config, dependencies, ruff settings
@@ -127,7 +129,9 @@ airdale/
 ├── tools/                       # Developer utilities
 │   ├── download_faa_data.py     # FAA data fetcher for RAG ingestion
 │   ├── ingest.py                # Document ingestion into ChromaDB
+│   ├── mock_adapter.py          # Simulates the MSFS adapter; test without the sim
 │   ├── fetch_turn_model.py      # Download the Smart Turn model (enables semantic turns)
+│   ├── gen_stt_corpus.py        # Synthesize + degrade an STT eval corpus via TTS
 │   ├── stt_bench.py             # Gate STT backend swaps on aviation-term WER
 │   └── test_tts.py              # TTS smoke test
 ├── docs/                        # Project documentation
@@ -323,7 +327,9 @@ TELEMETRY_SERVICE_HOST=$(hostname).local       # WSL2 native
 
 23. **Semantic turn detection gated by acoustic VAD** -- Silero VAD finds *candidate* endpoints cheaply and decides *when* to ask; the `TurnDetector` decides *whether* the turn is actually over. Without that gate a semantic model would run on every 1024-sample chunk. Smart Turn v3 reads the waveform (not a transcript), so it works identically on the local and streaming paths. Fixed-silence detection remains as the always-available fallback: a threshold short enough to feel responsive cuts off mid-sentence pauses, and aviation phraseology is full of them ("descend and maintain... one zero thousand").
 
-24. **Aviation-term WER over published WER** -- STT backend swaps are gated on `orchestrator/eval/aviation_wer.py`, which reports critical-token error rate and value recall alongside standard WER. Published leaderboard WER is dominated by conversational filler and cannot distinguish a backend that drops "uh" from one that hears "one zero thousand" as "one thousand". Run `tools/stt_bench.py` before changing STT.
+24. **Synthetic eval audio is for regression and curves, never for thresholds** -- `tools/gen_stt_corpus.py` can generate the whole STT corpus via TTS, which is reproducible and free. But clean TTS is studio-quality, so every backend scores near-perfect and the gate stops discriminating; and synthetic speech is widely used as ASR training augmentation, which can flatter cloud backends over local ones. Use it for CI regression and for SNR *degradation curves* (relative shape is robust even when absolute numbers are not). Set thresholds from real speech: a public ATC corpus via `--paired-dir`, or your own recordings.
+
+25. **Aviation-term WER over published WER** -- STT backend swaps are gated on `orchestrator/eval/aviation_wer.py`, which reports critical-token error rate and value recall alongside standard WER. Published leaderboard WER is dominated by conversational filler and cannot distinguish a backend that drops "uh" from one that hears "one zero thousand" as "one thousand". Run `tools/stt_bench.py` before changing STT.
 
 ## Testing Approach
 
