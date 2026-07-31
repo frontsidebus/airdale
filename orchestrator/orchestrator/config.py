@@ -107,6 +107,38 @@ class Settings(BaseSettings):
     )
 
     # Whisper STT (legacy/fallback)
+    # --- Turn detection (end-of-utterance)
+    turn_detector: str = Field(
+        default="smart",
+        description=(
+            "End-of-turn detector: 'smart' (semantic, Smart Turn v3 ONNX) or "
+            "'silence' (fixed silence threshold). 'smart' falls back to 'silence' "
+            "automatically if onnxruntime or the model file is unavailable."
+        ),
+    )
+    turn_threshold: float = Field(
+        default=0.5,
+        gt=0.0,
+        lt=1.0,
+        description=(
+            "Probability above which the semantic detector calls the turn complete. "
+            "Raise it to make MERLIN more willing to wait through a pause."
+        ),
+    )
+    turn_probe_silence_ms: int = Field(
+        default=150,
+        gt=0,
+        description=(
+            "Silence observed before consulting the semantic detector. Lower than "
+            "vad_silence_ms because the model decides on content, not duration."
+        ),
+    )
+    vad_silence_ms: int = Field(
+        default=400,
+        gt=0,
+        description="Silence threshold for the fixed-silence detector and the RMS fallback.",
+    )
+
     whisper_model: str = Field(
         default="large-v3-turbo",
         description="Whisper model size (legacy fallback, used by Docker service)",

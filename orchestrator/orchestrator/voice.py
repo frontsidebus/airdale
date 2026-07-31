@@ -22,6 +22,7 @@ from .audio_processing import (
     samples_to_wav_bytes,
 )
 from .tts import TTSClient
+from .turn import SilenceTurnDetector, TurnDetector
 from .whisper_client import WhisperClient, WhisperClientError
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ class VoiceInput:
         vad_threshold: float = 0.02,
         vad_silence_duration: float = 0.4,
         mode: InputMode = InputMode.PUSH_TO_TALK,
+        turn_detector: TurnDetector | None = None,
     ) -> None:
         self._whisper_client = whisper_client
         self._sample_rate = sample_rate
@@ -52,6 +54,15 @@ class VoiceInput:
         self._mode = mode
         self._recording = False
         self._vad = SileroVAD(threshold=0.5, silence_ms=400)
+        # Defaults to the pre-existing fixed-silence behaviour so constructing
+        # VoiceInput without a detector changes nothing.
+        self._turn_detector: TurnDetector = turn_detector or SilenceTurnDetector(
+            silence_ms=int(vad_silence_duration * 1000)
+        )
+
+    @property
+    def turn_detector(self) -> TurnDetector:
+        return self._turn_detector
 
     @property
     def mode(self) -> InputMode:
@@ -103,11 +114,15 @@ class VoiceInput:
         import sounddevice as sd
 
         use_silero = self._vad.available
+        detector = self._turn_detector
+        detector.reset()
         if use_silero:
-            logger.debug("VAD recording started (Silero neural VAD)")
+            logger.debug(
+                "VAD recording started (Silero neural VAD, turn detector: %s)", detector.name
+            )
             self._vad.reset()
         else:
-            logger.debug("VAD recording started (RMS fallback)")
+            logger.debug("VAD recording started (RMS fallback, turn detector: %s)", detector.name)
 
         frames: list[np.ndarray] = []
         silence_frames = 0
@@ -116,6 +131,10 @@ class VoiceInput:
         chunk_duration_ms = int(blocksize / self._sample_rate * 1000)
         # RMS fallback uses the configured silence duration
         rms_silence_limit = int(self._vad_silence_secs * self._sample_rate / blocksize)
+        # Acoustic VAD gates the turn detector: silence is cheap to spot, so it
+        # decides *when* to ask, and the detector decides *whether* the turn is
+        # over. Without this gate a semantic model would run on every chunk.
+        probe_ms = detector.probe_silence_ms
 
         event = asyncio.Event()
         result_audio: list[np.ndarray | None] = [None]
@@ -136,9 +155,18 @@ class VoiceInput:
                 elif speech_detected:
                     silence_frames += 1
                     accumulated_ms = silence_frames * chunk_duration_ms
-                    if accumulated_ms >= self._vad._silence_ms:
-                        result_audio[0] = np.concatenate(frames, axis=0).flatten()
-                        event.set()
+                    if accumulated_ms >= probe_ms:
+                        utterance = np.concatenate(frames, axis=0).flatten()
+                        decision = detector.evaluate(utterance, self._sample_rate, accumulated_ms)
+                        if decision.ended:
+                            logger.debug(
+                                "Turn ended after %dms silence (%s, p=%.3f)",
+                                accumulated_ms,
+                                decision.detector,
+                                decision.probability,
+                            )
+                            result_audio[0] = utterance
+                            event.set()
             else:
                 # RMS fallback
                 rms = np.sqrt(np.mean(flat**2))
