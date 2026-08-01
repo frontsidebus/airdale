@@ -93,8 +93,8 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 02-04-PLAN.md — Authority gate in `set_aircraft_control` and the `carb_heat`/`fuel_pump` refusal (AUTH-01…04, CMD-08)
-- [ ] 02-05-PLAN.md — Advisory floor, ack watchdog, `command_path` health and dispatch ledger in `TelemetryClient`
+- [x] 02-04-PLAN.md — Authority gate in `set_aircraft_control` and the `carb_heat`/`fuel_pump` refusal (AUTH-01…04, CMD-08)
+- [x] 02-05-PLAN.md — Advisory floor, ack watchdog, `command_path` health and dispatch ledger in `TelemetryClient`
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -147,7 +147,7 @@ procedures through `set_aircraft_control` closes it.
 | Phase | Milestone | Plans Complete | Status      | Completed  |
 |-------|-----------|----------------|-------------|------------|
 | 1. Housekeeping           | v1.2 | 3/3 | Complete    | 2026-03-28 |
-| 2. TTS Integration        | v1.2 | 3/10 | In Progress|  |
+| 2. TTS Integration        | v1.2 | 5/10 | In Progress|  |
 | 3. Whisper Consolidation  | v1.2 | 2/2 | Complete    | 2026-03-28 |
 | 4. Web Server Refactor    | v1.2 | 2/2 | Complete    | 2026-04-16 |
 | 5. Web Server Tests       | v1.2 | 2/2 | Complete    | 2026-03-28 |
