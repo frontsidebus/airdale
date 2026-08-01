@@ -117,7 +117,7 @@ Command surface (CMD series — extends Phase 1, delivered here because gating m
 
 Voice architecture (VARC series — see the Voice Architecture section):
 
-- [ ] **VARC-06**: Semantic turn detection reaches the web path. The browser gates on a short RMS silence probe and a server endpoint runs the existing `SmartTurnDetector`; degrades to fixed-silence endpointing at `vad_silence_ms` when the model is unavailable.
+- [x] **VARC-06**: Semantic turn detection reaches the web path. The browser gates on a short RMS silence probe and a server endpoint runs the existing `SmartTurnDetector`; degrades to fixed-silence endpointing at `vad_silence_ms` when the model is unavailable.
 
 **Explicit non-goals for Phase 2:** no new envelope rules. Those are SAFE-*
 territory and already exist.
@@ -152,7 +152,7 @@ Sequenced after Phase 2. Step 0 shipped in PR #75 as VOIC-03…09 and EVAL-01…
 - [ ] **VARC-03**: Local TTS confirmed at parity for time-to-first-audio and ICAO-preprocessor compatibility
 - [ ] **VARC-04**: Architecture selection is flight-phase-routed — low-stakes phases may take a fast path; numerical, procedural, and command content always takes the validated cascade
 - [ ] **VARC-05**: Speech-LLM front-end evaluated as a time-boxed spike measuring aviation-term accuracy, not adopted by default
-- [ ] **VARC-06**: Semantic turn detection on the web path (claimed by Phase 2 — see that section). VARC-01 delivered it for the local/CLI path only; the browser still endpoints on fixed RMS silence at 1200ms, 3× the local fallback.
+- [x] **VARC-06**: Semantic turn detection on the web path (delivered in Phase 2, plan 02-03). `POST /api/turn-probe` runs the existing `SmartTurnDetector`; the browser probes at `turn_probe_silence_ms` (150) and falls back to `vad_silence_ms` (400), replacing the fixed 1200ms RMS timer.
 
 **Recorded constraint:** every speech-to-speech and speech-LLM option requires an
 open-weight LLM backbone. Claude is API-only. Adopting one means replacing Claude,
@@ -175,8 +175,8 @@ incremental slide. See `TECH-STACK-REVIEW.md` §2.
 | AUTH (Phase 2) | 8 | 0 | 8 |
 | MNVR (Phase 3) | 4 | 0 | 4 |
 | VIS (Phase 4) | 4 | 0 | 4 |
-| VARC (voice arch) | 6 | 1 | 5 |
-| **Total** | **67** | **42** | **25** |
+| VARC (voice arch) | 6 | 2 | 4 |
+| **Total** | **67** | **43** | **24** |
 
 35 of the 42 completed requirements are retroactive — they describe work that
 existed before this file did. That ratio is the measure of the drift being
