@@ -366,6 +366,7 @@ class TelemetryClient:
             self._ws = await websockets.connect(self._url)
             self._connection_state = ConnectionState.CONNECTED
             self._last_message_time = time.monotonic()
+            self._on_connection_established()
             self._listen_task = asyncio.create_task(self._listen_loop())
             self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
             logger.info("Connected to telemetry service")
@@ -402,6 +403,64 @@ class TelemetryClient:
     # -------------------------------------------------------------------
     # Command sending
     # -------------------------------------------------------------------
+
+    def _on_connection_established(self) -> None:
+        """Run at every transition into :attr:`ConnectionState.CONNECTED`.
+
+        Clears a latched command-path watchdog. This out-of-band clear is what
+        makes the latch safe rather than a deadlock: once latched the level is
+        advisory, so the floor refuses every command -- including the ones that
+        would have produced the successful ack needed to reset the counter.
+        Telemetry flowing again is direct evidence the command path is back,
+        because the same WebSocket carries both telemetry and commands, so no
+        probe traffic and no pilot action are required.
+
+        A degraded authority state is deliberately not lifted here: ``clear_watchdog``
+        returns False when degraded, because a degraded state means the authority
+        subsystem itself could not be built, and telemetry flowing is evidence
+        about the sim rather than about that subsystem.
+
+        Called from both ``connect()`` and ``_reconnect()`` -- the only two places
+        that set ``CONNECTED``. Factored into a helper so a future third connect
+        path cannot silently miss it.
+        """
+        if self._authority is None:
+            return
+        if self._authority.clear_watchdog():
+            logger.info("Command path recovered on reconnect; authority watchdog cleared")
+            if self._health is not None:
+                self._health.update("command_path", True, "recovered")
+
+    def _record_command_failure(self, detail: str) -> None:
+        """Count a command-path failure toward the watchdog latch.
+
+        Called for an ack that never arrived and for a send that raised -- both are
+        direct evidence the path to the adapter is broken. Deliberately *not* called
+        for the not-connected early return (already reported through
+        ``ConnectionState`` and the heartbeat) nor for a floor refusal (which would
+        let a latch re-arm through its own refusals).
+        """
+        if self._authority is None:
+            # Inert, not permissive: with no authority state, the level the watchdog
+            # would have lowered is the level the floor would have refused at. The
+            # construction-time WARNING is what makes this case visible.
+            if self._health is not None:
+                self._health.update("command_path", False, detail)
+            return
+
+        latched = self._authority.record_command_timeout()
+        count = self._authority.consecutive_timeouts
+        if latched:
+            logger.error(
+                "Command path unresponsive after %d consecutive failures (%s); MERLIN has "
+                "stopped issuing commands and is advisory-only (reason: %s). Authority is "
+                "restored when the telemetry connection is re-established.",
+                count,
+                detail,
+                self._authority.reason.value,
+            )
+        if self._health is not None:
+            self._health.update("command_path", False, f"{detail}; {count} consecutive")
 
     def recent_dispatches(self) -> tuple[tuple[str, float], ...]:
         """Snapshot of the commands that reached the wire, oldest first.
@@ -495,6 +554,9 @@ class TelemetryClient:
             await self._ws.send(msg)
         except Exception as exc:
             self._pending_commands.pop(command_id, None)
+            # A send that raised means the command path is demonstrably broken;
+            # count it exactly as a missing ack.
+            self._record_command_failure(f"send failed: {exc}")
             return {"success": False, "error": f"Failed to send command: {exc}"}
 
         # The command is on the wire. Recorded only after the send succeeds.
@@ -502,10 +564,24 @@ class TelemetryClient:
 
         try:
             result = await asyncio.wait_for(future, timeout=resolved_timeout)
-            return result
         except TimeoutError:
             self._pending_commands.pop(command_id, None)
+            # The real ack future never resolved. This is the only place that
+            # observation exists: the tool layer's own timeout starts first and
+            # pre-empts this one, so the returned dict is not a reliable signal
+            # for any caller to count from.
+            self._record_command_failure("ack timeout")
             return {"success": False, "error": "Command timed out"}
+
+        # An ack arrived. Reset the counter REGARDLESS of result["success"]: an
+        # adapter that received and rejected the command has proved the path is
+        # alive. Counting a rejection would latch the watchdog on a working system
+        # -- unregistered events return exactly this ack shape routinely.
+        if self._authority is not None:
+            self._authority.record_command_success()
+        if self._health is not None:
+            self._health.update("command_path", True, "")
+        return result
 
     # -------------------------------------------------------------------
     # Heartbeat monitoring
@@ -563,6 +639,7 @@ class TelemetryClient:
                 self._ws = await websockets.connect(self._url)
                 self._connection_state = ConnectionState.CONNECTED
                 self._last_message_time = time.monotonic()
+                self._on_connection_established()
                 logger.info(
                     "Reconnected to telemetry service (attempt %d)",
                     self._reconnect_count,
