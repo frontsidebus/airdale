@@ -46,6 +46,19 @@ Whisper runs as a Docker container via `docker-compose.yml`. The `large-v3-turbo
 
 ---
 
+## Turn Detection (end of utterance)
+
+| Variable | Default | Description |
+|---|---|---|
+| `TURN_DETECTOR` | `"smart"` | End-of-turn detector: `smart` (semantic, Smart Turn v3 ONNX) or `silence` (fixed silence threshold) |
+| `TURN_THRESHOLD` | `0.5` | Probability above which the semantic detector calls the turn complete. Raise it to make MERLIN more willing to wait through a pause |
+| `TURN_PROBE_SILENCE_MS` | `150` | Silence observed before consulting the semantic detector. Lower than `VAD_SILENCE_MS` because the model decides on content, not duration |
+| `VAD_SILENCE_MS` | `400` | Silence threshold for the fixed-silence detector and the RMS fallback |
+
+Silero VAD finds candidate endpoints cheaply and decides *when* to ask; the turn detector decides *whether* the turn is actually over. `smart` resolves its fallback to `silence` at startup -- not mid-flight -- when onnxruntime or the model file is missing; run `python3 tools/fetch_turn_model.py` to enable it. Fixed-silence detection stays available because a threshold short enough to feel responsive cuts off mid-sentence pauses, and aviation phraseology is full of them ("descend and maintain... one zero thousand").
+
+---
+
 ## Text-to-Speech (TTS)
 
 ### Backend Selection
@@ -148,6 +161,48 @@ When running natively in WSL2 without Docker:
 ```bash
 TELEMETRY_SERVICE_HOST=$(hostname).local
 ```
+
+---
+
+## Authority & Safety
+
+These settings decide whether MERLIN may command the aircraft at all, when it must defer to the pilot, and how long it waits before concluding the command path is dead. They gate the write path; they do not change what MERLIN can talk about.
+
+| Variable | Default | Description |
+|---|---|---|
+| `AUTHORITY_LEVEL` | `"full"` | How far MERLIN may go: `advisory`, `assisted`, or `full`. An unknown value fails at startup |
+| `AUTHORITY_OVERRIDE_GRACE_S` | `30.0` | Seconds after MERLIN issues a command during which a change to that command's own telemetry fields is credited to MERLIN rather than read as a pilot override |
+| `AUTHORITY_OVERRIDE_SETTLE_S` | `2.0` | Seconds to wait before re-scrutinising the fields of a command that has no verification rule. Surfaces, autopilot and radios broadcast at 1 Hz |
+| `AUTHORITY_OVERRIDE_COOLDOWN_S` | `120.0` | Seconds MERLIN stays advisory after a pilot override. Rolling -- each new override pushes the expiry out |
+| `AUTHORITY_WATCHDOG_MAX_TIMEOUTS` | `3` | Consecutive command-path timeouts before MERLIN latches to advisory |
+| `AUTHORITY_COMMAND_TIMEOUT_S` | `5.0` | Seconds to wait for a command acknowledgment from the sim adapter |
+| `AUTHORITY_VERIFY_TIMEOUT_S` | `3.0` | Seconds spent polling telemetry to confirm a command actually took effect |
+| `AUTHORITY_TOOL_TIMEOUT_S` | `12.0` | Outer deadline on the `set_aircraft_control` tool call. Must exceed `AUTHORITY_COMMAND_TIMEOUT_S` + `AUTHORITY_VERIFY_TIMEOUT_S`, checked at startup |
+
+### Authority levels
+
+| Level | Behaviour |
+|---|---|
+| `advisory` | Never commands. Reports what it would have done, with the safety verdict |
+| `assisted` | Executes, but withholds anything `command_safety` flags as `warning` |
+| `full` | Executes unless `command_safety` blocks it outright |
+
+`full` is the default because it is exactly the pre-authority behaviour -- upgrading changes nothing, and restriction is opt-in. The `authority_level` setting is read once at startup and seeds the runtime authority state.
+
+**Know what `assisted` does not cover.** `assisted` withholds only on `warning` severity, and only 7 safety rules exist today, covering gear, flaps, autopilot and throttle. For the other 16 of the 20 commandable systems there is no `warning` rule at all, so `assisted` behaves identically to `full` for them. Treat `assisted` as "extra care around the four systems that have rules", not as a general-purpose restraint. `advisory` is the only level that withholds everything.
+
+### Why MERLIN is at the level it reports
+
+The authority level always travels with a reason, shown in `/api/status` and in the CLI:
+
+- **`config`** -- this is how you set it up. Nothing has overridden your `AUTHORITY_LEVEL`.
+- **`override`** -- MERLIN saw you take over. It drops to `advisory` for `AUTHORITY_OVERRIDE_COOLDOWN_S`, extending that window each time you move a control, and restores itself automatically once you stop.
+- **`watchdog`** -- MERLIN cannot reach the sim. After `AUTHORITY_WATCHDOG_MAX_TIMEOUTS` consecutive unacknowledged commands it latches to `advisory`. A later success does not clear the latch (a latch that stops command issuance can never produce the ack that would clear it); reconnecting does.
+- **`degraded`** -- the authority subsystem itself failed to start, so MERLIN restricted itself to `advisory` rather than assume it may act. This is not a setting you chose. Restart and check the log for the reason, which is reported alongside the badge.
+
+### Timeout budget
+
+`AUTHORITY_TOOL_TIMEOUT_S` must be strictly greater than `AUTHORITY_COMMAND_TIMEOUT_S` + `AUTHORITY_VERIFY_TIMEOUT_S`. The tool's outer deadline starts first, so an equal budget fires before the acknowledgment timeout does: the command path looks like a slow tool rather than a dead adapter, and the watchdog never counts the timeout it exists to catch. Startup validation rejects a configuration that violates this, naming all three fields.
 
 ---
 
