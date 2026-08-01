@@ -107,7 +107,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 02-09-PLAN.md — Web surfacing: `/api/status` authority fields and the advisory/withheld message types (AUTH-08)
+- [x] 02-09-PLAN.md — Web surfacing: `/api/status` authority fields and the advisory/withheld message types (AUTH-08)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -147,7 +147,7 @@ procedures through `set_aircraft_control` closes it.
 | Phase | Milestone | Plans Complete | Status      | Completed  |
 |-------|-----------|----------------|-------------|------------|
 | 1. Housekeeping           | v1.2 | 3/3 | Complete    | 2026-03-28 |
-| 2. TTS Integration        | v1.2 | 8/10 | In Progress|  |
+| 2. TTS Integration        | v1.2 | 9/10 | In Progress|  |
 | 3. Whisper Consolidation  | v1.2 | 2/2 | Complete    | 2026-03-28 |
 | 4. Web Server Refactor    | v1.2 | 2/2 | Complete    | 2026-04-16 |
 | 5. Web Server Tests       | v1.2 | 2/2 | Complete    | 2026-03-28 |
