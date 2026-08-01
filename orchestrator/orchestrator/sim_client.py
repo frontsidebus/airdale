@@ -12,12 +12,15 @@ import json
 import logging
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable, Coroutine
 from enum import StrEnum
 from typing import Any
 
 import websockets
 from pydantic import BaseModel, Field
+
+from .authority import AuthorityLevel, AuthorityState
 
 logger = logging.getLogger(__name__)
 
@@ -266,11 +269,33 @@ class TelemetryClient:
     HEARTBEAT_INTERVAL: float = 5.0  # seconds between heartbeat checks
     HEARTBEAT_TIMEOUT: float = 15.0  # seconds before considering connection stale
 
+    # Dispatch ledger: how many recently-sent commands to retain as provenance
+    # for override detection. Bounded, so a long flight cannot grow it without
+    # limit, and it holds only event names and timestamps -- never values or
+    # state snapshots.
+    DISPATCH_LEDGER_SIZE: int = 64
+
     def __init__(
         self,
         url: str,
         auto_reconnect: bool = True,
+        *,
+        authority: AuthorityState | None = None,
+        health: HealthMonitor | None = None,
+        command_timeout: float = 5.0,
     ) -> None:
+        """Build a telemetry client.
+
+        Args:
+            url: Telemetry service WebSocket URL.
+            auto_reconnect: Reconnect with exponential backoff on connection loss.
+            authority: Runtime authority state consulted by the structural floor in
+                :meth:`send_command`. ``None`` makes the floor inert -- see the
+                construction-time warning below.
+            health: Subsystem health monitor. When given, a ``command_path``
+                subsystem is registered immediately.
+            command_timeout: Default seconds to wait for an adapter ack.
+        """
         self._url = url
         self._auto_reconnect = auto_reconnect
         self._ws: websockets.WebSocketClientProtocol | None = None
@@ -284,6 +309,28 @@ class TelemetryClient:
         self._messages_received: int = 0
         self._last_state_json: str = ""  # for delta detection
         self._pending_commands: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._authority = authority
+        self._health = health
+        self._command_timeout = command_timeout
+        # Provenance for every command that actually reached the wire. Timestamps
+        # come from time.monotonic() -- the same clock CommandHistory.record uses --
+        # so override detection correlates on one clock rather than against the
+        # adapter's ISO wall-clock timestamps.
+        self._dispatch_ledger: deque[tuple[str, float]] = deque(maxlen=self.DISPATCH_LEDGER_SIZE)
+
+        if health is not None:
+            # Register up front so command_path is present in summary() from
+            # process start, rather than materialising after the first command.
+            health.register("command_path")
+
+        if authority is None:
+            logger.warning(
+                "TelemetryClient built with no authority state; the structural authority "
+                "floor in send_command is inert for the lifetime of this client. In a wired "
+                "process this cannot happen -- the CLI aborts startup when the authority "
+                "state cannot be built, and the web lifespan substitutes a degraded "
+                "fallback -- so this warning in a real log means a wiring bug."
+            )
 
     @property
     def state(self) -> SimState:
@@ -356,17 +403,79 @@ class TelemetryClient:
     # Command sending
     # -------------------------------------------------------------------
 
+    def recent_dispatches(self) -> tuple[tuple[str, float], ...]:
+        """Snapshot of the commands that reached the wire, oldest first.
+
+        Each entry is ``(SimConnect event name, time.monotonic() at dispatch)``.
+        Bounded at :attr:`DISPATCH_LEDGER_SIZE`. Only successfully-sent commands
+        appear -- a command that never left the process is not provenance for a
+        subsequent telemetry change.
+        """
+        return tuple(self._dispatch_ledger)
+
     async def send_command(
         self,
         command: str,
         value: int = 0,
         adapter_id: str = "msfs-adapter",
-        timeout: float = 5.0,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
-        """Send a control command to a sim adapter and wait for acknowledgment."""
+        """Send a control command to a sim adapter and wait for acknowledgment.
+
+        Args:
+            command: SimConnect event name.
+            value: Event parameter.
+            adapter_id: Target adapter.
+            timeout: Seconds to wait for the ack. ``None`` uses the client's
+                configured ``command_timeout``.
+        """
         if self._ws is None or self._connection_state != ConnectionState.CONNECTED:
+            # Deliberately NOT a watchdog event. A connection failure is already
+            # visible through ConnectionState and the heartbeat loop; counting it
+            # here would double-report the same fault.
             return {"success": False, "error": "Not connected to telemetry service"}
 
+        # -- Structural authority floor -----------------------------------
+        # Level-only, by design: no safety re-run, no SimState read, no severity.
+        # Its entire purpose is that a caller which forgets the gate cannot reach
+        # the wire. That is not hypothetical -- command_safety was wired into
+        # tools.py and never into procedures.py, and nothing detected it for
+        # months. The floor is what makes a future third caller safe by
+        # construction rather than by remembering.
+        #
+        # The level is re-read HERE, from self._authority, at the instant of
+        # dispatch. send_command deliberately takes no caller-supplied level and
+        # caches nothing between calls: the gate decides, and the floor
+        # independently re-decides, so a level that dropped in between -- a
+        # watchdog latch, a pilot override, a degraded fallback -- is honoured
+        # instead of being overridden by a stale verdict. Two reads, not one, is
+        # the whole point of the two-layer design.
+        #
+        # Ordering is a correctness requirement, not a style preference: this
+        # returns BEFORE any watchdog counter mutation further down. Once the
+        # watchdog latches, the level is advisory and the floor refuses every
+        # subsequent command -- so if a floor refusal counted as a timeout, the
+        # latch would re-arm on every attempt and could never be reasoned about.
+        if self._authority is not None and self._authority.level is AuthorityLevel.ADVISORY:
+            reason = self._authority.reason
+            logger.warning(
+                "Authority floor refused command %s: level is %s (reason: %s)",
+                command,
+                AuthorityLevel.ADVISORY.value,
+                reason.value,
+            )
+            return {
+                "success": False,
+                "error": (
+                    f"Refused: MERLIN holds advisory authority only ({reason.value}); "
+                    f"nothing was sent to the aircraft."
+                ),
+                "refused": True,
+                "authority_level": AuthorityLevel.ADVISORY.value,
+                "authority_reason": reason.value,
+            }
+
+        resolved_timeout = self._command_timeout if timeout is None else timeout
         command_id = str(uuid.uuid4())
         loop = asyncio.get_running_loop()
         future: asyncio.Future[dict[str, Any]] = loop.create_future()
@@ -388,8 +497,11 @@ class TelemetryClient:
             self._pending_commands.pop(command_id, None)
             return {"success": False, "error": f"Failed to send command: {exc}"}
 
+        # The command is on the wire. Recorded only after the send succeeds.
+        self._dispatch_ledger.append((command, time.monotonic()))
+
         try:
-            result = await asyncio.wait_for(future, timeout=timeout)
+            result = await asyncio.wait_for(future, timeout=resolved_timeout)
             return result
         except TimeoutError:
             self._pending_commands.pop(command_id, None)
