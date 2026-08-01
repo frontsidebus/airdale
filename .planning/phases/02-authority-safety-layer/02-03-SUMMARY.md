@@ -72,7 +72,7 @@ completed: 2026-07-31
 - `POST /api/turn-probe` runs the existing `SmartTurnDetector` server-side. It never raises, is throttled per client at half `turn_probe_silence_ms`, and rejects bodies over 2 MiB before any ffmpeg spawn.
 - `/api/status` now tells the browser in one call whether to probe and at what thresholds. No existing key was removed or renamed.
 - The browser's `pollVAD` silence branch probes at the candidate endpoint with an in-flight guard, a `performance.now()` spacing check, and an `AbortController` timeout — then ends the turn on its own at `vad_silence_ms` regardless of what the probe did or did not say.
-- Test count rose from 38 to 55 in `web/tests/`, and `orchestrator/tests/test_audio_processing.py` is new with 13 tests.
+- Test count rose from 38 to 55 in `web/tests/`, and `orchestrator/tests/test_audio_processing.py` is new with 11 tests.
 
 ## Task Commits
 
@@ -85,7 +85,7 @@ completed: 2026-07-31
 ## Files Created/Modified
 
 - `orchestrator/orchestrator/audio_processing.py` — added `decode_webm_to_samples`, forked from the ffmpeg block in `convert_webm_to_wav_normalized` and diverging in exactly two ways: raw float32 return instead of a WAV re-wrap, and no `preprocess_audio` call. The docstring carries the reason so nobody "fixes" it later by reusing the transcribe path.
-- `orchestrator/tests/test_audio_processing.py` — new. 13 tests: decode success/failure/empty, ffmpeg argv assertions pinning `-ar 16000`, the structural no-preprocessing guard, and the behavioural counterpart asserting a 1s silent tail survives the decode while `preprocess_audio` provably eats it.
+- `orchestrator/tests/test_audio_processing.py` — new. 11 tests: decode success/failure/empty, ffmpeg argv assertions pinning `-ar 16000`, the structural no-preprocessing guard, and the behavioural counterpart asserting a 1s silent tail survives the decode while `preprocess_audio` provably eats it.
 - `web/server.py` — `AppState.turn_detector` (defaulted `None`) and `AppState.turn_probe_seen`; detector construction in `lifespan` via `create_turn_detector`; `TurnProbeResponse` model; `POST /api/turn-probe`; three new `/api/status` keys; `_int_setting` helper.
 - `web/tests/test_turn_probe.py` — new. 17 in-process ASGI tests with a fake ONNX session, covering the happy path, every degradation shape, both abuse bounds, and the `/api/status` contract including a regression guard that no pre-existing key was dropped.
 - `web/static/app.js` — `VAD_SILENCE_MS = 1200` removed; thresholds learned from `/api/status`; `probeTurnEnd()` and `stopVadRecording()` added; silence branch reworked.
@@ -112,7 +112,7 @@ completed: 2026-07-31
 - **Issue:** The plan said "extend `orchestrator/tests/test_audio_processing.py`" and listed it under `files_modified`, but no such file was in the tree — `audio_processing.py` had no dedicated test module.
 - **Fix:** Created the file, following the conventions of the sibling test modules (module docstring stating what is pinned and why, `_Fake*` scaffolding, class-grouped tests). Added a small `TestPreprocessAudio` class alongside the decode tests so the *contrast* between the two paths stays pinned, not just the decode path in isolation.
 - **Files modified:** `orchestrator/tests/test_audio_processing.py`
-- **Verification:** `python3 -m pytest orchestrator/tests/test_audio_processing.py -q` → 13 passed
+- **Verification:** `python3 -m pytest orchestrator/tests/test_audio_processing.py -q` → 11 passed
 - **Committed in:** `7543880`
 
 **2. [Rule 2 - Missing critical functionality] `/api/status` thresholds could ship a non-numeric value**
@@ -179,6 +179,12 @@ Open follow-ups, none blocking:
 
 - `web/tests/conftest.py` still builds `AppState(settings=MagicMock())`, so `turn_probe_silence_ms` and `vad_silence_ms` resolve to `1` for any test that does not set them explicitly (`int(MagicMock())` returns 1 rather than raising). `test_turn_probe.py` sets them in its own fixture. Setting them once in the shared conftest would be tidier, but was deliberately avoided here to keep merge risk with the concurrent worktrees low.
 - Threshold calibration on the web path is untuned. 150/400 are the server defaults inherited from VARC-01's local path; whether 150ms is the right probe point through a browser round trip is an empirical question that needs real speech.
+
+## Self-Check: PASSED
+
+All 7 claimed files verified present on disk. All 4 claimed commits verified in `git log`:
+`7543880`, `2e44400`, `2282171`, `eb7e263`. Test counts re-verified against a live run and
+corrected in this document (`test_audio_processing.py` is 11 tests, not 13).
 
 ---
 *Phase: 02-authority-safety-layer*
