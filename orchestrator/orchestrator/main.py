@@ -13,10 +13,12 @@ import logging
 import signal
 from typing import Any
 
+from .authority import AuthorityState, parse_authority_level
 from .claude_client import ClaudeClient
 from .config import Settings, load_settings
 from .context_store import ContextStore
 from .flight_phase import FlightPhaseDetector
+from .override_detector import OverrideDetector
 from .screen_capture import CaptureManager
 from .sim_client import (
     ConnectionState,
@@ -44,9 +46,71 @@ class Orchestrator:
         self._settings = settings
         self._text_only = text_only
 
+        # --- Health monitoring ------------------------------------------------
+        # Built before TelemetryClient: the client registers its own command_path
+        # subsystem on whatever monitor it is handed, so the monitor has to exist
+        # first.
+        self._health = HealthMonitor()
+        self._health.register("simconnect_bridge")
+        self._health.register("chromadb")
+        self._health.register("whisper")
+        self._health.register("claude_api")
+        # Belt and braces -- TelemetryClient registers this too when it is given a
+        # monitor. Registering here keeps command_path in summary(), and keeps the
+        # CLI reporting the same subsystem set as the web path (D-17), even if some
+        # future code path builds the client without a monitor.
+        self._health.register("command_path")
+
+        # --- Authority (fail closed) ------------------------------------------
+        # Deliberately NOT wrapped in try/except. If this raises, the exception
+        # propagates out of __init__ and the CLI does not start. Do not "harden"
+        # it by adding a handler that logs and continues:
+        #
+        #   * self._authority = None would silently disable the entire layer. The
+        #     gate in tools.py treats None as FULL and the floor in sim_client.py
+        #     is guarded on `is not None`, so a swallowed exception here means
+        #     MERLIN commands the aircraft without restriction regardless of what
+        #     AUTHORITY_LEVEL says.
+        #   * The failure surface is tiny and already covered upstream:
+        #     authority_level is validated by a pydantic field validator at
+        #     Settings construction, so by the time this runs the value is
+        #     known-good. A failure here means something genuinely broken, and the
+        #     correct response is to stop rather than to fly degraded.
+        #   * The CLI is a foreground, single-purpose process with a human at the
+        #     terminal. Aborting prints the error where it will be read and the
+        #     operator's next action is to fix the config. That is not true of the
+        #     browser path, which fails safe to a restricted advisory state
+        #     instead of aborting -- different mechanism, same guarantee: never
+        #     more authority than configured.
+        self._authority = AuthorityState(
+            parse_authority_level(settings.authority_level),
+            override_cooldown_s=settings.authority_override_cooldown_s,
+            watchdog_max_timeouts=settings.authority_watchdog_max_timeouts,
+        )
+        logger.info(
+            "Authority: %s (reason: %s, configured: %s)",
+            self._authority.level.value,
+            self._authority.reason.value,
+            self._authority.configured_level.value,
+        )
+
+        # One AuthorityState per process, shared by identity. TelemetryClient reads
+        # it for the dispatch floor, ClaudeClient forwards it to the tool gate, and
+        # the override detector mutates it -- a second instance would let the three
+        # disagree about the current level.
         self._sim_client = TelemetryClient(
             settings.telemetry_service_url,
             auto_reconnect=True,
+            authority=self._authority,
+            health=self._health,
+            command_timeout=settings.authority_command_timeout_s,
+        )
+        self._override_detector = OverrideDetector(
+            self._authority,
+            self._sim_client,
+            grace_s=settings.authority_override_grace_s,
+            settle_s=settings.authority_override_settle_s,
+            verify_timeout_s=settings.authority_verify_timeout_s,
         )
         self._context_store = ContextStore(settings.chromadb_url)
         self._phase_detector = FlightPhaseDetector()
@@ -75,17 +139,13 @@ class Orchestrator:
             max_tokens_briefing=settings.claude_max_tokens_briefing,
             max_history=settings.claude_max_history,
             temperature=settings.claude_temperature,
+            verify_timeout=settings.authority_verify_timeout_s,
+            command_tool_timeout=settings.authority_tool_timeout_s,
+            authority=self._authority,
         )
         self._running = False
         self._sim_connected = False
         self._tts_enabled = settings.tts_configured
-
-        # Health monitoring
-        self._health = HealthMonitor()
-        self._health.register("simconnect_bridge")
-        self._health.register("chromadb")
-        self._health.register("whisper")
-        self._health.register("claude_api")
 
         # Whisper degradation tracking
         self._whisper_available = True
@@ -100,6 +160,9 @@ class Orchestrator:
                 await self._sim_client.connect()
                 self._sim_connected = True
                 self._sim_client.subscribe(self._on_state_update)
+                # Its own subscriber, not a call from inside _on_state_update, so a
+                # failure in one cannot suppress the other (D-11).
+                self._sim_client.subscribe(self._override_detector.on_telemetry_update)
                 self._health.update("simconnect_bridge", True, "Connected")
             except Exception:
                 logger.warning(
