@@ -40,6 +40,23 @@ CRITICAL_COMMANDS = {
     "PARKING_BRAKES",
 }
 
+# CMD-08 / D-02: systems whose absolute on/off cannot be resolved, mapped to the
+# label used in the refusal. Both map "on", "off" and "toggle" to the *same* toggle
+# event, so "carb heat off" turns it ON whenever it was already off — the command
+# does the opposite of what was asked.
+#
+# Resolving it properly ("emit the toggle only when the requested state differs")
+# is not implementable: there is no carb-heat or fuel-pump state in the SimConnect
+# data definition, the adapter model, the universal schema, ``SurfaceState`` or the
+# mock adapter. There is nothing to read. Refusing removes the defect's teeth
+# without the four-layer telemetry work, which is deliberately deferred.
+#
+# Do NOT "fix" this back into a toggle — restoring it reintroduces the defect.
+UNCONFIRMABLE_POSITION_SYSTEMS: dict[str, str] = {
+    "carb_heat": "carb heat",
+    "fuel_pump": "fuel pump",
+}
+
 
 def _resolve_command(system: str, action: str, value: float | None) -> tuple[str | None, int]:
     """Translate human-friendly system/action/value to (SimConnect event, dwData)."""
@@ -311,6 +328,36 @@ async def set_aircraft_control(
 
     if command is None:
         return {"error": f"Unknown control: system={system}, action={action}"}
+
+    # --- CMD-08 / D-02: refuse an absolute on/off we cannot resolve ---
+    # Lives here rather than in _resolve_command so the resolver stays a pure lookup
+    # with a single failure channel, and so procedures inherit the check for free
+    # once ProcedureExecutor is re-routed through this function (D-04) —
+    # PROCEDURES["takeoff_config"] contains a fuel_pump step.
+    system_key = system.lower().strip()
+    action_key = action.lower().strip()
+    if system_key in UNCONFIRMABLE_POSITION_SYSTEMS and action_key in ("on", "off"):
+        label = UNCONFIRMABLE_POSITION_SYSTEMS[system_key]
+        logger.warning(
+            "Refusing %s/%s: no telemetry reports %s position, so %s would be a blind toggle",
+            system,
+            action,
+            label,
+            command,
+        )
+        return {
+            "error": (
+                f"I cannot confirm the current position of the {label} — no telemetry "
+                f"reports it. Sending {system}/{action} would emit a blind toggle, which "
+                f"turns the {label} the wrong way whenever it is already {action_key}. "
+                f"Use action='toggle' to change it, and tell me what the panel shows if "
+                f"you need it in a specific position."
+            ),
+            "system": system,
+            "action": action,
+            "command": command,
+            "unresolvable": True,
+        }
 
     # --- Pre-execution safety check ---
     checker = safety_check or _safety_check
