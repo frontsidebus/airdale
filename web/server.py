@@ -588,6 +588,32 @@ async def get_status(state: AppState = Depends(get_app_state)):
         state.bridge_connected and (time.monotonic() - state.bridge_last_seen) < 10.0
     ) or state.sim_connected
 
+    # Feed what this endpoint just measured back into the monitor, so the
+    # subsystems block cannot contradict the top-level fields in the same response
+    # -- a payload saying chromadb_available: true beside chromadb.healthy: false
+    # is worse than no subsystems block at all. The CLI does the same thing
+    # (_update_bridge_health runs before get_health_summary). Nothing here writes
+    # an authority value: the level moves only from configuration at startup,
+    # override detection and the watchdog (T-02-09-03). claude_api is left alone
+    # because this endpoint has no signal for it, and "never observed" is the
+    # honest report.
+    if state.health is not None:
+        state.health.update(
+            "simconnect_bridge",
+            bool(bridge_ok),
+            "Connected" if bridge_ok else "Disconnected",
+        )
+        state.health.update(
+            "chromadb",
+            bool(chromadb_ok),
+            "Connected" if chromadb_ok else "Unavailable; RAG disabled",
+        )
+        state.health.update(
+            "whisper",
+            bool(whisper_ok),
+            "Responding" if whisper_ok else "Unavailable or not the active backend",
+        )
+
     stt_backend = getattr(state.settings, "stt_backend", "whisper")
     tts_backend = getattr(state.settings, "tts_backend", "elevenlabs")
 

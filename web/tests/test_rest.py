@@ -565,3 +565,34 @@ async def test_status_subsystems_empty_without_a_health_monitor(test_app, mock_a
     data = await _get_status(test_app)
 
     assert data["subsystems"] == {}
+
+
+async def test_status_subsystems_agree_with_the_top_level_fields(test_app, mock_app_state):
+    """One response must not say chromadb_available: true beside chromadb: unhealthy."""
+    health = HealthMonitor()
+    for name in ("simconnect_bridge", "chromadb", "whisper", "claude_api", "command_path"):
+        health.register(name)
+    mock_app_state.health = health
+
+    data = await _get_status(test_app)
+
+    subsystems = data["subsystems"]
+    assert subsystems["chromadb"]["healthy"] == data["chromadb_available"]
+    assert subsystems["whisper"]["healthy"] == data["whisper_available"]
+    assert subsystems["simconnect_bridge"]["healthy"] == data["sim_connected"]
+
+
+async def test_status_does_not_write_the_authority_state(test_app, mock_app_state):
+    """The route is read-only where authority is concerned (T-02-09-03)."""
+    authority = AuthorityState(AuthorityLevel.FULL)
+    mock_app_state.authority = authority
+    before = authority.summary()
+
+    await _get_status(test_app)
+    await _get_status(test_app)
+
+    assert authority.summary() == before, (
+        "No endpoint added by this phase may set the authority level. Level changes "
+        "come only from configuration at startup, override detection and the "
+        "command-path watchdog."
+    )
