@@ -7,6 +7,7 @@ Source files:
 - `orchestrator/orchestrator/command_safety.py` -- Pre-execution safety interlocks
 - `orchestrator/orchestrator/procedures.py` -- Multi-step procedure definitions and executor
 - `orchestrator/orchestrator/command_history.py` -- Command history and undo logic
+- `orchestrator/orchestrator/authority.py` -- Authority level and the reason it holds (see [Authority](#authority))
 
 ---
 
@@ -153,6 +154,74 @@ checker.add_rule(custom_rule)
 The condition function signature is always `(command: str, value: int, state: SimState, limits: AircraftLimits | None) -> bool`. Return `True` when the unsafe condition is detected.
 
 The `message_template` supports these format variables: `{command}`, `{ias}`, `{agl}`, `{phase}`, `{vfe}`.
+
+---
+
+## Authority
+
+Safety interlocks answer *"is this command safe right now?"*. Authority answers a different question: *"may MERLIN act at all?"* The two compose. The safety check runs first and its verdict is an **input** to the authority decision, which is why the authority gate lives inside `set_aircraft_control` -- the one point where the resolved SimConnect event, live telemetry, and the `SafetyResult` all exist and nothing has been transmitted yet.
+
+Enforcement is a code branch, never prompt text. MERLIN is not asked to respect the authority level; the tool refuses to transmit. A guard that lives in the system prompt is defeated by anything that reaches the conversation.
+
+### Authority Levels
+
+There are exactly three levels, set by `AUTHORITY_LEVEL` (default `full`, so upgrading changes no behaviour -- restriction is opt-in).
+
+| Level | Clean verdict | `warning` verdict | `blocked` verdict |
+|---|---|---|---|
+| `full` | Executes | Executes, with the advisory attached | Refused |
+| `assisted` | Executes | **Withheld** -- MERLIN defers to the pilot | Refused |
+| `advisory` | **Dry run** -- describes the action, sends nothing | Dry run, describing the action and the concern | Refused |
+
+Note the column for `blocked`: **`blocked` wins at every level.** The safety short-circuit runs before the authority gate, so a blocked command reports as blocked regardless of authority. Authority can only ever reduce what gets sent, never widen it.
+
+The two restricted outcomes are reported to Claude as decisions, not failures:
+
+- **Advisory dry run** -- `{"advisory": true, "would_execute": "GEAR_DOWN", ...}`. Carries no `error` key, because it is not an error; the aircraft is simply the pilot's.
+- **Assisted withhold** -- `{"withheld": true, "command": "GEAR_DOWN", ...}`. Also carries no `error` key. The phrasing MERLIN relays makes clear it is deferring, not that the command failed.
+
+### Why Authority Is Restricted -- the Four Reasons
+
+A level travels with the reason it holds that value, because "MERLIN is only advising" means something different to a pilot depending on the cause.
+
+| Reason | Meaning | How it clears |
+|---|---|---|
+| `config` | The level the operator asked for | Change `AUTHORITY_LEVEL` |
+| `override` | The pilot moved a control themselves; MERLIN is standing off | Rolling cooldown (`AUTHORITY_OVERRIDE_COOLDOWN_S`) lapses |
+| `watchdog` | The command path stopped acknowledging -- MERLIN cannot reach the sim | Latched; cleared out of band, e.g. on reconnect |
+| `degraded` | The authority subsystem itself failed to start | Terminal for the process lifetime |
+
+`degraded` is a **reason, not a level.** A composition root that cannot build a real authority state substitutes `AuthorityState.degraded_fallback(...)`, which is permanently advisory. Making it a fourth *level* would have threaded it through the gate, the transport floor, the status endpoint, the UI, and every test; as a reason it threads only through the display. That is also why the level set is deliberately three -- a fourth authority state was considered and rejected.
+
+Anything that branches on the reason needs a `degraded` arm. A missing branch does not error, it renders a failed authority subsystem as a deliberate `advisory` configuration -- the pilot then reads a fault as a setting.
+
+### Coverage Caveat -- `assisted` Is Weaker Than It Sounds
+
+**`assisted` withholds only on a `warning`-severity safety verdict.** If no rule fires, there is nothing to withhold on, and the command executes exactly as it would at `full`.
+
+`DEFAULT_RULES` contains **7 rules, covering 4 systems**: gear, flaps, autopilot, and throttle. `_resolve_command` handles **20** commandable systems. For the other **16** -- including `mixture` (idle cutoff), `fuel_selector` (`off` starves the engine), `crossfeed`, and `deice` -- no `warning` rule exists, so **`assisted` behaves identically to `full` for those systems.**
+
+This follows correctly from an explicit non-goal: the authority phase deliberately added no new envelope rules, because authority and envelope protection are separate concerns and conflating them would have made both harder to reason about. It is not a defect in the authority layer -- the gate does exactly what it is specified to do. Closing the gap means adding safety rules for the remaining systems, which is tracked as a follow-on `SAFE-*` item.
+
+Read plainly: **do not treat `assisted` as broad protection today.** It is real protection for gear, flaps, autopilot, and throttle, and it is a no-op everywhere else. Use `advisory` if you want MERLIN to touch nothing.
+
+### Commands MERLIN Refuses Outright -- `carb_heat` and `fuel_pump`
+
+Independent of authority level, `carb_heat` and `fuel_pump` refuse an absolute `on` or `off`:
+
+```
+set_aircraft_control("carb_heat", "off")
+  -> {"error": "I cannot confirm the current position of the carb heat ...",
+      "unresolvable": true}
+```
+
+**Why.** Both systems map `"on"`, `"off"` and `"toggle"` to the *same* SimConnect toggle event (`ANTI_ICE_CARB_HEAT_TOGGLE`, `FUEL_PUMP_TOGGLE`). Emitting a toggle in response to "carb heat off" turns carb heat **on** whenever it was already off -- the command does the opposite of what was asked, which in icing conditions is a real hazard.
+
+The obvious fix -- emit the toggle only when the requested state differs from the current one -- is not implementable. There is no carb-heat or fuel-pump position anywhere in the telemetry chain: not in the SimConnect data definition, the adapter model, the universal schema, `SurfaceState`, or the mock adapter. There is nothing to read. Adding it is a four-layer change that is deliberately deferred.
+
+**Workaround.** `action="toggle"` works normally and is unaffected. Tell MERLIN what the panel shows if you need a specific position:
+
+> "Carb heat is currently off, toggle it on."
 
 ---
 
@@ -376,32 +445,38 @@ Pilot: "Gear up"
    +--> If warning: proceed with advisory message
     |
     v
-2. STATE SNAPSHOT (command_history.py)
+2. AUTHORITY GATE (authority.py, enforced in tools.py)
+   +--> advisory: return a dry-run description, command NOT sent
+   +--> assisted + warning: withhold, command NOT sent
+   +--> otherwise: proceed
+    |
+    v
+3. STATE SNAPSHOT (command_history.py)
    +--> Capture relevant sim state before execution
     |
     v
-3. EXECUTE (tools.py -> sim_client.py -> telemetry service -> adapter)
+4. EXECUTE (tools.py -> sim_client.py -> telemetry service -> adapter)
    +--> _resolve_command() translates to SimConnect event
    +--> Send via WebSocket to telemetry service
    +--> Adapter executes via SimConnect
    +--> ACK returned
     |
     v
-4. RECORD (command_history.py)
+5. RECORD (command_history.py)
    +--> Store command + pre-state snapshot in history ring buffer
     |
     v
-5. VERIFY (command_verifier.py)
+6. VERIFY (command_verifier.py)
    +--> Poll telemetry for up to 3 seconds
    +--> Compare expected vs actual state
    +--> Return VerificationResult to Claude
     |
     v
-6. REPORT
+7. REPORT
    +--> Claude reports outcome to pilot
    +--> Includes safety warnings, verification status, and any failures
 ```
 
-For multi-step procedures, steps 1-5 execute for each step in sequence, with configurable delays between steps. The full `ProcedureResult` is returned to Claude after all steps complete.
+For multi-step procedures, steps 1-6 execute for each step in sequence, with configurable delays between steps. The full `ProcedureResult` is returned to Claude after all steps complete.
 
-For undo, the history is consulted, a reverse action is generated, and that action goes through the same pipeline (safety check, execute, verify).
+For undo, the history is consulted, a reverse action is generated, and that action goes through the same pipeline (safety check, authority gate, execute, verify). An undo is a command like any other -- at `advisory` it is described, not sent.
