@@ -111,8 +111,9 @@ distinct from whether a specific command is safe right now.
 
 Command surface (CMD series — extends Phase 1, delivered here because gating must exist first):
 
-- [ ] **CMD-07**: The six systems `_resolve_command` already handles but the `set_aircraft_control` enum omits — `magnetos`, `carb_heat`, `fuel_pump`, `starter`, `primer`, `lights` — are exposed in the enum, **after** AUTH gating exists. Sequencing is the requirement, not an implementation note: `magnetos: off` is an in-flight engine shutdown.
-- [ ] **CMD-08**: `carb_heat` and `fuel_pump` resolve `"on"` / `"off"` against current telemetry instead of emitting the same toggle event for both, so "carb heat off" cannot turn it on
+- [ ] **CMD-07** *(redefined 2026-07-31 after research)*: The MSFS adapter's `CommandMap` registers a handler for **every** SimConnect event `_resolve_command` can emit for systems the enum already exposes. Today it registers 40 of 67; `trim`, `deice`, `fuel_selector`, and `crossfeed` are in the enum with no adapter handler, so MERLIN reports actions it did not take. This is a live defect on `main`, not new capability.
+- [ ] **CMD-08** *(reshaped 2026-07-31 after research)*: `carb_heat` and `fuel_pump` refuse `"on"` / `"off"` with an explicit "cannot confirm current position" error rather than emitting a blind toggle. `"toggle"` continues to work. Original intent was telemetry-aware resolution; no carb-heat or fuel-pump state exists anywhere in the telemetry chain, so there is nothing to resolve against.
+- [ ] **CMD-09** *(deferred — NOT Phase 2)*: The six systems `_resolve_command` handles but the enum omits — `magnetos`, `carb_heat`, `fuel_pump`, `starter`, `primer`, `lights` — are exposed, with the ~11 adapter events they need. Deferred because the adapter cannot execute them today. **Sequencing constraint:** `execute_procedure` bypasses the enum, so `PROCEDURES["shutdown"]` becomes a working in-flight engine shutdown the moment those events are registered — do not land them before the authority gate and the procedure re-route.
 
 Voice architecture (VARC series — see the Voice Architecture section):
 
@@ -164,7 +165,7 @@ incremental slide. See `TECH-STACK-REVIEW.md` §2.
 
 | Group | Total | Done | Open |
 |---|---|---|---|
-| CMD (Phase 1, +2 in Phase 2) | 8 | 6 | 2 |
+| CMD (Phase 1, +2 in Phase 2, +1 deferred) | 9 | 6 | 3 |
 | SAFE | 8 | 8 | 0 |
 | PROA | 6 | 6 | 0 |
 | VALD | 3 | 3 | 0 |
@@ -175,7 +176,7 @@ incremental slide. See `TECH-STACK-REVIEW.md` §2.
 | MNVR (Phase 3) | 4 | 0 | 4 |
 | VIS (Phase 4) | 4 | 0 | 4 |
 | VARC (voice arch) | 6 | 1 | 5 |
-| **Total** | **66** | **42** | **24** |
+| **Total** | **67** | **42** | **25** |
 
 35 of the 42 completed requirements are retroactive — they describe work that
 existed before this file did. That ratio is the measure of the drift being

@@ -76,7 +76,7 @@ Full analysis: `.planning/v1.3-RECONCILIATION.md`.
 
 **Goal**: MERLIN's authority to act on the aircraft is explicit, bounded, and never ambiguous — a configurable level decides whether it may act at all, a detected pilot override or a dead command path drops it automatically, and the current level and its reason are visible
 **Depends on**: Phase 1
-**Requirements**: AUTH-01 through AUTH-08, CMD-07, CMD-08, VARC-06
+**Requirements**: AUTH-01 through AUTH-08, CMD-07, CMD-08, VARC-06 (CMD-09 deferred)
 **Context**: `.planning/phases/02-authority-safety-layer/02-CONTEXT.md` (21 decisions)
 
 Distinct from SAFE-01…08, which decide whether a *specific command* is safe right
@@ -84,12 +84,15 @@ now. This phase decides whether MERLIN may act *at all*.
 
 **Scope extended 2026-07-31** during context-gathering, with two additions:
 
-- **CMD-07/08** — `_resolve_command` handles 20 control systems; the
-  `set_aircraft_control` enum exposes 14. The six unreachable ones include
-  `magnetos: off` (in-flight engine shutdown) and `starter: engage` in flight.
-  Gating must land before they are exposed, which is why they belong to this
-  phase and not a later one. CMD-08 fixes `carb_heat`/`fuel_pump` mapping
-  `"on"`, `"off"`, and `"toggle"` to the same toggle event.
+- **CMD-07/08** *(both revised 2026-07-31 after research)* — CMD-07 is now the
+  adapter command-coverage fix: `SimConnectManager.cs` registers 40 of the 67
+  events `_resolve_command` emits, and `trim`, `deice`, `fuel_selector`, and
+  `crossfeed` are **in the enum today with no adapter handler** — MERLIN reports
+  those actions as taken and nothing happens. CMD-08 makes `carb_heat`/`fuel_pump`
+  refuse `"on"`/`"off"` rather than blind-toggle, because no carb-heat or
+  fuel-pump state exists in the telemetry chain to resolve against.
+  Exposing the six unreachable systems moved to **CMD-09, deferred** — the
+  adapter cannot execute them, so the enum change alone would deliver nothing.
 - **VARC-06** — semantic turn detection on the web path. Orthogonal to authority;
   bundled by owner decision. Plan as an independent workstream, not as a
   dependency of the AUTH work.

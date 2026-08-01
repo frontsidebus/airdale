@@ -16,9 +16,14 @@ the current level so it is never ambiguous.
 
 Two additions to the original AUTH-only scope, both agreed during discussion:
 
-1. **The dead-enum fix** (see D-01). Six control systems resolve in code but are
-   unreachable through the tool schema; one of them is `magnetos: off`, which is
-   an in-flight engine shutdown. Gating them is exactly what this phase is for.
+1. **The adapter command-coverage fix** (see D-01, D-01a — *revised after
+   research*). The original intent was to expose six unreachable systems. Research
+   showed the C# adapter registers 40 of the 67 events `_resolve_command` emits,
+   so exposing them would deliver nothing — and, more urgently, that **four
+   systems already in the enum** (`trim`, `deice`, `fuel_selector`, `crossfeed`)
+   have no adapter handler either. MERLIN reports those actions as taken today
+   and they do nothing. Phase 2 fixes that live defect (CMD-07); exposing the six
+   moves to a follow-up phase (CMD-09).
 2. **Semantic turn detection on the web path** (VARC, see D-14…D-16). Orthogonal
    to authority — command control and voice endpointing share nothing — but
    deliberately bundled here by the project owner. Plan it as an independent
@@ -34,18 +39,32 @@ SAFE-* territory and already exist.
 
 ### Scope: the unreachable control systems
 
-- **D-01:** The six systems that `_resolve_command` handles but the
-  `set_aircraft_control` enum omits — `magnetos`, `carb_heat`, `fuel_pump`,
-  `starter`, `primer`, `lights` — are **in scope**, in this order: build AUTH
-  gating first, fix the resolution defect second, expose them in the enum third.
-  Sequencing matters: exposing them before gating would put the most dangerous
-  commands in the surface (`magnetos: off`, `starter` in flight,
-  `fuel_selector: off`) behind no rule at all.
-- **D-02:** `carb_heat` and `fuel_pump` currently map `"on"`, `"off"`, and
-  `"toggle"` to the same toggle event (`tools.py:184-190`), so "carb heat off"
-  turns it **on** when it was already off. Fix with telemetry-aware resolution —
-  read current state, emit the toggle only when the requested state differs.
-  Latent today because the systems are unreachable; live the moment D-01 lands.
+- **D-01 — AMENDED after research.** *Originally: expose the six unreachable
+  systems this phase.* Research found the C# adapter's `CommandMap` registers 40
+  events while `_resolve_command` emits 67 — **all 11 events for those six
+  systems are missing from the adapter**, so exposing them in the enum would
+  deliver nothing but a command that acks and does nothing.
+  **Now: the six are deferred to a follow-up phase (CMD-09).**
+  What replaces it is more urgent — see D-01a.
+- **D-01a — NEW.** The adapter is also missing ~20 events for **four systems that
+  are already in the enum today**: `trim` (`ELEV_TRIM_UP/DN`, `RUDDER_*`,
+  `AILERON_*`), `deice` (`PITOT_HEAT_TOGGLE`, `TOGGLE_STRUCTURAL_DEICE`, …),
+  `fuel_selector` (`FUEL_SELECTOR_*`), and `crossfeed` (`CROSS_FEED_*`). Claude
+  can emit these commands right now and the adapter has no handler — MERLIN
+  reports an action it did not take. **This is a live defect on `main` and is
+  Phase 2 scope (CMD-07, redefined).** Register the missing events so the
+  adapter covers every event `_resolve_command` can emit for enum-exposed
+  systems.
+- **D-02 — AMENDED after research.** *Originally: resolve `carb_heat`/`fuel_pump`
+  `"on"`/`"off"` against current telemetry.* There is no carb-heat or fuel-pump
+  state anywhere in the chain — `SurfaceState` is exactly `gear_handle`,
+  `flaps_percent`, `spoilers_percent`, in the C# struct, the adapter model, the
+  service schema, and `sim_client.py`. There is nothing to read.
+  **Now: refuse rather than toggle.** `"toggle"` still emits the toggle event;
+  `"on"` and `"off"` return an explicit error stating MERLIN cannot confirm the
+  current position. Removes the defect's teeth with no telemetry work, and never
+  does the opposite of what was asked. (Adding the state through all four layers
+  was considered and deferred — see Deferred Ideas.)
 
 ### Enforcement chokepoint
 
@@ -88,6 +107,19 @@ SAFE-* territory and already exist.
 
 ### Authority state
 
+- **D-08a — NEW.** The default `authority_level` is **`full`**, which preserves
+  today's behavior exactly: execute unless `command_safety` blocks. Restriction is
+  opt-in. Rationale: override detection is deliberately sensitive (D-12) and has
+  never been exercised against real flight data, so shipping a default that
+  silently withholds commands would produce confusing behavior nobody asked for.
+  `advisory` and `assisted` are reachable via config and are exercised by the
+  override and watchdog paths regardless of the default.
+  **Document, don't hide:** `assisted` is close to a no-op for 16 of the 20
+  systems, because only 7 safety rules exist and they cover gear, flaps,
+  autopilot, and throttle only. Nothing warns on `mixture`, `fuel_selector`,
+  `crossfeed`, or `deice`, so `assisted` withholds nothing there. That follows
+  correctly from the "no new envelope rules" non-goal, but it must be stated in
+  the config documentation rather than discovered in flight.
 - **D-09:** Authority is **mutable runtime state**, not just a config read —
   AUTH-06 drops it to `advisory` on override. It lives in an injected
   `AuthorityState` object seeded from `settings.authority_level`, passed to
@@ -104,13 +136,25 @@ SAFE-* territory and already exist.
 
 ### Override detection
 
-- **D-11:** Detection is a **continuous watch in `ProactiveMonitor`** — a new
-  `_check_override()` in `on_telemetry_update()` (`proactive_monitor.py:145`),
-  alongside the existing `_check_emergencies` / `_check_deviations` /
-  `_check_callouts`. Compare each `SimState` against `CommandHistory`'s recent
-  records using the existing `_extract_relevant_state()`
-  (`command_history.py:209`), which already extracts exactly the fields a given
-  command affects.
+- **D-11 — AMENDED after research.** *Originally: a `_check_override()` inside
+  `ProactiveMonitor.on_telemetry_update()`, reusing `_extract_relevant_state()`.*
+  Two premises failed. `ProactiveMonitor` **is never instantiated** in `main.py`
+  or `web/server.py`, so the check would be dead code; and
+  `_extract_relevant_state()` is an *undo* snapshot, non-empty for only 8 of 67
+  commands and `{}` for gear and every toggle — it cannot serve as the
+  comparison basis.
+  **Now: override detection hangs off the existing `TelemetryClient` update
+  callback**, which both the CLI and web paths already subscribe to. It runs
+  wherever telemetry runs, with no dependency on dormant code, and keeps this
+  phase from silently commissioning callouts, deviation alerts, emergency
+  detection, and checklist automation as a side effect.
+  **A command→watched-fields mapping must be written** — the "do not write a
+  second mapping" instruction cannot be honoured, because the first mapping does
+  not cover the cases override detection needs. Deriving one from
+  `command_verifier.py`'s expected-state checks is the closest existing analog.
+  **Clock mismatch to resolve:** `CommandRecord.timestamp` is `time.monotonic()`,
+  while `SimState.timestamp` is an ISO string from the adapter. Correlating them
+  needs one clock, chosen deliberately.
 - **D-12:** An override is **any unattributed change on a watched field** — the
   field moved and no recent `CommandRecord` accounts for it. Direction-agnostic:
   flaps 2 → flaps 3 counts as much as flaps 2 → flaps up, because both mean the
@@ -121,11 +165,17 @@ SAFE-* territory and already exist.
   provenance. "The pilot did it" can only mean "no matching recent
   `CommandRecord`", and MERLIN's own commands take up to 3s to appear in
   telemetry. Get the correlation wrong and MERLIN detects itself as the pilot.
-- **D-13:** The watch opens when `CommandVerifier` **confirms** the aircraft
-  reached the commanded state, then runs for a configurable grace window (~30s
-  default). This sidesteps the attribution race by construction — MERLIN's own
-  change is what closes verification, so anything after it is by definition not
-  MERLIN's. A command the sim never applied is never watched.
+- **D-13 — AMENDED after research.** *Originally: the watch opens when
+  `CommandVerifier` confirms the aircraft reached the commanded state, which
+  sidesteps the attribution race by construction.* The mechanism is sound but has
+  a hole: **60 of 67 commands have no verification rule**, so `verify_command`
+  returns `verified=True` in roughly zero milliseconds. For those, the watch
+  opens before the sim has moved — reintroducing exactly the race D-13 was chosen
+  to avoid.
+  **Now: keep verifier-confirmation as the trigger where a real rule exists, and
+  for unverifiable commands open the watch after a fixed settle delay instead.**
+  The delay must exceed the observed telemetry propagation lag. Do not treat a
+  `verified=True` that no rule produced as evidence the aircraft moved.
 - **D-14:** Cooldown is a **rolling timer**: drop to `advisory` for a
   configurable period, each new override pushes the expiry out, auto-restore when
   it lapses. Sustained pilot activity keeps MERLIN advisory; a single false
@@ -139,11 +189,17 @@ SAFE-* territory and already exist.
   `send_command` wraps the ack future in `asyncio.wait_for(timeout=5.0)` and
   returns `{"success": False, "error": "Command timed out"}`. AUTH-07's new part
   is the **latch**, not the timeout.
-- **D-16:** The latch trips after **N consecutive ack timeouts** (3 by default),
-  counter reset on any successful ack. Standard circuit-breaker shape. Tolerates
-  a dropped WebSocket frame or momentary sim hitch — both routine for an
-  out-of-process adapter reached over WS from WSL2 to a Windows host — while
-  catching a genuinely dead command path in roughly 15s.
+- **D-16 — AMENDED after research.** The circuit-breaker shape is unchanged:
+  latch after **N consecutive ack timeouts** (3 by default), counter reset on any
+  successful ack. What changed is *where it reads the signal from*.
+  `_TOOL_TIMEOUTS["set_aircraft_control"]` is **5.0s** — identical to
+  `send_command`'s internal `asyncio.wait_for` timeout — and the outer wrapper
+  starts first, so the `{"success": False, "error": "Command timed out"}` dict
+  the counter was going to watch is never reliably produced.
+  **Now: the watchdog counter lives inside `TelemetryClient.send_command`**, at
+  the point the ack future actually times out. Do not derive it from the tool's
+  return value. (Raising the outer tool timeout above 5.0s would also work and is
+  worth doing regardless, but the counter should not depend on that ordering.)
 - **D-17:** A latched watchdog sets level `advisory` with reason `watchdog`
   (per D-10), and registers command-path health via the existing `HealthMonitor`
   (`sim_client.py:206`) so `/api/status` can render "advisory (command path
@@ -164,10 +220,17 @@ SAFE-* territory and already exist.
   browser via RMS energy with `VAD_SILENCE_MS = 1200` (`app.js:1433-1435`). That
   is 3× the local fixed fallback (`vad_silence_ms: 400`) and 8× the semantic
   probe point (`turn_probe_silence_ms: 150`).
-- **D-20:** Architecture: **browser probes, server decides.** Lower the browser's
-  silence threshold toward `turn_probe_silence_ms`, and on each candidate
-  endpoint POST the trailing 8s of audio to a new endpoint that runs the existing
-  `SmartTurnDetector` and returns continue/stop. This is the recorded
+- **D-20 — AMENDED after research.** Architecture is unchanged: **browser probes,
+  server decides.** Two implementation corrections.
+  *(a)* The browser **cannot** send "the trailing 8s" — MediaRecorder webm chunks
+  are not independently decodable, so a slice of the buffer will not decode. Send
+  the **whole blob**; `truncate_or_pad` already keeps the last 8s server-side.
+  *(b)* Do **not** reuse `convert_webm_to_wav_normalized` from the transcribe
+  path. Its silence trimming destroys precisely the signal the turn model judges.
+  A separate decode path is required.
+  Lower the browser's silence threshold toward `turn_probe_silence_ms`, POST to a
+  new endpoint that runs the existing `SmartTurnDetector`, return continue/stop.
+  This is the recorded
   architectural principle verbatim — a cheap acoustic gate finds candidates and
   decides *when* to ask; the `TurnDetector` decides *whether* the turn is over —
   with the gate in JS instead of Silero. Upload is bounded by the model's 8s
@@ -319,6 +382,23 @@ SAFE-* territory and already exist.
 <deferred>
 ## Deferred Ideas
 
+- **CMD-09 — expose the six unreachable systems.** `magnetos`, `carb_heat`,
+  `fuel_pump`, `starter`, `primer`, `lights`. Requires ~11 new adapter events
+  plus the enum change. Deferred from Phase 2 after research showed the adapter
+  cannot execute them. **Sequencing note that must survive to that phase:**
+  `execute_procedure` bypasses the `set_aircraft_control` enum entirely, so
+  `PROCEDURES["shutdown"]` becomes a working in-flight engine shutdown the moment
+  those adapter events land. Do not register them before the authority gate and
+  the procedure re-route (D-04) are in place.
+- **Carb-heat / fuel-pump telemetry state.** Adding it through the C# struct,
+  adapter model, service schema, `SurfaceState`, and mock adapter would make
+  CMD-08 implementable as originally written and would enable a "carb heat left
+  on" deviation rule. Deferred in favor of refuse-rather-than-toggle (D-02).
+- **Commissioning `ProactiveMonitor`.** It is never instantiated, so callouts,
+  deviation alerts, emergency detection, and checklist automation — roughly 2,300
+  lines with documentation in `docs/PROACTIVE_COPILOT.md` — are all dormant.
+  Turning them on is a deliberate decision with real behavioral blast radius, and
+  deserves its own phase rather than riding along with authority work.
 - **Continuous browser→server audio streaming.** The eventual target for the web
   voice path and a prerequisite for VARC-02 (Parakeet local streaming STT).
   Reworks the web audio path including barge-in and per-client cancellation —
