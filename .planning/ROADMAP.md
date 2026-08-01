@@ -47,11 +47,14 @@ An audit found this roadmap materially out of date. Corrections applied:
   specified. What remains is the part that decides *whether MERLIN may act at
   all* — authority levels, override detection, watchdog. The delivered items are
   now recorded as SAFE-01…07.
+
 - **Phase 1's branch reference was removed.** `feat/agent-copilot-control` is
   merged; citing it implied the work was parked awaiting integration.
+
 - **Two unplanned bodies of work were added above** (Command Safety, Proactive
   Co-Pilot) — roughly 2,300 lines that existed on `main` with documentation in
   `docs/` but no roadmap entry.
+
 - **Phase 3 note:** `procedures.py` already sequences multi-step commands. MNVR-03
   should build on it rather than reimplement the "long-running task" pattern.
 
@@ -64,6 +67,7 @@ Full analysis: `.planning/v1.3-RECONCILIATION.md`.
 **Files modified**: 10 files across adapter (C#), telemetry service (Python), orchestrator (Python)
 
 **What was built:**
+
 1. Command protocol: `ConsumerCommand` → `ServiceCommand` → `AdapterCommandAck` → `ServiceCommandAck`
 2. Telemetry service routing: bidirectional command forwarding with ack tracking
 3. MSFS adapter: 30+ SimConnect events registered, `ExecuteCommand()` via `TransmitClientEvent`
@@ -81,15 +85,32 @@ Full analysis: `.planning/v1.3-RECONCILIATION.md`.
 **Plans**: 10 plans in 6 waves
 
 Plans:
+**Wave 1**
+
 - [ ] 02-01-PLAN.md — Authority state machine (`authority.py`) and the eight `authority_*` settings
 - [ ] 02-02-PLAN.md — MSFS adapter command coverage: 20 missing events plus cross-language parity guards (CMD-07)
 - [ ] 02-03-PLAN.md — Web-path semantic turn detection: decode helper, `/api/turn-probe`, browser probe loop (VARC-06)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 02-04-PLAN.md — Authority gate in `set_aircraft_control` and the `carb_heat`/`fuel_pump` refusal (AUTH-01…04, CMD-08)
 - [ ] 02-05-PLAN.md — Advisory floor, ack watchdog, `command_path` health and dispatch ledger in `TelemetryClient`
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 02-06-PLAN.md — Verification coverage and the override detector (AUTH-05, AUTH-06)
 - [ ] 02-07-PLAN.md — Procedure re-route through the gate with abort-on-withheld (D-04, D-06)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 02-08-PLAN.md — Orchestrator wiring: `ClaudeClient` thread-through, tool-timeout fix, CLI construction
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 02-09-PLAN.md — Web surfacing: `/api/status` authority fields and the advisory/withheld message types (AUTH-08)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 02-10-PLAN.md — Browser authority indicator and advisory/withheld rendering, with a human verification checkpoint
 
 Wave structure: wave 1 = 02-01, 02-02, 02-03 (independent); wave 2 = 02-04, 02-05;
@@ -111,6 +132,7 @@ now. This phase decides whether MERLIN may act *at all*.
   fuel-pump state exists in the telemetry chain to resolve against.
   Exposing the six unreachable systems moved to **CMD-09, deferred** — the
   adapter cannot execute them, so the enum change alone would deliver nothing.
+
 - **VARC-06** — semantic turn detection on the web path. Orthogonal to authority;
   bundled by owner decision. Plan as an independent workstream, not as a
   dependency of the AUTH work.
