@@ -7,8 +7,12 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from .authority import AuthorityState
+from .command_history import CommandHistory
+from .command_safety import CommandSafetyCheck
+from .command_verifier import CommandVerifier
 from .sim_client import TelemetryClient
-from .tools import _resolve_command
+from .tools import set_aircraft_control
 
 logger = logging.getLogger(__name__)
 
@@ -205,10 +209,35 @@ def list_procedures() -> list[dict[str, str]]:
 
 
 class ProcedureExecutor:
-    """Executes multi-step aircraft procedures sequentially."""
+    """Executes multi-step aircraft procedures sequentially.
 
-    def __init__(self, sim_client: TelemetryClient) -> None:
+    Every step is routed through :func:`orchestrator.tools.set_aircraft_control`
+    rather than reaching the telemetry transport directly, so a procedure step is
+    safety-checked, authority-gated, verified and recorded exactly as an individual
+    tool call is (D-04). This class deliberately holds **no** transport path of its
+    own: for months it resolved commands itself and handed them straight to the
+    transport, which meant every ``command_safety`` rule was bypassed by any
+    compound procedure and nothing detected it. ``test_procedures.py`` carries a
+    structural guard against a repeat -- do not reintroduce a direct transport call.
+
+    The collaborators are the same ones ``set_aircraft_control`` accepts and are
+    simply forwarded; this class makes no policy decisions of its own.
+    """
+
+    def __init__(
+        self,
+        sim_client: TelemetryClient,
+        *,
+        verifier: CommandVerifier | None = None,
+        safety_check: CommandSafetyCheck | None = None,
+        command_history: CommandHistory | None = None,
+        authority: AuthorityState | None = None,
+    ) -> None:
         self._sim_client = sim_client
+        self._verifier = verifier
+        self._safety_check = safety_check
+        self._command_history = command_history
+        self._authority = authority
 
     async def execute(self, procedure: Procedure) -> ProcedureResult:
         """Execute all steps in a procedure, returning results for each.
@@ -255,34 +284,55 @@ class ProcedureExecutor:
         return result
 
     async def _execute_step(self, step: ProcedureStep) -> StepResult:
-        """Execute a single procedure step via the telemetry service."""
-        command, sim_value = _resolve_command(step.system, step.action, step.value)
+        """Execute a single procedure step through the shared aircraft-control tool.
 
-        if command is None:
-            return StepResult(
-                step=step,
-                success=False,
-                error=f"Unknown control: system={step.system}, action={step.action}",
-            )
-
+        Command resolution, the safety check, the authority gate, verification and
+        history all live in that tool. This method only translates its result dict
+        into a :class:`StepResult`.
+        """
         try:
-            cmd_result = await self._sim_client.send_command(command, sim_value)
+            result = await set_aircraft_control(
+                self._sim_client,
+                step.system,
+                step.action,
+                step.value,
+                verifier=self._verifier,
+                safety_check=self._safety_check,
+                command_history=self._command_history,
+                authority=self._authority,
+            )
         except Exception as exc:
+            return StepResult(step=step, success=False, error=str(exc))
+
+        command = str(result.get("command") or "")
+        sim_value = int(result.get("sim_value") or 0)
+
+        # Nothing was transmitted: advisory describes rather than acts, and assisted
+        # withholds a flagged command. Neither is an ordinary failure.
+        if result.get("withheld") or result.get("advisory"):
             return StepResult(
                 step=step,
                 success=False,
                 command=command,
                 sim_value=sim_value,
-                error=str(exc),
+                error=str(result.get("message") or ""),
             )
 
-        success = cmd_result.get("success", False)
-        error = "" if success else cmd_result.get("error", "Command failed")
+        # Blocked commands, unknown controls and the CMD-08 refusal all arrive here.
+        if "error" in result:
+            return StepResult(
+                step=step,
+                success=False,
+                command=command,
+                sim_value=sim_value,
+                error=str(result["error"]),
+            )
 
+        success = bool(result.get("success", False))
         return StepResult(
             step=step,
             success=success,
             command=command,
             sim_value=sim_value,
-            error=error,
+            error="" if success else "Command failed",
         )

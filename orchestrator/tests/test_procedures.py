@@ -5,6 +5,16 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
+from orchestrator.command_safety import CommandSafetyCheck
+from orchestrator.sim_client import SimState
+
+#: A real checker with an empty rule set. Used where a test needs to isolate
+#: something other than safety: since every procedure step now runs through
+#: ``set_aircraft_control``, the default on-ground ``SimState()`` would otherwise
+#: block ``GEAR_UP`` before the behaviour under test is reached. Subclassing is
+#: unnecessary -- ``CommandSafetyCheck`` already takes its rules by injection, so
+#: this stays type-honest.
+_NO_RULES = CommandSafetyCheck(rules=[])
 
 procedures_mod = pytest.importorskip(
     "orchestrator.procedures",
@@ -201,6 +211,10 @@ class TestProcedureExecutor:
     def _make_client(self, success: bool = True) -> AsyncMock:
         client = AsyncMock()
         client.send_command.return_value = {"success": success, "message": "ok"}
+        # Steps now route through set_aircraft_control, which reads live telemetry
+        # for the safety check. A bare AsyncMock would hand it a mock in place of a
+        # SimState and every step would fail on attribute access.
+        client.get_state.return_value = SimState()
         return client
 
     @pytest.mark.asyncio
@@ -281,6 +295,7 @@ class TestProcedureExecutor:
 
         client = AsyncMock()
         client.send_command = AsyncMock(side_effect=track_command)
+        client.get_state.return_value = SimState()
 
         proc = Procedure(
             name="test_order",
@@ -317,9 +332,15 @@ class TestProcedureExecutor:
 
     @pytest.mark.asyncio
     async def test_go_around_sends_throttle_value(self) -> None:
-        """Go-around must send throttle 100%."""
+        """Go-around must send throttle 100%.
+
+        Safety rules are stubbed out because go-around retracts the gear, and the
+        default ``SimState()`` is on the ground -- the real checker would (rightly)
+        block step 3. That interaction is covered by the re-route regression test;
+        this one is about the throttle value.
+        """
         client = self._make_client(success=True)
-        executor = ProcedureExecutor(client)
+        executor = ProcedureExecutor(client, safety_check=_NO_RULES)
         proc = get_procedure("go_around")
         assert proc is not None
 
