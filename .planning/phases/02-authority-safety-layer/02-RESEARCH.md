@@ -919,26 +919,35 @@ Two CLAUDE.md updates are owed by this phase: a new architectural-decision entry
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All five were settled by the CONTEXT.md amendment written after this research, and are
+implemented by the phase plans. Kept here with their resolutions so the reasoning that
+produced each decision is not lost.
 
 1. **Is C# adapter work in scope for Phase 2?**
    - Known: CMD-07 and CMD-08 both require it (B1, B2). CMD-08 also requires telemetry-service schema changes.
    - Unclear: whether the phase owner intended a Python-only phase. CONTEXT.md's `<code_context>` names only Python files.
    - Recommendation: **surface before planning.** Three viable shapes — (a) full scope including C#; (b) AUTH-only, defer CMD-07/08 to a Phase 2.5; (c) AUTH + the 20 adapter events for already-exposed systems (closes a live defect cheaply), defer the 11 new ones.
+   - **RESOLVED — shape (c).** CONTEXT.md D-01 defers the six unreachable systems to CMD-09; D-01a makes the ~20 missing events for the four already-exposed systems (`trim`, `deice`, `fuel_selector`, `crossfeed`) Phase 2 scope as a redefined CMD-07. C# adapter work is therefore in scope, bounded to those events. Planned as 02-02.
 
 2. **Where does `_check_override` live?**
    - Known: D-11 says `ProactiveMonitor`; `ProactiveMonitor` is never constructed (B5).
    - Recommendation: either accept "wire `ProactiveMonitor` into `web/server.py` and `main.py`" as an explicit phase deliverable (with its four dormant subsystems switching on), or host the detector on a direct telemetry subscriber. **User call.**
+   - **RESOLVED — direct telemetry subscriber.** CONTEXT.md D-11 (amended) hangs override detection off the existing `TelemetryClient` update callback, which both entry points already subscribe to. `ProactiveMonitor` stays uninstantiated; commissioning it is a Deferred Idea. Planned as 02-06, subscribed in 02-08 (CLI) and 02-09 (web), with `ProactiveMonitor(` count-zero criteria in both.
 
 3. **What is the default `authority_level` on upgrade?**
    - `full` preserves behaviour; `assisted` is safer but changes it silently. A5 above.
+   - **RESOLVED — `full`.** CONTEXT.md D-08a. Assumption A5 (which proposed `assisted`) is overturned: override detection is deliberately sensitive (D-12) and has never been exercised against real flight data, so a default that silently withholds would produce behaviour nobody asked for. Restriction is opt-in. The `assisted` coverage gap is documented rather than hidden, in the field description, `docs/CONFIGURATION.md` and `docs/SMART_CONTROLS.md`.
 
 4. **Does `assisted` withhold, or withhold-and-ask?**
    - AUTH-03 says "withholds …, deferring to the pilot." Whether MERLIN should offer "say 'override' and I'll do it" is unspecified. A confirm-to-proceed affordance implies conversational state that does not exist today.
    - Recommendation: withhold and report, no confirmation loop. Note it explicitly so it is not re-opened during execution.
+   - **RESOLVED — withhold and report, no confirmation loop.** Taken as recommended; CONTEXT.md records no confirm-loop decision, and the withhold result shape frozen in plan 02-04 carries only a message explaining that MERLIN is deferring. No conversational state is introduced anywhere in the phase.
 
 5. **Should the 20 events for already-exposed broken systems (trim/deice/fuel_selector/crossfeed) be fixed here?**
    - It is a live defect on `main`, adjacent to the work, and mechanical. But it is not any Phase 2 requirement ID — exactly the untracked-scope pattern REQUIREMENTS.md exists to catch. Recommend a new ID (CMD-09) if taken.
+   - **RESOLVED — yes, under a redefined CMD-07.** CONTEXT.md D-01a takes the work and the ROADMAP repair assigned it the existing CMD-07 ID rather than a new one; CMD-09 is instead the ID given to the deferred six-system exposure. Tracked scope, no new untracked work.
 
 ---
 
