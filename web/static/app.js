@@ -1426,13 +1426,30 @@
   //
   // When enabled, the mic stays open and MERLIN listens continuously.
   // Speech detection uses RMS energy — when you talk, it starts recording.
-  // When you stop talking (silence for VAD_SILENCE_MS), it sends the audio.
   // While MERLIN is speaking (TTS playing), the mic is muted to prevent
   // feedback loops.
+  //
+  // Endpointing is split: this cheap acoustic gate decides *when* to ask, and
+  // the server's turn model decides *whether* the turn is actually over. No
+  // turn model, feature extraction, or ONNX runtime lives in the browser.
+  //
+  //   silence >= _turnProbeSilenceMs  → ask the server (POST /api/turn-probe)
+  //   silence >= _vadFallbackSilenceMs → end the turn ourselves
+  //
+  // The fallback is independent of every probe, so voice input keeps working
+  // when the endpoint is missing, disabled, slow, or wrong.
 
   const VAD_SPEECH_THRESHOLD = 0.015;  // RMS level to detect speech
-  const VAD_SILENCE_MS = 1200;         // Silence duration before sending
   const VAD_MIN_SPEECH_MS = 300;       // Minimum speech duration to send
+
+  // Defaults match the server's; the live values arrive from /api/status so the
+  // browser never has to guess or duplicate the configuration.
+  let _turnProbeSilenceMs = 150;
+  let _vadFallbackSilenceMs = 400;
+  let _turnProbeAvailable = false;   // Server advertises a semantic detector
+  let _turnProbeDisabled = false;    // Server answered available:false — stop asking
+  let _lastProbeAt = 0;              // performance.now() of the last probe sent
+  let _probeInFlight = false;        // At most one outstanding probe
 
   // Don't auto-start VAD from localStorage — require explicit click each session
   // (AudioContext needs user gesture to start on most browsers)
@@ -1547,17 +1564,90 @@
     } else if (_vadIsSpeaking) {
       // Silence detected while speaking
       if (_vadSilenceStart === 0) _vadSilenceStart = now;
+      const silenceMs = now - _vadSilenceStart;
 
-      if (now - _vadSilenceStart >= VAD_SILENCE_MS) {
-        // Enough silence — stop recording and send
-        if (_vadRecorder && _vadRecorder.state === 'recording') {
-          _vadRecorder.stop();
-        }
+      // Candidate endpoint — ask the server whether the turn is really over.
+      // Guarded three ways because this loop runs on requestAnimationFrame at
+      // roughly 60 Hz and each accepted probe spawns ffmpeg server-side:
+      // one probe in flight at a time, at most one per _turnProbeSilenceMs,
+      // and nothing at all once the server has said it cannot help.
+      if (_turnProbeAvailable && !_turnProbeDisabled &&
+          silenceMs >= _turnProbeSilenceMs &&
+          !_probeInFlight &&
+          (performance.now() - _lastProbeAt) >= _turnProbeSilenceMs) {
+        probeTurnEnd(silenceMs);
+      }
+
+      // Fallback endpointing, independent of every probe. This is what keeps
+      // voice input working when the probe is unavailable, hung, or wrong.
+      if (silenceMs >= _vadFallbackSilenceMs) {
+        stopVadRecording();
         _vadSilenceStart = 0;
       }
     }
 
     _vadPollId = requestAnimationFrame(pollVAD);
+  }
+
+  function stopVadRecording() {
+    if (_vadRecorder && _vadRecorder.state === 'recording') {
+      _vadRecorder.stop();
+    }
+  }
+
+  // Ask the server whether the utterance is complete.
+  //
+  // Fire-and-forget by design: pollVAD does not await this, so a slow probe
+  // never stalls the audio loop, and the fallback threshold still fires on
+  // schedule if the answer arrives late or not at all.
+  async function probeTurnEnd(silenceMs) {
+    if (_probeInFlight) return;
+    if (!_vadRecorder || _vadChunks.length === 0) return;
+
+    _probeInFlight = true;
+    _lastProbeAt = performance.now();
+
+    // The WHOLE accumulated array — never a trailing slice. MediaRecorder webm
+    // chunks after the first are bare clusters with no EBML header or codec
+    // private data, so a tail on its own will not decode. Sending everything is
+    // free anyway: the server's feature window already keeps only the last 8s.
+    // Recording deliberately continues; we do not stop it to take a probe.
+    const blob = new Blob(_vadChunks, { type: _vadRecorder.mimeType });
+    const form = new FormData();
+    form.append('file', blob, 'turn.webm');
+    form.append('silence_ms', String(Math.round(silenceMs)));
+
+    // A hung probe must not block the next one.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), _turnProbeSilenceMs * 2);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/turn-probe`, {
+        method: 'POST',
+        body: form,
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      if (data.available === false) {
+        // No detector server-side. Stop asking for the rest of the session and
+        // let the fallback threshold carry endpointing from here.
+        _turnProbeDisabled = true;
+        return;
+      }
+
+      if (data.ended === true && _vadIsSpeaking) {
+        stopVadRecording();
+        _vadSilenceStart = 0;
+      }
+    } catch {
+      // Degrade silently, the way pollStatus does. A probe must never break
+      // voice input; the fallback threshold handles this turn.
+    } finally {
+      clearTimeout(timer);
+      _probeInFlight = false;
+    }
   }
 
   // ── Configurable PTT (keyboard + gamepad/joystick) ────
@@ -1954,6 +2044,17 @@
       setLed(dom.statusChroma,   data.chromadb_available  ? 'green' : 'red');
       // Claude is available if we got a valid status response (API key is loaded)
       setLed(dom.statusClaude,   data.claude_model        ? 'green' : 'amber');
+
+      // Endpointing thresholds — learned here rather than per-probe, and only
+      // adopted when the server sends usable numbers so a partial/legacy status
+      // response cannot zero them out.
+      if (typeof data.turn_probe_silence_ms === 'number' && data.turn_probe_silence_ms > 0) {
+        _turnProbeSilenceMs = data.turn_probe_silence_ms;
+      }
+      if (typeof data.vad_silence_ms === 'number' && data.vad_silence_ms > 0) {
+        _vadFallbackSilenceMs = data.vad_silence_ms;
+      }
+      _turnProbeAvailable = data.turn_probe_available === true;
 
       updateConnectionQuality();
     } catch {
