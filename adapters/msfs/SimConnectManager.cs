@@ -287,6 +287,30 @@ public sealed class SimConnectManager : IDisposable
             ["SPOILERS_TOGGLE"] = SimEventId.SpoilersToggle,
             ["SPOILERS_SET"] = SimEventId.SpoilersSet,
             ["ELEVATOR_TRIM_SET"] = SimEventId.ElevatorTrimSet,
+            // Trim
+            ["ELEV_TRIM_UP"] = SimEventId.ElevTrimUp,
+            ["ELEV_TRIM_DN"] = SimEventId.ElevTrimDown,
+            ["RUDDER_TRIM_LEFT"] = SimEventId.RudderTrimLeft,
+            ["RUDDER_TRIM_RIGHT"] = SimEventId.RudderTrimRight,
+            ["RUDDER_TRIM_SET"] = SimEventId.RudderTrimSet,
+            ["AILERON_TRIM_LEFT"] = SimEventId.AileronTrimLeft,
+            ["AILERON_TRIM_RIGHT"] = SimEventId.AileronTrimRight,
+            ["AILERON_TRIM_SET"] = SimEventId.AileronTrimSet,
+            // De-ice
+            ["PITOT_HEAT_TOGGLE"] = SimEventId.PitotHeatToggle,
+            ["TOGGLE_STRUCTURAL_DEICE"] = SimEventId.StructuralDeiceToggle,
+            ["WINDSHIELD_DEICE_TOGGLE"] = SimEventId.WindshieldDeiceToggle,
+            ["TOGGLE_PROPELLER_DEICE"] = SimEventId.PropellerDeiceToggle,
+            // Fuel selector
+            ["FUEL_SELECTOR_OFF"] = SimEventId.FuelSelectorOff,
+            ["FUEL_SELECTOR_ALL"] = SimEventId.FuelSelectorAll,
+            ["FUEL_SELECTOR_LEFT"] = SimEventId.FuelSelectorLeft,
+            ["FUEL_SELECTOR_RIGHT"] = SimEventId.FuelSelectorRight,
+            ["FUEL_SELECTOR_SET"] = SimEventId.FuelSelectorSet,
+            // Crossfeed
+            ["CROSS_FEED_OPEN"] = SimEventId.CrossFeedOpen,
+            ["CROSS_FEED_OFF"] = SimEventId.CrossFeedOff,
+            ["CROSS_FEED_TOGGLE"] = SimEventId.CrossFeedToggle,
         };
 
     /// <summary>

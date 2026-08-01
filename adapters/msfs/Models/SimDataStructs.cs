@@ -80,6 +80,30 @@ public enum SimEventId
     SpoilersToggle,
     SpoilersSet,
     ElevatorTrimSet,
+    // Trim
+    ElevTrimUp,
+    ElevTrimDown,
+    RudderTrimLeft,
+    RudderTrimRight,
+    RudderTrimSet,
+    AileronTrimLeft,
+    AileronTrimRight,
+    AileronTrimSet,
+    // De-ice
+    PitotHeatToggle,
+    StructuralDeiceToggle,
+    WindshieldDeiceToggle,
+    PropellerDeiceToggle,
+    // Fuel selector
+    FuelSelectorOff,
+    FuelSelectorAll,
+    FuelSelectorLeft,
+    FuelSelectorRight,
+    FuelSelectorSet,
+    // Crossfeed
+    CrossFeedOpen,
+    CrossFeedOff,
+    CrossFeedToggle,
 }
 
 /// <summary>
