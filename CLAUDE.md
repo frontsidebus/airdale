@@ -63,9 +63,11 @@ airdale/
 │   │   ├── tools.py             # Claude tool implementations (incl. set_aircraft_control)
 │   │   ├── aviation_tools.py    # NOTAM, METAR/TAF, ADS-B, charts, performance, airspace
 │   │   │
+│   │   ├── authority.py         # Authority level + reason; the state every guard reads
 │   │   ├── command_safety.py    # PRE-execution safety rules; gates the write path
 │   │   ├── command_verifier.py  # POST-execution telemetry confirmation
 │   │   ├── command_history.py   # Recent commands + generated undo actions
+│   │   ├── override_detector.py # Drops authority on unattributed telemetry movement
 │   │   ├── procedures.py        # Multi-step compound command execution
 │   │   │
 │   │   ├── proactive_monitor.py # Unified telemetry evaluation (callouts+deviations+emergency)
@@ -331,14 +333,16 @@ TELEMETRY_SERVICE_HOST=$(hostname).local       # WSL2 native
 
 25. **Aviation-term WER over published WER** -- STT backend swaps are gated on `orchestrator/eval/aviation_wer.py`, which reports critical-token error rate and value recall alongside standard WER. Published leaderboard WER is dominated by conversational filler and cannot distinguish a backend that drops "uh" from one that hears "one zero thousand" as "one thousand". Run `tools/stt_bench.py` before changing STT.
 
+26. **Authority layer -- how much MERLIN may do, and why** -- `authority.py` holds one `AuthorityState` per process, selected by `AUTHORITY_LEVEL`. Three levels: `advisory` transmits nothing and describes what it would have done, `assisted` executes unless `command_safety` flags the command `warning`, `full` executes unless `command_safety` blocks it outright. **The policy gate lives inside `set_aircraft_control`** -- the single point where the resolved SimConnect event, live telemetry and the safety verdict all exist and nothing has been transmitted yet. **A second, level-only floor sits in `TelemetryClient.send_command`**, re-reading the level at the instant of dispatch and refusing everything at `advisory`; it exists because "remember to add the check at each call site" already failed once in this exact code path, and `procedures.py` bypassed `command_safety` for months as a result. **The consecutive-ack-timeout watchdog counter must increment inside `send_command`**, not be inferred from a return value: the tool layer's own `asyncio.wait_for` starts first, so `authority_tool_timeout_s` must exceed `authority_command_timeout_s + authority_verify_timeout_s` or a genuine ack timeout is cancelled as a tool timeout and the watchdog never sees it (enforced by a `Settings` validator at startup and pinned by a structural test). **Authority carries a reason as well as a level** -- `config`, `override`, `watchdog`, `degraded` -- so "deferring to the pilot", "cannot reach the sim" and "the authority subsystem failed to start" stay distinguishable instead of all rendering as a deliberate `advisory`. **Both entry points fail toward less authority**: the CLI lets a construction failure propagate and refuses to start, because a swallowed exception would leave `authority = None`, which every gate reads as `full`; the web `lifespan` substitutes a degraded, advisory-only state instead, since a browser server cannot usefully abort. Different mechanism, same guarantee -- a wiring or construction failure can never *grant* authority. `override_detector.py` drops authority to advisory on a rolling cooldown when watched telemetry moves with no recent MERLIN dispatch to account for it. This is a policy layer *over* the guards in decision 22, not a replacement for them.
+
 ## Testing Approach
 
-- **~1,066 tests passing** across Python and C# suites: 990 orchestrator, 38 web, 38 telemetry-service, plus the C# adapter test project.
+- **~1,395 tests passing** across Python and C# suites: 1,302 orchestrator, 55 web, 38 telemetry-service, plus the C# adapter test project. Root-level integration tests are deselected by default (`addopts = -m "not integration"`) and are not part of that count.
 - **Python:** pytest + pytest-asyncio for async tests. Mock the WebSocket connection and Claude API in unit tests.
 - **C#:** xUnit. Mock SimConnect for unit tests. Integration tests require MSFS running.
 - **No sim required for most tests** -- Record telemetry snapshots as JSON fixtures and replay them through the orchestrator.
 - **Web tests** live in `web/tests/` with their own `web/pyproject.toml`; they use `httpx` + `ASGITransport` for REST and `httpx-ws` + `ASGIWebSocketTransport` for WebSocket, all in-process with no live server.
-- **Test categories:** config, flight phase, tools, Claude client, STT/TTS backends and factories, voice pipeline, command safety/verifier/history, procedures, callouts, deviation monitor, proactive monitor, checklist manager, emergency, validation, aviation tools, context store, chunking, re-ranker, screen capture, aviation-WER scoring; plus root-level integration tests (WebSocket reconnection, health monitor, delta detection, orchestrator end-to-end, tool chain, Whisper pipeline).
+- **Test categories:** config, flight phase, tools, Claude client, STT/TTS backends and factories, turn detection and the turn-probe feature extractor, voice pipeline, command safety/verifier/history, authority state machine, the authority gate and the `send_command` floor, pilot-override detection, the command-path watchdog, procedures, callouts, deviation monitor, proactive monitor, checklist manager, emergency, validation, aviation tools, context store, chunking, re-ranker, screen capture, aviation-WER scoring; plus root-level integration tests (WebSocket reconnection, health monitor, delta detection, orchestrator end-to-end, tool chain including an end-to-end authority dispatch at every level, Whisper pipeline).
 
 ### Running lint the way CI does
 

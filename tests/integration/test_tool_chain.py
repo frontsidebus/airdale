@@ -14,8 +14,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from orchestrator.authority import AuthorityLevel, AuthorityState
+from orchestrator.claude_client import ClaudeClient
+from orchestrator.command_safety import CommandSafetyCheck, SafetyResult
 from orchestrator.context_store import ContextStore
-from orchestrator.sim_client import FlightPhase, TelemetryClient, SimState
+from orchestrator.sim_client import FlightPhase, SimState, SurfaceState, TelemetryClient
 from orchestrator.tools import (
     create_flight_plan,
     get_checklist,
@@ -307,3 +310,144 @@ class TestToolDispatchFlow:
             # Should not raise
             serialized = json.dumps(r)
             assert isinstance(serialized, str)
+
+
+# ---------------------------------------------------------------------------
+# Authority end to end: tool_use block -> dispatch -> gate -> transport
+# ---------------------------------------------------------------------------
+
+
+class _WarningSafetyCheck(CommandSafetyCheck):
+    """Safety checker returning a fixed ``warning`` verdict.
+
+    Subclasses the real class rather than duck-typing so the substitution stays
+    type-honest. ``assisted`` withholds specifically on ``warning``, and which of
+    ``DEFAULT_RULES`` happens to fire for a given command is not what these tests
+    are about.
+    """
+
+    def __init__(self, reason: str = "Gear cycle near max gear speed") -> None:
+        super().__init__(rules=[])
+        self._reason = reason
+
+    def check(
+        self,
+        command: str,
+        value: int,
+        sim_state: SimState,
+        aircraft_type: str = "",
+    ) -> SafetyResult:
+        return SafetyResult(safe=True, command=command, reason=self._reason, severity="warning")
+
+
+def _command_sim_client() -> MagicMock:
+    """A telemetry client wired the way the command path expects.
+
+    ``gear_handle=True`` so the post-command verification for GEAR_DOWN confirms on
+    its first poll instead of spending the whole verifier timeout.
+    """
+    client = MagicMock(spec=TelemetryClient)
+    client.get_state = AsyncMock(
+        return_value=SimState(surfaces=SurfaceState(gear_handle=True)),
+    )
+    client.send_command = AsyncMock(return_value={"success": True, "message": ""})
+    return client
+
+
+def _claude_with(authority: AuthorityState, sim_client: MagicMock) -> ClaudeClient:
+    with patch("orchestrator.claude_client.anthropic.AsyncAnthropic"):
+        return ClaudeClient(
+            api_key="sk-ant-test",
+            model="claude-sonnet-4-20250514",
+            sim_client=sim_client,
+            context_store=MagicMock(),
+            authority=authority,
+        )
+
+
+async def _dispatch_gear_down(client: ClaudeClient) -> dict[str, Any]:
+    """Run the tool_use block Claude would emit for 'gear down'."""
+    tool_block = {
+        "id": "tool_authority",
+        "name": "set_aircraft_control",
+        "input": {"system": "gear", "action": "down"},
+    }
+    return await client._execute_tool(tool_block["name"], tool_block["input"], SimState())
+
+
+class TestAuthorityEndToEnd:
+    """Dispatch a real set_aircraft_control tool_use block at each authority level.
+
+    This is the only place the whole chain runs together: ``_execute_tool`` ->
+    ``_dispatch_tool`` -> ``set_aircraft_control`` -> the authority gate ->
+    ``TelemetryClient.send_command``. Everything below the gate is real code; only
+    the transport and the Anthropic client are doubles.
+    """
+
+    async def test_full_executes_the_command(self) -> None:
+        sim = _command_sim_client()
+        client = _claude_with(AuthorityState(AuthorityLevel.FULL), sim)
+
+        result = await _dispatch_gear_down(client)
+
+        sim.send_command.assert_awaited_once_with("GEAR_DOWN", 0)
+        assert "advisory" not in result
+        assert "withheld" not in result
+
+    async def test_advisory_describes_without_sending(self) -> None:
+        sim = _command_sim_client()
+        client = _claude_with(AuthorityState(AuthorityLevel.ADVISORY), sim)
+
+        result = await _dispatch_gear_down(client)
+
+        sim.send_command.assert_not_called()
+        assert result["advisory"] is True
+        assert result["would_execute"] == "GEAR_DOWN"
+        assert result["authority_level"] == "advisory"
+        assert result["authority_reason"] == "config"
+        # A restrained command is a decision, not a failure: the web layer's
+        # `success = "error" not in tool_result` heuristic depends on this.
+        assert "error" not in result
+
+    async def test_assisted_withholds_a_flagged_command(self) -> None:
+        sim = _command_sim_client()
+        client = _claude_with(AuthorityState(AuthorityLevel.ASSISTED), sim)
+
+        # ClaudeClient deliberately does not inject safety_check, so the tool falls
+        # back to the module-level checker -- which is what production runs.
+        with patch("orchestrator.tools._safety_check", _WarningSafetyCheck()):
+            result = await _dispatch_gear_down(client)
+
+        sim.send_command.assert_not_called()
+        assert result["withheld"] is True
+        assert result["authority_level"] == "assisted"
+        assert result["safety"]["severity"] == "warning"
+        assert "error" not in result
+
+    async def test_degraded_fallback_behaves_as_advisory(self) -> None:
+        """A composition root that failed must land restrained, not unrestricted."""
+        sim = _command_sim_client()
+        client = _claude_with(AuthorityState.degraded_fallback("boom"), sim)
+
+        result = await _dispatch_gear_down(client)
+
+        sim.send_command.assert_not_called()
+        assert result["advisory"] is True
+        assert result["authority_level"] == "advisory"
+        assert result["authority_reason"] == "degraded"
+
+    async def test_the_forwarded_state_is_the_one_the_client_was_given(self) -> None:
+        """An override recorded on the shared state changes the next dispatch."""
+        sim = _command_sim_client()
+        authority = AuthorityState(AuthorityLevel.FULL)
+        client = _claude_with(authority, sim)
+
+        first = await _dispatch_gear_down(client)
+        assert "advisory" not in first
+
+        authority.record_override()
+        second = await _dispatch_gear_down(client)
+
+        assert second["advisory"] is True
+        assert second["authority_reason"] == "override"
+        assert sim.send_command.await_count == 1
