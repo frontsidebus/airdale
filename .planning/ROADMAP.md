@@ -78,6 +78,24 @@ Full analysis: `.planning/v1.3-RECONCILIATION.md`.
 **Depends on**: Phase 1
 **Requirements**: AUTH-01 through AUTH-08, CMD-07, CMD-08, VARC-06 (CMD-09 deferred)
 **Context**: `.planning/phases/02-authority-safety-layer/02-CONTEXT.md` (21 decisions)
+**Plans**: 10 plans in 6 waves
+
+Plans:
+- [ ] 02-01-PLAN.md — Authority state machine (`authority.py`) and the eight `authority_*` settings
+- [ ] 02-02-PLAN.md — MSFS adapter command coverage: 20 missing events plus cross-language parity guards (CMD-07)
+- [ ] 02-03-PLAN.md — Web-path semantic turn detection: decode helper, `/api/turn-probe`, browser probe loop (VARC-06)
+- [ ] 02-04-PLAN.md — Authority gate in `set_aircraft_control` and the `carb_heat`/`fuel_pump` refusal (AUTH-01…04, CMD-08)
+- [ ] 02-05-PLAN.md — Advisory floor, ack watchdog, `command_path` health and dispatch ledger in `TelemetryClient`
+- [ ] 02-06-PLAN.md — Verification coverage and the override detector (AUTH-05, AUTH-06)
+- [ ] 02-07-PLAN.md — Procedure re-route through the gate with abort-on-withheld (D-04, D-06)
+- [ ] 02-08-PLAN.md — Orchestrator wiring: `ClaudeClient` thread-through, tool-timeout fix, CLI construction
+- [ ] 02-09-PLAN.md — Web surfacing: `/api/status` authority fields and the advisory/withheld message types (AUTH-08)
+- [ ] 02-10-PLAN.md — Browser authority indicator and advisory/withheld rendering, with a human verification checkpoint
+
+Wave structure: wave 1 = 02-01, 02-02, 02-03 (independent); wave 2 = 02-04, 02-05;
+wave 3 = 02-06, 02-07; wave 4 = 02-08; wave 5 = 02-09; wave 6 = 02-10.
+VARC-06 (02-03) is its own lane and neither depends on, nor is depended on by, the
+authority plans.
 
 Distinct from SAFE-01…08, which decide whether a *specific command* is safe right
 now. This phase decides whether MERLIN may act *at all*.
@@ -116,7 +134,7 @@ procedures through `set_aircraft_control` closes it.
 | Command Safety & Integrity  | v1.3 | — | Complete (SAFE-01…08), unplanned | 2026-07-29 |
 | Proactive Co-Pilot          | v1.3 | — | Complete (PROA-01…06), unplanned | — |
 | Voice Backend Abstraction   | v1.3 | — | Complete (VOIC-01…09, EVAL-01…04) | 2026-07-29 |
-| 2. Authority & Safety Layer | v1.3 | 0/— | Planning (AUTH-01…08, CMD-07…08, VARC-06) | — |
+| 2. Authority & Safety Layer | v1.3 | 0/10 | Planned (AUTH-01…08, CMD-07…08, VARC-06) | — |
 | 3. Automated Maneuvers    | v1.3 | 0/— | Not started (MNVR-01…04) | —      |
 | 4. Vision Cockpit Reading | v1.3 | 0/— | Not started (VIS-01…04) | —       |
 | Voice Architecture        | v1.3 | 0/— | VARC-01 complete; VARC-02…05 not started | — |
