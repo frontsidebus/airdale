@@ -1,17 +1,15 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.2
-milestone_name: Consolidation & Quality
-status: shipped
-stopped_at: v1.2 milestone closed
-last_updated: "2026-07-30T02:22:23.641Z"
-last_activity: 2026-07-29
+milestone: v1.3
+milestone_name: Agent Copilot Control
+status: in_progress
+stopped_at: PR #78 merged; main re-synced at 80f22bf
+last_updated: "2026-07-31T19:20:00.000Z"
+last_activity: 2026-07-31
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 14
-  completed_plans: 14
-  percent: 100
+  total_requirements: 63
+  completed_requirements: 42
+  percent: 67
 ---
 
 # Project State
@@ -26,11 +24,22 @@ See: .planning/PROJECT.md (updated 2026-04-18)
 ## Current Position
 
 Milestone: v1.3 (in progress; v1.2 shipped 2026-04-18)
-Status: Reconciliation complete — Phase 2 (AUTH-01…08) ready to plan
-Last activity: 2026-07-29
+Status: PR series #73–#78 all merged; `main` at `80f22bf`
+Last activity: 2026-07-31
+Requirement coverage: 42 of 63 (67%)
 
-Next: plan v1.3 Phase 2, or start Voice Architecture VARC-01 (semantic turn
-detection). Both are unblocked.
+Shipped in the 2026-07-31 session: learnings extraction (#73), stale-record
+reconciliation (#74), voice protocol + STT factory + aviation-WER gate (#75),
+REQUIREMENTS.md + Phase 2 rescope (#76), semantic turn detection VARC-01 (#77),
+synthetic + external corpus ingest EVAL-05/06 (#78).
+
+Next, unblocked: plan v1.3 Phase 2 (AUTH-01…08) — but see Open Decisions, the
+stale controls branches change what Phase 2 must gate. Also unblocked: Step 1b
+(semantic turn detection on the web/Deepgram path).
+
+Blocked on real audio: EVAL-07 threshold calibration needs ATCOSIM (licence
+check required — it publishes no licence text) plus ~8 own-voice recordings.
+Synthetic audio covers CI regression and SNR curves only, never thresholds.
 
 ## Deferred Items
 
@@ -71,12 +80,39 @@ These need a call before or during Phase 2 planning:
 
 | Decision | Context |
 |---|---|
-| `docs/phase2-controls` + `feat/fuel-controls` | Two stale branches (62 commits behind) adding engine-management and fuel-selection command *types*. If wanted, they expand the surface AUTH-01…08 must gate — decide before planning Phase 2, not after. Re-implementing on `main` is likely cheaper than rebasing. |
+| ~~`docs/phase2-controls` + `feat/fuel-controls`~~ | **RESOLVED 2026-07-31 — abandon both.** Their `_resolve_command` content is already on `main`; `main` is strictly *ahead* (both branches predate the `command_safety` / `command_verifier` / `command_history` wiring and would strip it). Nothing to rebase or reimplement. Investigation instead surfaced two real gaps, now Phase 2 inputs — see "Phase 2 scope inputs" below. |
 | RIO / v2 direction | `rio/phase-1`, `feature/claude-perf-tuning`, `feature/local-inference-architecture` (all 210 commits behind) plus `docs/MIGRATION_V1_V2.md` and `chore/v2-ci-updates` describe an LLM-abstraction / local-inference direction against a separate `rio` remote. Needs an explicit accept-or-abandon. |
 | 11 `worktree-agent-*` branches | ~30 commits of leftover agent worktrees. Triage or delete. |
 | Speech-to-speech | Requires replacing Claude, `validation.py`, and failure attribution. Should be an ADR if ever pursued, not an incremental slide. See `TECH-STACK-REVIEW.md` §2. |
 
-Progress: [░░░░░░░░░░] 0%
+## Phase 2 scope inputs (found 2026-07-31)
+
+Discovered while resolving the controls-branches decision. All three belong in
+Phase 2 because they concern *whether MERLIN may act*, not what it can address.
+
+**1. Six control systems are dead code.** `_resolve_command` in
+`orchestrator/orchestrator/tools.py` handles 20 systems, but the
+`set_aircraft_control` tool-definition enum in `claude_client.py` lists only 14.
+Missing: `magnetos`, `carb_heat`, `fuel_pump`, `starter`, `primer`, `lights`.
+Claude cannot emit them, so the handler arms are unreachable.
+
+**2. Safety coverage stops well short of the command surface.** `DEFAULT_RULES`
+has 7 rules covering only gear, flaps, autopilot, and throttle; `CRITICAL_COMMANDS`
+has 5 entries (gear ×3, `AP_MASTER`, `PARKING_BRAKES`). Nothing gates the
+highest-severity commands that already resolve today — `mixture` idle-cutoff,
+`fuel_selector: off` (fuel starvation), `crossfeed`, `deice` — nor the six dead
+ones, of which `magnetos: off` (in-flight shutdown) and `starter: engage`
+(in-flight) are the worst. Enabling gap 1 without closing gap 2 would expose the
+most dangerous commands in the surface with no rule behind them. **Sequence
+AUTH gating before the enum fix.**
+
+**3. Latent defect, becomes live with the enum fix.** `carb_heat` and `fuel_pump`
+map `"on"`, `"off"`, and `"toggle"` to the *same* toggle event
+(`ANTI_ICE_CARB_HEAT_TOGGLE` / `FUEL_PUMP_TOGGLE`), so "carb heat off" turns it
+**on** when it was already off. Harmless while unreachable; a real defect the
+moment the enum lists them. Needs state-aware resolution against telemetry.
+
+Progress (v1.3 requirements): [███████░░░] 67% — 42 of 63
 
 ## Performance Metrics
 
@@ -152,5 +188,6 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-07-31
-Stopped at: PR #78 open (mergeable, CI green); v1.3 reconciled, voice Steps 0-1 shipped
-Resume file: .planning/.continue-here.md (+ .planning/HANDOFF.json)
+Stopped at: Session resumed — PR #78 merged, `main` re-synced to `80f22bf`,
+handoff artifacts consumed and removed. Awaiting next-action selection.
+Resume file: none (handoff complete)
