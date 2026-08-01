@@ -26,6 +26,7 @@ import websockets as ws_lib
 from fastapi import (
     Depends,
     FastAPI,
+    Form,
     Request,
     UploadFile,
     WebSocket,
@@ -36,6 +37,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from orchestrator.audio_processing import (
     convert_webm_to_wav_normalized,
+    decode_webm_to_samples,
 )
 from orchestrator.claude_client import ClaudeClient  # noqa: E402
 from orchestrator.config import load_settings  # noqa: E402
@@ -45,6 +47,11 @@ from orchestrator.sim_client import SimState, TelemetryClient  # noqa: E402
 from orchestrator.stt.deepgram import DeepgramSTTClient  # noqa: E402
 from orchestrator.tts.cartesia import CartesiaClient  # noqa: E402
 from orchestrator.tts_preprocessor import preprocess_for_tts  # noqa: E402
+from orchestrator.turn import (  # noqa: E402
+    SilenceTurnDetector,
+    TurnDetector,
+    create_turn_detector,
+)
 from orchestrator.whisper_client import WhisperClient  # noqa: E402
 from pydantic import BaseModel
 
@@ -71,6 +78,25 @@ _MIN_AUDIO_DURATION_SECS = 0.5
 
 # Brief pause (seconds) after MERLIN finishes speaking before accepting input
 _POST_SPEECH_PAUSE_SECS = 0.3
+
+# ---------------------------------------------------------------------------
+# Turn probe limits
+#
+# /api/turn-probe is an unauthenticated local endpoint that spawns an ffmpeg
+# process per request, and the browser calls it from a requestAnimationFrame
+# loop. Both bounds below exist to keep a client bug from becoming a local fork
+# bomb; the browser has matching guards, but the server does not trust them.
+# ---------------------------------------------------------------------------
+
+# Opus at ~24 kbps puts a 15 s utterance near 45 KB, so 2 MiB is several minutes
+# of audio. Anything larger is a bug or abuse, and is rejected before ffmpeg runs.
+_MAX_TURN_PROBE_BYTES = 2 * 1024 * 1024
+
+# Sample rate decode_webm_to_samples emits; turn.features raises on anything else.
+_TURN_PROBE_SAMPLE_RATE = 16000
+
+# Cap on tracked probe clients so the throttle table cannot grow without bound.
+_MAX_TURN_PROBE_CLIENTS = 64
 
 # ---------------------------------------------------------------------------
 # TTS phrase cache -- pre-populated at startup for common MERLIN phrases
@@ -109,10 +135,28 @@ class AppState:
     deepgram_client: DeepgramSTTClient | None = None  # v2 streaming STT
     cartesia_client: CartesiaClient | None = None  # v2 low-latency TTS
     tts_client: httpx.AsyncClient | None = None  # Legacy ElevenLabs HTTP
+    turn_detector: TurnDetector | None = None  # End-of-turn detection for /api/turn-probe
     tts_cache: dict[str, bytes] = field(default_factory=dict)
+    #: client host -> time.monotonic() of its last accepted turn probe
+    turn_probe_seen: dict[str, float] = field(default_factory=dict)
     sim_connected: bool = False
     bridge_last_seen: float = 0.0
     bridge_connected: bool = False
+
+
+def _int_setting(app_settings: Any, name: str, default: int) -> int:
+    """Read an integer setting defensively.
+
+    Mirrors the ``getattr(settings, ..., default)`` idiom used throughout this
+    module, but coerces the result. Tests inject a ``MagicMock`` settings object
+    where ``getattr`` invents an attribute instead of raising, which would put a
+    non-serialisable value into ``/api/status`` and a non-comparable one into the
+    probe throttle.
+    """
+    try:
+        return int(getattr(app_settings, name, default))
+    except (TypeError, ValueError):
+        return default
 
 
 def get_app_state(request: Request) -> AppState:
@@ -224,6 +268,25 @@ async def lifespan(app: FastAPI):
         state.whisper_client = WhisperClient(base_url=settings.whisper_url)
         logger.info("STT backend: Whisper (local batch)")
 
+    # End-of-turn detector for /api/turn-probe.
+    #
+    # Built through the factory, not SmartTurnDetector directly: the factory
+    # resolves the smart -> silence fallback here at startup and logs the
+    # fetch_turn_model.py hint. Discovering a missing model mid-utterance would
+    # be the worst possible time to find out.
+    try:
+        state.turn_detector = create_turn_detector(settings)
+        logger.info(
+            "Turn detector: %s (available: %s)",
+            state.turn_detector.name,
+            state.turn_detector.available,
+        )
+    except Exception as exc:
+        state.turn_detector = None
+        logger.warning(
+            "Turn detector unavailable (%s); browser will endpoint on fixed silence", exc
+        )
+
     # Claude client
     state.claude_client = ClaudeClient(
         api_key=settings.anthropic_api_key,
@@ -317,6 +380,22 @@ class TTSRequest(BaseModel):
     text: str
 
 
+class TurnProbeResponse(BaseModel):
+    """Answer to "has the speaker finished?" for one candidate endpoint.
+
+    ``available`` is separate from ``ended`` on purpose. It tells the browser
+    whether asking is worth doing at all: ``False`` means stop probing for this
+    session and fall back to fixed-silence endpointing, while a transient failure
+    keeps ``available`` true so one bad blob does not permanently degrade
+    responsiveness.
+    """
+
+    ended: bool
+    probability: float
+    detector: str
+    available: bool
+
+
 # ---------------------------------------------------------------------------
 # REST endpoints
 # ---------------------------------------------------------------------------
@@ -361,6 +440,16 @@ async def get_status(state: AppState = Depends(get_app_state)):
     stt_backend = getattr(state.settings, "stt_backend", "whisper")
     tts_backend = getattr(state.settings, "tts_backend", "elevenlabs")
 
+    # Semantic turn probing is only worth the round trip when the detector is a
+    # real model. The silence fallback would just re-derive what the browser can
+    # already time locally, so report it as unavailable and let the browser use
+    # its own vad_silence_ms threshold.
+    turn_probe_available = (
+        state.turn_detector is not None
+        and state.turn_detector.available
+        and not isinstance(state.turn_detector, SilenceTurnDetector)
+    )
+
     return {
         "sim_connected": bridge_ok,
         "chromadb_available": chromadb_ok,
@@ -382,6 +471,11 @@ async def get_status(state: AppState = Depends(get_app_state)):
         ),
         "claude_model": state.settings.claude_model,
         "telemetry_service_url": state.settings.telemetry_service_url,
+        # Endpointing: one call tells the browser whether to probe and at what
+        # thresholds, so it never has to guess or hardcode them.
+        "turn_probe_available": turn_probe_available,
+        "turn_probe_silence_ms": _int_setting(state.settings, "turn_probe_silence_ms", 150),
+        "vad_silence_ms": _int_setting(state.settings, "vad_silence_ms", 400),
     }
 
 
@@ -448,6 +542,106 @@ async def transcribe_audio(file: UploadFile, state: AppState = Depends(get_app_s
         )
 
     return result_dict
+
+
+def _turn_probe_result(detector: str, *, available: bool) -> TurnProbeResponse:
+    """A "turn is still going" answer, tagged with why we could not decide."""
+    return TurnProbeResponse(ended=False, probability=0.0, detector=detector, available=available)
+
+
+def _accept_turn_probe(state: AppState, client_host: str, min_interval_ms: float) -> bool:
+    """Record a probe from ``client_host``, or reject it as too soon.
+
+    ``pollVAD`` runs on ``requestAnimationFrame`` at roughly 60 Hz. The browser
+    spaces its own probes, but this endpoint is unauthenticated and spawns an
+    ffmpeg process per call, so it does not take the browser's word for it.
+    """
+    now = time.monotonic()
+    last = state.turn_probe_seen.get(client_host)
+    if last is not None and (now - last) * 1000.0 < min_interval_ms:
+        return False
+
+    if last is None and len(state.turn_probe_seen) >= _MAX_TURN_PROBE_CLIENTS:
+        # Evict the least recently seen client; the table must not grow forever.
+        oldest = min(state.turn_probe_seen, key=lambda host: state.turn_probe_seen[host])
+        del state.turn_probe_seen[oldest]
+
+    state.turn_probe_seen[client_host] = now
+    return True
+
+
+@app.post("/api/turn-probe", response_model=TurnProbeResponse)
+async def turn_probe(
+    request: Request,
+    file: UploadFile,
+    silence_ms: int = Form(...),
+    state: AppState = Depends(get_app_state),
+) -> TurnProbeResponse:
+    """Judge whether the speaker has finished, given the utterance so far.
+
+    The browser keeps the cheap acoustic gate and decides *when* to ask; this
+    endpoint runs the semantic detector and decides *whether* the turn is over.
+    No turn model, feature extraction, or ONNX runtime lives in the browser.
+
+    ``file`` is the whole accumulated MediaRecorder blob, not a trailing slice:
+    webm chunks after the first carry no EBML header and will not decode on
+    their own. Truncation to the model's 8 s window happens inside the detector.
+
+    Never raises. Every failure path returns a not-ended answer, because the
+    browser's fixed-silence fallback is what keeps voice input working and a
+    5xx here would only add latency to reaching it.
+    """
+    detector = state.turn_detector
+    if detector is None or not detector.available:
+        # Permanent for this session: tell the browser to stop asking.
+        return _turn_probe_result("unavailable", available=False)
+
+    client_host = request.client.host if request.client else "unknown"
+    probe_interval_ms = _int_setting(state.settings, "turn_probe_silence_ms", 150)
+    if not _accept_turn_probe(state, client_host, probe_interval_ms / 2):
+        return _turn_probe_result("throttled", available=True)
+
+    declared_size = getattr(file, "size", None)
+    if declared_size is not None and declared_size > _MAX_TURN_PROBE_BYTES:
+        logger.warning(
+            "Rejecting %d-byte turn probe from %s (limit %d)",
+            declared_size,
+            client_host,
+            _MAX_TURN_PROBE_BYTES,
+        )
+        return _turn_probe_result("too_large", available=True)
+
+    audio_bytes = await file.read()
+    if len(audio_bytes) > _MAX_TURN_PROBE_BYTES:
+        logger.warning(
+            "Rejecting %d-byte turn probe from %s (limit %d)",
+            len(audio_bytes),
+            client_host,
+            _MAX_TURN_PROBE_BYTES,
+        )
+        return _turn_probe_result("too_large", available=True)
+
+    samples = await decode_webm_to_samples(audio_bytes)
+    if samples is None:
+        # Transient: one undecodable blob should not disable probing for good.
+        return _turn_probe_result("decode_failed", available=True)
+
+    try:
+        # Inference is sub-20ms but synchronous; keep it off the event loop so a
+        # probe cannot stutter concurrent TTS streaming.
+        decision = await asyncio.to_thread(
+            detector.evaluate, samples, _TURN_PROBE_SAMPLE_RATE, silence_ms
+        )
+    except Exception as exc:
+        logger.error("Turn probe evaluation failed: %s", exc)
+        return _turn_probe_result("error", available=True)
+
+    return TurnProbeResponse(
+        ended=decision.ended,
+        probability=decision.probability,
+        detector=decision.detector,
+        available=True,
+    )
 
 
 @app.post("/api/tts")
