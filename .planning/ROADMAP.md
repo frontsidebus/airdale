@@ -32,7 +32,7 @@ previously had none, which is how substantial work landed outside this roadmap).
 - [x] **Command Safety & Integrity** — pre-execution safety rules, post-execution verification, undo history, multi-step procedures (SAFE-01…08, merged; **was not a planned phase** — see reconciliation note below)
 - [x] **Proactive Co-Pilot** — callout engine, deviation monitor, checklist automation, emergency fast paths (PROA-01…06, merged; **was not a planned phase**)
 - [x] **Voice Backend Abstraction** — STT/TTS protocols and factories, aviation-WER gate (VOIC-01…09, EVAL-01…04, PR #75)
-- [ ] **Phase 2: Authority & Safety Layer** *(rescoped 2026-07-29, scope extended 2026-07-31)* — configurable authority levels (advisory/assisted/full), pilot override detection, watchdog timer (AUTH-01…08); plus the unreachable-enum fix and its resolution defect (CMD-07…08) and semantic turn detection on the web path (VARC-06)
+- [x] **Phase 2: Authority & Safety Layer** *(rescoped 2026-07-29, scope extended 2026-07-31)* — configurable authority levels (advisory/assisted/full), pilot override detection, watchdog timer (AUTH-01…08); plus the unreachable-enum fix and its resolution defect (CMD-07…08) and semantic turn detection on the web path (VARC-06) (completed 2026-08-01)
 - [ ] **Phase 3: Automated Maneuvers** — PID control loops for takeoff/landing/go-around, cancellable long-running maneuvers, server-side control at 20Hz (MNVR-01…04)
 - [ ] **Phase 4: Vision Cockpit Reading** — lower-latency screen capture, Claude vision for instrument reading, third-party gauge interpretation (VIS-01…04)
 - [ ] **Voice Architecture** *(sequenced after Phase 2; VARC-06 pulled into it)* — local-default hybrid, flight-phase-routed architecture (VARC-02…05, see `.planning/TECH-STACK-REVIEW.md`). VARC-01 shipped in PR #77 for the local path; VARC-06 extends it to the web path and is claimed by Phase 2.
@@ -111,7 +111,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 02-10-PLAN.md — Browser authority indicator and advisory/withheld rendering, with a human verification checkpoint
+- [x] 02-10-PLAN.md — Browser authority indicator and advisory/withheld rendering, with a human verification checkpoint
 
 Wave structure: wave 1 = 02-01, 02-02, 02-03 (independent); wave 2 = 02-04, 02-05;
 wave 3 = 02-06, 02-07; wave 4 = 02-08; wave 5 = 02-09; wave 6 = 02-10.
@@ -147,7 +147,7 @@ procedures through `set_aircraft_control` closes it.
 | Phase | Milestone | Plans Complete | Status      | Completed  |
 |-------|-----------|----------------|-------------|------------|
 | 1. Housekeeping           | v1.2 | 3/3 | Complete    | 2026-03-28 |
-| 2. TTS Integration        | v1.2 | 9/10 | In Progress|  |
+| 2. TTS Integration        | v1.2 | 10/10 | Complete   | 2026-08-01 |
 | 3. Whisper Consolidation  | v1.2 | 2/2 | Complete    | 2026-03-28 |
 | 4. Web Server Refactor    | v1.2 | 2/2 | Complete    | 2026-04-16 |
 | 5. Web Server Tests       | v1.2 | 2/2 | Complete    | 2026-03-28 |
