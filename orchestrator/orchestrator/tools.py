@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from .authority import AuthorityLevel, AuthorityReason, AuthorityState
 from .command_history import CommandHistory
 from .command_safety import CommandSafetyCheck
 from .command_verifier import CommandVerifier
@@ -18,6 +19,13 @@ logger = logging.getLogger(__name__)
 
 # Shared safety checker instance (uses default rules)
 _safety_check = CommandSafetyCheck()
+
+# Log-dedupe for the missing-authority warning below. This is a *bool*, not an
+# authority object: D-09 rejects a module-level authority singleton (the
+# ``checker = safety_check or _safety_check`` shape above is exactly what it
+# rejects), and this flag never holds, caches or stands in for authority. It
+# exists only so a hot command path does not spam the log with the same warning.
+_warned_missing_authority = False
 
 # ---------------------------------------------------------------------------
 # Aircraft control commands
@@ -214,6 +222,47 @@ def _resolve_command(system: str, action: str, value: float | None) -> tuple[str
     return None, 0
 
 
+def _resolve_authority(
+    authority: AuthorityState | None,
+) -> tuple[AuthorityLevel, AuthorityReason]:
+    """Read the effective authority level and reason, once, at the decision point.
+
+    ``authority is None`` resolves to ``FULL`` / ``CONFIG`` -- today's behaviour,
+    preserved for backward compatibility with the collaborator-injection signature.
+    It is deliberately *loud*: in a wired process ``None`` is unreachable (both
+    composition roots guarantee a real ``AuthorityState``), so observing it means a
+    caller failed to inject and the only remaining guard is the level floor inside
+    ``TelemetryClient.send_command``. The warning is emitted once per process.
+
+    The values are returned rather than stashed: the floor performs its own,
+    independent read at dispatch, and that second fresh read is what makes the
+    two-layer design safe against a level that changes between check and dispatch.
+    """
+    global _warned_missing_authority
+
+    if authority is not None:
+        return authority.level, authority.reason
+
+    if not _warned_missing_authority:
+        _warned_missing_authority = True
+        logger.warning(
+            "set_aircraft_control was called without an injected AuthorityState; "
+            "proceeding at %s. This is a wiring bug -- the caller must pass "
+            "authority=. Until it is fixed, the only remaining guard on this "
+            "command path is the level floor in TelemetryClient.send_command.",
+            AuthorityLevel.FULL.value,
+        )
+    return AuthorityLevel.FULL, AuthorityReason.CONFIG
+
+
+def _describe_intent(system: str, action: str, value: float | None) -> str:
+    """Render a requested command as a short human-readable phrase."""
+    phrase = f"set {system} {action}"
+    if value is not None:
+        phrase += f" to {value:g}"
+    return phrase
+
+
 async def set_aircraft_control(
     sim_client: TelemetryClient,
     system: str,
@@ -222,6 +271,7 @@ async def set_aircraft_control(
     verifier: CommandVerifier | None = None,
     safety_check: CommandSafetyCheck | None = None,
     command_history: CommandHistory | None = None,
+    authority: AuthorityState | None = None,
 ) -> dict[str, Any]:
     """Execute a sim control command via the telemetry service.
 
@@ -230,11 +280,32 @@ async def set_aircraft_control(
     returns ``warning``, the command executes but the warning is included
     in the result for Claude to relay to the pilot.
 
+    The *authority* gate then decides whether the command is transmitted at all:
+
+    - ``advisory`` -- nothing is sent. A dry-run dict describing the intended
+      action is returned instead, carrying the safety verdict so Claude can
+      describe both what it would do and any concern.
+    - ``assisted`` -- a ``warning``-severity verdict withholds the command; a
+      clean verdict executes it.
+    - ``full`` -- unchanged behaviour: execute unless safety says ``blocked``.
+
+    ``blocked`` always wins: the safety short-circuit runs before the gate, so a
+    blocked command reports as blocked at every authority level.
+
     If a *verifier* is provided, captures the sim state before execution
     and polls telemetry afterward to confirm the command took effect.
 
     If a *command_history* is provided, the command is recorded with a
     pre-execution state snapshot so it can be undone later.
+
+    ``authority=None`` behaves exactly as ``full``. That default exists for
+    backward compatibility with this function's collaborator-injection signature,
+    **not** as a security position. In a wired process it is unreachable: the CLI
+    composition root lets a construction failure propagate and abort startup, and
+    the web ``lifespan`` substitutes ``AuthorityState.degraded_fallback(...)``. If
+    it is ever observed in a log it is a wiring bug, and the structural level floor
+    in ``TelemetryClient.send_command`` is what contains it in the meantime. There
+    is deliberately no module-level authority singleton to fall back to.
     """
     command, sim_value = _resolve_command(system, action, value)
 
@@ -261,6 +332,67 @@ async def set_aircraft_control(
                 "blocked": True,
                 "severity": "blocked",
             }
+
+    # --- Authority gate (D-03) ---
+    # This is the single point where the resolved command, the live SimState and the
+    # safety verdict all exist and nothing has been transmitted yet, which is why the
+    # policy decision lives here rather than at a call site. Enforcement is a code
+    # branch and only a code branch (D-08): no authority text is added to the tool
+    # definitions or the system prompt, and set_aircraft_control stays in
+    # TOOL_DEFINITIONS at every level (D-07) so the cached persona block survives.
+    level, reason = _resolve_authority(authority)
+    safety_severity = safety_result.severity if safety_result is not None else ""
+    safety_detail = safety_result.reason if safety_result is not None else ""
+
+    if level == AuthorityLevel.ADVISORY:
+        logger.info(
+            "Authority %s (%s): describing %s instead of executing it",
+            level.value,
+            reason.value,
+            command,
+        )
+        message = (
+            f"Advisory authority -- I would {_describe_intent(system, action, value)} "
+            f"({command}), but nothing was sent. The aircraft is yours."
+        )
+        if safety_severity == "warning":
+            message += f" Safety note: {safety_detail}"
+        return {
+            "advisory": True,
+            "would_execute": command,
+            "sim_value": sim_value,
+            "system": system,
+            "action": action,
+            "command": command,
+            "authority_level": level.value,
+            "authority_reason": reason.value,
+            "safety": {"severity": safety_severity, "reason": safety_detail},
+            "message": message,
+        }
+
+    if level == AuthorityLevel.ASSISTED and safety_severity == "warning":
+        logger.info(
+            "Authority %s (%s): withholding %s -- %s",
+            level.value,
+            reason.value,
+            command,
+            safety_detail,
+        )
+        return {
+            "withheld": True,
+            "command": command,
+            "sim_value": sim_value,
+            "system": system,
+            "action": action,
+            "authority_level": level.value,
+            "authority_reason": reason.value,
+            "safety": {"severity": "warning", "reason": safety_detail},
+            "message": (
+                f"Holding {command} -- {safety_detail}. At assisted authority I don't "
+                f"act on a flagged command, so this one is yours to make. Say the word "
+                f"and I'll send it."
+            ),
+        }
 
     # Capture pre-command state for verification and undo
     state_before = sim_state
@@ -592,11 +724,15 @@ async def undo_last_command(
     command_history: CommandHistory,
     verifier: CommandVerifier | None = None,
     safety_check: CommandSafetyCheck | None = None,
+    authority: AuthorityState | None = None,
 ) -> dict[str, Any]:
     """Reverse the last aircraft control command.
 
     Looks up the most recent command in the history, determines the undo
     action, executes it, and removes the command from the history stack.
+
+    The undo goes through the same authority gate as any other command: an undo
+    is a command, so at ``advisory`` it is described rather than sent.
 
     Returns a dict describing what was undone (or an error if nothing to undo).
     """
@@ -624,6 +760,7 @@ async def undo_last_command(
         safety_check=safety_check,
         # Do not record the undo itself in history
         command_history=None,
+        authority=authority,
     )
 
     result["undone_command"] = original_command
