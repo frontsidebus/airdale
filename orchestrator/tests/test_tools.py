@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 import respx
+from orchestrator.authority import AuthorityLevel, AuthorityState
+from orchestrator.command_history import CommandHistory
+from orchestrator.command_safety import CommandSafetyCheck, SafetyResult
 from orchestrator.command_verifier import CommandVerifier
 from orchestrator.sim_client import (
     EngineData,
@@ -28,7 +32,49 @@ from orchestrator.tools import (
     lookup_airport,
     search_manual,
     set_aircraft_control,
+    undo_last_command,
 )
+
+from orchestrator import tools as tools_module
+
+
+def _control_client(send_result: dict[str, object] | None = None) -> MagicMock:
+    """Mocked telemetry client wired the way ``set_aircraft_control`` expects."""
+    mock_client = MagicMock(spec=TelemetryClient)
+    mock_client.get_state = AsyncMock(return_value=SimState())
+    mock_client.send_command = AsyncMock(
+        return_value=send_result if send_result is not None else {"success": True, "message": ""}
+    )
+    return mock_client
+
+
+class _StubSafetyCheck(CommandSafetyCheck):
+    """Safety checker returning a fixed verdict.
+
+    Injected through the existing ``safety_check=`` parameter so the authority
+    matrix drives the gate from a known severity rather than depending on which
+    of ``DEFAULT_RULES`` happens to fire for the chosen command.
+    """
+
+    def __init__(self, severity: str = "", reason: str = "") -> None:
+        super().__init__(rules=[])
+        self._severity = severity
+        self._reason = reason
+
+    def check(
+        self,
+        command: str,
+        value: int,
+        sim_state: SimState,
+        aircraft_type: str = "",
+    ) -> SafetyResult:
+        return SafetyResult(
+            safe=self._severity != "blocked",
+            command=command,
+            reason=self._reason,
+            severity=self._severity,
+        )
+
 
 # ---------------------------------------------------------------------------
 # get_sim_state
@@ -672,6 +718,65 @@ class TestResolveCommand:
 
 
 # ---------------------------------------------------------------------------
+# CMD-08 -- carb_heat / fuel_pump absolute on/off refusal
+# ---------------------------------------------------------------------------
+
+
+class TestUnconfirmablePositionRefusal:
+    """`carb_heat` and `fuel_pump` must never blind-toggle an absolute on/off.
+
+    Both map "on", "off" and "toggle" to the same toggle event, so today "carb heat
+    off" turns it *on* whenever it was already off. No telemetry carries either
+    position, so state-aware resolution is not implementable (D-02) -- the command
+    is refused instead.
+    """
+
+    @pytest.mark.parametrize(
+        ("system", "action"),
+        [
+            ("carb_heat", "off"),
+            ("carb_heat", "on"),
+            ("fuel_pump", "on"),
+            ("fuel_pump", "off"),
+        ],
+        ids=["carb_heat-off", "carb_heat-on", "fuel_pump-on", "fuel_pump-off"],
+    )
+    @pytest.mark.asyncio
+    async def test_absolute_on_off_is_refused(self, system: str, action: str) -> None:
+        mock_client = _control_client()
+
+        result = await set_aircraft_control(mock_client, system, action)
+
+        mock_client.send_command.assert_not_called()
+        assert result["unresolvable"] is True
+        assert result["system"] == system
+        assert result["action"] == action
+        assert "current position" in result["error"]
+        assert "toggle" in result["error"]
+
+    @pytest.mark.parametrize(
+        ("system", "expected_event"),
+        [
+            ("carb_heat", "ANTI_ICE_CARB_HEAT_TOGGLE"),
+            ("fuel_pump", "FUEL_PUMP_TOGGLE"),
+        ],
+        ids=["carb_heat-toggle", "fuel_pump-toggle"],
+    )
+    @pytest.mark.asyncio
+    async def test_toggle_still_executes(self, system: str, expected_event: str) -> None:
+        mock_client = _control_client()
+
+        await set_aircraft_control(mock_client, system, "toggle")
+
+        mock_client.send_command.assert_awaited_once_with(expected_event, 0)
+
+    def test_resolver_is_unchanged(self) -> None:
+        """The refusal lives in ``set_aircraft_control``; the resolver stays a pure lookup."""
+        assert _resolve_command("carb_heat", "off", None) == ("ANTI_ICE_CARB_HEAT_TOGGLE", 0)
+        assert _resolve_command("fuel_pump", "on", None) == ("FUEL_PUMP_TOGGLE", 0)
+
+
+# ---------------------------------------------------------------------------
 # set_aircraft_control
 # ---------------------------------------------------------------------------
 
@@ -783,3 +888,269 @@ class TestSetAircraftControl:
         result = await set_aircraft_control(mock_client, "gear", "down", verifier=verifier)
 
         assert "verification" not in result
+
+
+# ---------------------------------------------------------------------------
+# AUTH-01..04 -- the authority gate
+# ---------------------------------------------------------------------------
+
+
+class TestAuthorityGateMatrix:
+    """All three authority levels crossed with all three safety severities.
+
+    Nine cells. This is the single highest-value test in the phase: it pins that
+    ``blocked`` still wins everywhere, that ``assisted`` differs from ``full``
+    only on a ``warning`` verdict, and that ``advisory`` transmits nothing.
+    """
+
+    @pytest.mark.parametrize(
+        ("level", "severity", "expect_sent", "expect_marker"),
+        [
+            (AuthorityLevel.FULL, "", True, None),
+            (AuthorityLevel.FULL, "warning", True, "safety_warning"),
+            (AuthorityLevel.FULL, "blocked", False, "blocked"),
+            (AuthorityLevel.ASSISTED, "", True, None),
+            (AuthorityLevel.ASSISTED, "warning", False, "withheld"),
+            (AuthorityLevel.ASSISTED, "blocked", False, "blocked"),
+            (AuthorityLevel.ADVISORY, "", False, "advisory"),
+            (AuthorityLevel.ADVISORY, "warning", False, "advisory"),
+            (AuthorityLevel.ADVISORY, "blocked", False, "blocked"),
+        ],
+        ids=[
+            "full-clean-executes",
+            "full-warning-executes-with-advisory",
+            "full-blocked-refused",
+            "assisted-clean-executes",
+            "assisted-warning-withheld",
+            "assisted-blocked-refused",
+            "advisory-clean-dry-run",
+            "advisory-warning-dry-run",
+            "advisory-blocked-refused",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_level_by_severity_matrix(
+        self,
+        level: AuthorityLevel,
+        severity: str,
+        expect_sent: bool,
+        expect_marker: str | None,
+    ) -> None:
+        mock_client = _control_client()
+        reason = "safety rule fired" if severity else ""
+
+        result = await set_aircraft_control(
+            mock_client,
+            "gear",
+            "down",
+            safety_check=_StubSafetyCheck(severity, reason),
+            authority=AuthorityState(level),
+        )
+
+        if expect_sent:
+            mock_client.send_command.assert_awaited_once_with("GEAR_DOWN", 0)
+        else:
+            mock_client.send_command.assert_not_called()
+
+        markers = {"advisory", "withheld", "blocked"}
+        present = {key for key in markers if key in result}
+        if expect_marker in markers:
+            assert present == {expect_marker}, result
+        else:
+            assert present == set(), result
+
+        if expect_marker == "safety_warning":
+            assert result["safety_warning"] == reason
+        if expect_marker == "blocked":
+            assert result["severity"] == "blocked"
+        if expect_marker in ("advisory", "withheld"):
+            # These are decisions, not failures -- an "error" key makes the web
+            # layer render a dry run as a failed command (B8).
+            assert "error" not in result, result
+            assert result["authority_level"] == level.value
+            assert result["safety"]["severity"] == severity
+
+
+class TestAuthorityAdvisoryDryRun:
+    """AUTH-02: advisory describes the intended action and transmits nothing."""
+
+    @pytest.mark.asyncio
+    async def test_advisory_returns_dry_run_and_sends_nothing(self) -> None:
+        mock_client = _control_client()
+        history = CommandHistory()
+
+        result = await set_aircraft_control(
+            mock_client,
+            "gear",
+            "down",
+            command_history=history,
+            authority=AuthorityState(AuthorityLevel.ADVISORY),
+        )
+
+        mock_client.send_command.assert_not_called()
+        assert result["advisory"] is True
+        assert result["would_execute"] == "GEAR_DOWN"
+        assert result["command"] == "GEAR_DOWN"
+        assert result["system"] == "gear"
+        assert result["action"] == "down"
+        assert result["authority_reason"] == "config"
+        assert "error" not in result
+        assert result["message"]
+        # A dry run is not a command: nothing is recorded for undo.
+        assert len(history) == 0
+
+    @pytest.mark.asyncio
+    async def test_advisory_message_carries_the_safety_warning(self) -> None:
+        mock_client = _control_client()
+
+        result = await set_aircraft_control(
+            mock_client,
+            "gear",
+            "down",
+            safety_check=_StubSafetyCheck("warning", "gear extension above 180 kt"),
+            authority=AuthorityState(AuthorityLevel.ADVISORY),
+        )
+
+        assert result["safety"] == {
+            "severity": "warning",
+            "reason": "gear extension above 180 kt",
+        }
+        assert "gear extension above 180 kt" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_advisory_unknown_system_still_returns_unknown_control(self) -> None:
+        """The gate sits *after* resolution, so a bad request is still a bad request."""
+        mock_client = _control_client()
+
+        result = await set_aircraft_control(
+            mock_client,
+            "weapons",
+            "fire",
+            authority=AuthorityState(AuthorityLevel.ADVISORY),
+        )
+
+        assert "Unknown control" in result["error"]
+        assert "advisory" not in result
+        mock_client.send_command.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_degraded_authority_reaches_the_gate_as_advisory(self) -> None:
+        """The phase's fail-safe path must arrive as advisory, attributed as degraded."""
+        mock_client = _control_client()
+
+        result = await set_aircraft_control(
+            mock_client,
+            "gear",
+            "down",
+            authority=AuthorityState.degraded_fallback("settings failed to load"),
+        )
+
+        mock_client.send_command.assert_not_called()
+        assert result["advisory"] is True
+        assert result["authority_level"] == "advisory"
+        assert result["authority_reason"] == "degraded"
+
+
+class TestAuthorityWithhold:
+    """AUTH-03: assisted defers to the pilot on a flagged command."""
+
+    @pytest.mark.asyncio
+    async def test_assisted_withhold_reads_as_deferral_not_failure(self) -> None:
+        mock_client = _control_client()
+
+        result = await set_aircraft_control(
+            mock_client,
+            "gear",
+            "down",
+            safety_check=_StubSafetyCheck("warning", "gear extension above 180 kt"),
+            authority=AuthorityState(AuthorityLevel.ASSISTED),
+        )
+
+        mock_client.send_command.assert_not_called()
+        assert result["withheld"] is True
+        assert result["command"] == "GEAR_DOWN"
+        assert result["authority_level"] == "assisted"
+        assert "error" not in result
+        assert "gear extension above 180 kt" in result["message"]
+
+
+class TestAuthorityNoneEquivalentToFull:
+    """AUTH-04 regression guard: omitting ``authority`` must not change behaviour."""
+
+    @pytest.mark.asyncio
+    async def test_omitted_authority_matches_explicit_full(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(tools_module, "_warned_missing_authority", False)
+
+        omitted_client = _control_client()
+        omitted = await set_aircraft_control(omitted_client, "gear", "down")
+
+        explicit_client = _control_client()
+        explicit = await set_aircraft_control(
+            explicit_client,
+            "gear",
+            "down",
+            authority=AuthorityState(AuthorityLevel.FULL),
+        )
+
+        # The WARNING the omitted call emits is asserted separately below; it is a
+        # log record, not a behavioural difference.
+        assert omitted == explicit
+        assert omitted_client.send_command.await_args == explicit_client.send_command.await_args
+        omitted_client.send_command.assert_awaited_once_with("GEAR_DOWN", 0)
+
+    @pytest.mark.asyncio
+    async def test_missing_authority_warns_once_then_stays_quiet(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(tools_module, "_warned_missing_authority", False)
+        caplog.set_level(logging.WARNING, logger="orchestrator.tools")
+
+        await set_aircraft_control(_control_client(), "flaps", "2")
+        first = [r for r in caplog.records if "AuthorityState" in r.getMessage()]
+        caplog.clear()
+        await set_aircraft_control(_control_client(), "flaps", "2")
+        second = [r for r in caplog.records if "AuthorityState" in r.getMessage()]
+
+        assert len(first) == 1, "a missing authority injection must not be silent"
+        assert second == [], "the warning must be deduped, not repeated per command"
+
+    def test_no_module_level_authority_singleton(self) -> None:
+        """D-09: the ``safety_check or _safety_check`` shape must not be copied."""
+        source = tools_module.__file__
+        assert source is not None
+        with open(source, encoding="utf-8") as handle:
+            text = handle.read()
+        assert "_authority = AuthorityState" not in text
+        assert "authority or _authority" not in text
+
+
+class TestUndoThreadsAuthority:
+    """The undo path is a command path; it must go through the same gate."""
+
+    @pytest.mark.asyncio
+    async def test_undo_at_advisory_sends_nothing(self) -> None:
+        mock_client = _control_client()
+        history = CommandHistory()
+        history.record(
+            command="GEAR_DOWN",
+            value=0,
+            system="gear",
+            action="down",
+            state_before=SimState(),
+        )
+
+        result = await undo_last_command(
+            mock_client,
+            history,
+            # Clean verdict: this test is about the authority thread-through, not
+            # about the real gear-up-on-the-ground rule the default SimState trips.
+            safety_check=_StubSafetyCheck(),
+            authority=AuthorityState(AuthorityLevel.ADVISORY),
+        )
+
+        mock_client.send_command.assert_not_called()
+        assert result["advisory"] is True
+        assert result["would_execute"] == "GEAR_UP"
+        assert result["undone_command"] == "GEAR_DOWN"
