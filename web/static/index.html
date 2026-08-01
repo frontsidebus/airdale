@@ -47,6 +47,23 @@
             <span class="led led-red" aria-hidden="true"></span>
             <span class="status-label">LLM</span>
           </div>
+          <!--
+            Authority indicator (AUTH-08). The reason gets its own text span
+            because an LED colour cannot carry four distinct causes: MERLIN can
+            be advisory because it was configured that way, because it saw the
+            pilot take over, because it cannot reach the sim, or because its own
+            authority subsystem failed to start. Those call for different
+            responses, so the reason is spelled out rather than implied.
+
+            The initial text is an honest "not polled yet", not a plausible
+            default -- the first /api/status response replaces it.
+          -->
+          <div class="status-indicator status-authority auth-unknown" id="status-authority"
+               role="status" aria-label="MERLIN authority level and reason">
+            <span class="led led-red" aria-hidden="true"></span>
+            <span class="status-label">AUTH</span>
+            <span class="status-authority-text" id="status-authority-text">UNKNOWN (not polled yet)</span>
+          </div>
         </div>
       </div>
     </header>

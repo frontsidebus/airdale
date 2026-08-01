@@ -284,6 +284,91 @@ html, body {
   box-shadow: 0 0 4px var(--red-glow), 0 0 10px var(--red-glow);
 }
 
+/* Advisory authority is restricted, not broken -- red would read as a fault
+   and amber is already spoken for by assisted. Cyan is the palette's existing
+   "informational / standing by" colour. */
+.led-cyan {
+  background: var(--cyan);
+  box-shadow: 0 0 4px var(--cyan-glow), 0 0 10px var(--cyan-glow);
+}
+
+/* ── AUTHORITY INDICATOR (AUTH-08) ────────────────────── */
+
+/*
+   How much MERLIN may do to the aircraft, and why.
+
+   The reason is rendered as text because the level alone is ambiguous: the same
+   `advisory` arises from a deliberate configuration, a detected pilot override,
+   an unreachable command path, or a failed authority subsystem, and the pilot's
+   correct response differs in each case.
+
+   The text box has a content-independent flex basis so a longer or shorter
+   reason never shifts the SIM / STT / DB / LLM indicators beside it -- the
+   header is right-anchored, so a growing badge would otherwise drag its
+   neighbours sideways every poll. Anything wider than the box ellipsises and
+   stays fully readable through the element's title attribute.
+*/
+
+.status-authority {
+  padding-left: var(--space-sm);
+  border-left: 1px solid var(--border);
+}
+
+.status-authority-text {
+  flex: 0 1 39ch;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+
+.status-authority.auth-full .status-authority-text {
+  color: var(--green);
+  text-shadow: 0 0 6px var(--green-glow);
+}
+
+.status-authority.auth-assisted .status-authority-text {
+  color: var(--amber);
+  text-shadow: 0 0 6px var(--amber-glow);
+}
+
+.status-authority.auth-advisory .status-authority-text {
+  color: var(--cyan);
+  text-shadow: 0 0 6px var(--cyan-glow);
+}
+
+/* Server-reported degraded: MERLIN is running and has restricted itself because
+   its authority subsystem failed to build. A fault colour on top of the level
+   class, so it never reads as calmly as a deliberate advisory configuration.
+   Declared after the level rules so it wins on source order. */
+.status-authority.auth-degraded .status-authority-text {
+  color: var(--red);
+  text-shadow: 0 0 6px var(--red-glow);
+}
+
+/* Client-side unknown: the browser could not reach the server at all. Distinct
+   from the server-reported degraded state above — that one means MERLIN told us
+   it is broken, this one means we cannot ask. The pulse is what separates them
+   at a glance once both are red. */
+.status-authority.auth-unknown .status-authority-text {
+  color: var(--red);
+  text-shadow: 0 0 6px var(--red-glow);
+  animation: pulse-degraded 1.5s ease-in-out infinite;
+}
+
+/* A level string this build does not know. Deliberately ugly: the value is
+   rendered verbatim and marked as unrecognised rather than being shown as a
+   plausible known level. */
+.status-authority.auth-unrecognised .status-authority-text {
+  color: var(--red);
+  text-decoration: underline dashed;
+  text-underline-offset: 3px;
+}
+
 /* ── MAIN PANELS ──────────────────────────────────────── */
 
 #main {
@@ -602,6 +687,30 @@ html, body {
   color: var(--red);
   text-shadow: 0 0 8px var(--red-glow);
   box-shadow: 0 2px 12px rgba(255, 68, 68, 0.15);
+}
+
+/* Authority-flavoured toasts. Cyan = restricted but healthy, amber = caution,
+   and the existing green/red keep meaning executed/failed. */
+.command-toast.toast-advisory {
+  background: rgba(78, 205, 196, 0.1);
+  border-color: rgba(78, 205, 196, 0.3);
+  color: var(--cyan);
+  text-shadow: 0 0 8px var(--cyan-glow);
+  box-shadow: 0 2px 12px rgba(78, 205, 196, 0.15);
+}
+
+.command-toast.toast-caution {
+  background: rgba(240, 192, 64, 0.1);
+  border-color: rgba(240, 192, 64, 0.3);
+  color: var(--amber);
+  text-shadow: 0 0 8px var(--amber-glow);
+  box-shadow: 0 2px 12px rgba(240, 192, 64, 0.15);
+}
+
+.command-toast.toast-info {
+  background: rgba(240, 192, 64, 0.06);
+  border-color: var(--border);
+  color: var(--text-dim);
 }
 
 .command-toast.toast-fade-out {
@@ -1070,6 +1179,13 @@ html, body {
 
   .header-divider {
     display: none;
+  }
+
+  /* Narrower basis, still content-independent -- the badge ellipsises sooner
+     but still never reflows its neighbours. The full text stays available in
+     the title attribute. */
+  .status-authority-text {
+    flex-basis: 22ch;
   }
 }
 
