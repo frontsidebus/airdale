@@ -503,6 +503,70 @@
     showCommandToast(icon + ' ' + label, success);
   }
 
+  // ── Advisory / withheld command results ───────────────
+  //
+  // Executed, failed, advisory and withheld are four outcomes, not two plus
+  // shading. Advisory and withheld arrive as their own message types and are
+  // rendered from them directly — never inferred from a boolean. The heuristic
+  // they replace ("no error key, therefore it worked") is what put a green
+  // GEAR DOWN on screen for a gear that never moved, because a command MERLIN
+  // deliberately declined to transmit reports no error either.
+
+  function spanWithText(cls, text) {
+    var span = document.createElement('span');
+    span.className = cls;
+    span.textContent = text;
+    return span;
+  }
+
+  function commandLabel(msg) {
+    if (typeof msg.message === 'string' && msg.message) return msg.message;
+    return String(msg.system || '?').toUpperCase() + ' ' + String(msg.action || '?').toUpperCase();
+  }
+
+  // Server-supplied strings are attached as text nodes throughout: they embed
+  // command values, aircraft state and safety prose, none of which is markup.
+  function appendCommandOutcome(cls, icon, label, details) {
+    var el = document.createElement('div');
+    el.className = 'chat-msg command-status-msg ' + cls;
+    el.appendChild(spanWithText('timestamp', '[' + timestamp() + ']'));
+    el.appendChild(spanWithText('cmd-icon', icon));
+    el.appendChild(spanWithText('cmd-label', label));
+    details.forEach(function(detail) {
+      if (detail) el.appendChild(spanWithText('cmd-detail', detail));
+    });
+    if (dom.chatMessages) dom.chatMessages.appendChild(el);
+    scrollChatIfNeeded();
+    return el;
+  }
+
+  function showCommandAdvisory(msg) {
+    // An open circle, deliberately not a tick: nothing was transmitted. Naming
+    // what would have gone is what makes the dry run readable as a dry run.
+    var label = commandLabel(msg);
+    var would = (typeof msg.would_execute === 'string' && msg.would_execute)
+      ? 'WOULD SEND: ' + msg.would_execute
+      : 'NOTHING SENT';
+    appendCommandOutcome('cmd-advisory', '○', label, [
+      would,
+      authorityPhrase(msg.authority_level, msg.authority_reason),
+    ]);
+    showCommandToast('○ ' + label, 'advisory');
+  }
+
+  function showCommandWithheld(msg) {
+    // MERLIN standing back, not failing — the safety reason says why it did.
+    var label = commandLabel(msg);
+    var safety = (typeof msg.safety_reason === 'string' && msg.safety_reason)
+      ? 'HELD: ' + msg.safety_reason
+      : 'HELD — yours to make';
+    appendCommandOutcome('cmd-withheld', '⊘', label, [
+      safety,
+      authorityPhrase(msg.authority_level, msg.authority_reason),
+    ]);
+    showCommandToast('⊘ ' + label, 'caution');
+  }
+
   // `tone` accepts the original booleans (true = executed, false = failed) as
   // well as the named tones the authority states use, so every pre-existing
   // caller keeps its meaning unchanged.
@@ -865,6 +929,16 @@
       case 'command_status':
         // Aircraft control command executed — show inline status + toast
         showCommandStatus(msg);
+        break;
+
+      case 'command_advisory':
+        // Advisory authority: MERLIN described the command instead of sending it.
+        showCommandAdvisory(msg);
+        break;
+
+      case 'command_withheld':
+        // Assisted authority + a flagged command: MERLIN deferred to the pilot.
+        showCommandWithheld(msg);
         break;
 
       default:

@@ -640,6 +640,37 @@ html, body {
   text-shadow: 0 0 6px var(--red-glow);
 }
 
+/* Advisory: MERLIN described the command instead of sending it. Cyan and an
+   open circle, so it cannot be mistaken at a glance for the green tick of a
+   command that actually reached the aircraft. */
+.command-status-msg.cmd-advisory {
+  color: var(--cyan);
+  border-left-color: var(--cyan);
+  text-shadow: 0 0 6px var(--cyan-glow);
+}
+
+/* Withheld: MERLIN deferred a flagged command to the pilot. Amber, because it
+   is a caution and a decision waiting to be made — not the red of a failure. */
+.command-status-msg.cmd-withheld {
+  color: var(--amber);
+  border-left-color: var(--amber);
+  text-shadow: 0 0 6px var(--amber-glow);
+}
+
+/* Only the two new states carry trailing detail spans, so wrapping is scoped
+   to them and the executed/failed rows keep their existing single-line layout. */
+.command-status-msg.cmd-advisory,
+.command-status-msg.cmd-withheld {
+  flex-wrap: wrap;
+}
+
+.command-status-msg .cmd-detail {
+  font-weight: 400;
+  font-size: var(--text-xs);
+  letter-spacing: 0.5px;
+  opacity: 0.85;
+}
+
 .command-status-msg .cmd-icon {
   font-size: var(--text-lg);
 }
