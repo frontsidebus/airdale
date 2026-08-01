@@ -1457,15 +1457,57 @@ async def _stream_response(
         command_status_queue: list[dict[str, Any]] = []
 
         def _on_tool_result(tool_name: str, tool_input: dict[str, Any], tool_result: Any) -> None:
+            """Classify a command outcome for the browser: advisory, withheld, failed, done.
+
+            The three-way split is explicit rather than inferred from the absence of
+            an ``"error"`` key, because the advisory dry run and the assisted
+            withhold both carry no ``"error"`` by design (plan 02-04). The previous
+            ``success = "error" not in tool_result`` therefore reported a command
+            that was never transmitted as executed -- the pilot saw "GEAR DOWN" for
+            a gear that never moved (RESEARCH B8, threat T-02-09-01).
+            """
             if tool_name != "set_aircraft_control":
                 return
             system = tool_input.get("system", "unknown")
             action = tool_input.get("action", "unknown")
-            success = not (isinstance(tool_result, dict) and "error" in tool_result)
-            if success:
-                message = f"{system.upper()} {action.upper()}"
-            else:
-                message = f"{system.upper()} {action.upper()} failed"
+            result = tool_result if isinstance(tool_result, dict) else {}
+            label = f"{system.upper()} {action.upper()}"
+
+            # authority_level / authority_reason are copied through verbatim, never
+            # mapped or defaulted. AuthorityReason has four members and the browser
+            # renders an unrecognised one as-is; substituting "config" for a missing
+            # reason would report a crashed subsystem as a deliberate configuration.
+            if result.get("advisory"):
+                command_status_queue.append(
+                    {
+                        "type": "command_advisory",
+                        "system": system,
+                        "action": action,
+                        "message": f"{label} -- advisory, not sent",
+                        "would_execute": result.get("would_execute"),
+                        "authority_level": result.get("authority_level"),
+                        "authority_reason": result.get("authority_reason"),
+                    }
+                )
+                return
+
+            if result.get("withheld"):
+                safety = result.get("safety") or {}
+                command_status_queue.append(
+                    {
+                        "type": "command_withheld",
+                        "system": system,
+                        "action": action,
+                        "message": f"{label} -- withheld, yours to make",
+                        "authority_level": result.get("authority_level"),
+                        "authority_reason": result.get("authority_reason"),
+                        "safety_reason": safety.get("reason"),
+                    }
+                )
+                return
+
+            success = "error" not in result
+            message = label if success else f"{label} failed"
             command_status_queue.append(
                 {
                     "type": "command_status",
