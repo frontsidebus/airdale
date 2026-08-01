@@ -19,6 +19,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 from orchestrator.authority import AuthorityLevel, AuthorityReason, AuthorityState
+from orchestrator.sim_client import HealthMonitor
 
 # ---------------------------------------------------------------------------
 # WTST-07: Status endpoint
@@ -383,3 +384,184 @@ async def test_status_reports_config_reason_on_a_healthy_start(test_app, monkeyp
     # Registered but never seen: age must render as null, not Infinity. A verbatim
     # HealthMonitor.summary() would 500 here (allow_nan=False).
     assert data["subsystems"]["command_path"]["age_seconds"] is None
+
+
+# ---------------------------------------------------------------------------
+# AUTH-08 / D-17: /api/status renders level, reason and command-path health
+# ---------------------------------------------------------------------------
+
+#: The keys /api/status carried before this plan, including the three plan 02-03
+#: added. The endpoint is extended, never replaced.
+_LEGACY_STATUS_KEYS = (
+    "sim_connected",
+    "chromadb_available",
+    "chromadb_documents",
+    "stt_backend",
+    "stt_available",
+    "tts_backend",
+    "tts_available",
+    "whisper_available",
+    "elevenlabs_configured",
+    "claude_model",
+    "telemetry_service_url",
+    "turn_probe_available",
+    "turn_probe_silence_ms",
+    "vad_silence_ms",
+)
+
+_MISSING_BRANCH = (
+    "A level or reason with no rendering path in /api/status. CLAUDE.md records "
+    "what this costs: tts_configured was missing its Cartesia arm and reported a "
+    "working setup as unconfigured for months -- a missing branch does not error, "
+    "it silently reports the wrong thing. AuthorityLevel has 3 members and "
+    "AuthorityReason 4, so read them out of AuthorityState.summary() rather than "
+    "branching per level (threat T-02-09-04)."
+)
+
+
+class _StubAuthorityState:
+    """Only what ``/api/status`` reads: a ``summary()`` returning a fixed pair.
+
+    Driving the render off a stub rather than the real state machine is the point
+    -- it exercises all 12 level-by-reason combinations regardless of which ones
+    the machine can actually reach, because the guard being tested is "is there a
+    rendering path", not "can this state occur".
+    """
+
+    def __init__(self, level: str, reason: str) -> None:
+        self._summary = {
+            "level": level,
+            "reason": reason,
+            "configured_level": "full",
+            "cooldown_remaining_s": 0.0,
+            "watchdog_latched": False,
+            "consecutive_timeouts": 0,
+            "degraded_detail": "",
+        }
+
+    def summary(self) -> dict:
+        return dict(self._summary)
+
+
+async def _get_status(test_app) -> dict:
+    """GET /api/status through the ASGI transport and return the decoded body."""
+    transport = ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/status")
+    assert resp.status_code == 200
+    return resp.json()
+
+
+@pytest.mark.parametrize("reason", [member.value for member in AuthorityReason])
+@pytest.mark.parametrize("level", [member.value for member in AuthorityLevel])
+async def test_status_renders_every_level_by_reason_combination(
+    test_app, mock_app_state, level, reason
+):
+    """All 3 levels x 4 reasons render; a missing arm fails loudly rather than lying."""
+    mock_app_state.authority = _StubAuthorityState(level, reason)
+
+    data = await _get_status(test_app)
+
+    assert data["authority_level"] == level, _MISSING_BRANCH
+    assert data["authority_reason"] == reason, _MISSING_BRANCH
+    assert data["authority"]["level"] == level, _MISSING_BRANCH
+    assert data["authority"]["reason"] == reason, _MISSING_BRANCH
+
+
+async def test_status_reports_absent_authority_as_advisory_degraded(test_app, mock_app_state):
+    """An absent authority state is never reported as a deliberate `full` setup."""
+    mock_app_state.authority = None
+
+    data = await _get_status(test_app)
+
+    assert data["authority_level"] == "advisory", (
+        "REGRESSION (threat T-02-09-07): reporting a missing authority state as "
+        "`full` / `config` makes a crashed subsystem indistinguishable from an "
+        "operator's own configuration, which is the exact ambiguity AUTH-08 exists "
+        "to remove."
+    )
+    assert data["authority_reason"] == "degraded"
+    assert data["authority"] == {}
+    # Present, not omitted: a browser forced to tell "absent" from "advisory" has
+    # the same ambiguity in a different costume.
+    assert "authority_level" in data
+    assert "authority_reason" in data
+
+
+async def test_status_was_extended_not_replaced(test_app, mock_app_state):
+    """Every pre-plan key survives alongside the four new ones."""
+    data = await _get_status(test_app)
+
+    missing = [key for key in _LEGACY_STATUS_KEYS if key not in data]
+    assert not missing, f"/api/status dropped pre-existing keys: {missing}"
+    assert {"authority_level", "authority_reason", "authority", "subsystems"} <= set(data)
+
+
+async def test_status_exposes_the_whole_authority_summary(test_app, mock_app_state):
+    """The `authority` block is AuthorityState.summary() verbatim, not a subset."""
+    authority = AuthorityState(AuthorityLevel.ASSISTED)
+    mock_app_state.authority = authority
+
+    data = await _get_status(test_app)
+
+    assert set(data["authority"]) == set(authority.summary())
+    assert data["authority"]["configured_level"] == "assisted"
+
+
+async def test_status_subsystems_carry_command_path_health(test_app, mock_app_state):
+    """subsystems.command_path carries healthy / age_seconds / message (D-17)."""
+    health = HealthMonitor()
+    health.register("command_path")
+    health.update("command_path", True, "ack round trip nominal")
+    mock_app_state.health = health
+
+    data = await _get_status(test_app)
+
+    entry = data["subsystems"]["command_path"]
+    assert set(entry) == {"healthy", "age_seconds", "message"}
+    assert entry["healthy"] is True
+    assert entry["message"] == "ack round trip nominal"
+    assert isinstance(entry["age_seconds"], (int, float))
+
+
+async def test_status_reports_a_latched_watchdog_as_advisory_with_a_cause(test_app, mock_app_state):
+    """A latched watchdog renders as advisory *and* explains itself (D-17)."""
+    authority = AuthorityState(AuthorityLevel.FULL, watchdog_max_timeouts=1)
+    authority.record_command_timeout()
+    health = HealthMonitor()
+    health.register("command_path")
+    health.update("command_path", False, "no ack from the adapter; 1 consecutive")
+    mock_app_state.authority = authority
+    mock_app_state.health = health
+
+    data = await _get_status(test_app)
+
+    assert data["authority_level"] == "advisory"
+    assert data["authority_reason"] == "watchdog"
+    assert data["authority"]["watchdog_latched"] is True
+    assert data["subsystems"]["command_path"]["healthy"] is False
+    assert "no ack" in data["subsystems"]["command_path"]["message"]
+
+
+async def test_status_renders_an_unseen_subsystem_age_as_null(test_app, mock_app_state):
+    """A registered-but-unseen subsystem has age inf; the wire value must be null."""
+    health = HealthMonitor()
+    health.register("command_path")
+    mock_app_state.health = health
+
+    data = await _get_status(test_app)
+
+    assert data["subsystems"]["command_path"]["age_seconds"] is None, (
+        "HealthMonitor.summary() reports inf for a subsystem that has never been "
+        "seen, and Starlette renders JSON with allow_nan=False -- emitting it "
+        "verbatim 500s the route, and Infinity is not parseable by the browser."
+    )
+
+
+async def test_status_subsystems_empty_without_a_health_monitor(test_app, mock_app_state):
+    """No health monitor yields an empty block, not a missing key."""
+    mock_app_state.health = None
+
+    data = await _get_status(test_app)
+
+    assert data["subsystems"] == {}
