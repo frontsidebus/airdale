@@ -98,8 +98,8 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 02-06-PLAN.md — Verification coverage and the override detector (AUTH-05, AUTH-06)
-- [ ] 02-07-PLAN.md — Procedure re-route through the gate with abort-on-withheld (D-04, D-06)
+- [x] 02-06-PLAN.md — Verification coverage and the override detector (AUTH-05, AUTH-06)
+- [x] 02-07-PLAN.md — Procedure re-route through the gate with abort-on-withheld (D-04, D-06)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -147,7 +147,7 @@ procedures through `set_aircraft_control` closes it.
 | Phase | Milestone | Plans Complete | Status      | Completed  |
 |-------|-----------|----------------|-------------|------------|
 | 1. Housekeeping           | v1.2 | 3/3 | Complete    | 2026-03-28 |
-| 2. TTS Integration        | v1.2 | 5/10 | In Progress|  |
+| 2. TTS Integration        | v1.2 | 7/10 | In Progress|  |
 | 3. Whisper Consolidation  | v1.2 | 2/2 | Complete    | 2026-03-28 |
 | 4. Web Server Refactor    | v1.2 | 2/2 | Complete    | 2026-04-16 |
 | 5. Web Server Tests       | v1.2 | 2/2 | Complete    | 2026-03-28 |
