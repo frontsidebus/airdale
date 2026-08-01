@@ -87,9 +87,9 @@ Full analysis: `.planning/v1.3-RECONCILIATION.md`.
 Plans:
 **Wave 1**
 
-- [ ] 02-01-PLAN.md — Authority state machine (`authority.py`) and the eight `authority_*` settings
-- [ ] 02-02-PLAN.md — MSFS adapter command coverage: 20 missing events plus cross-language parity guards (CMD-07)
-- [ ] 02-03-PLAN.md — Web-path semantic turn detection: decode helper, `/api/turn-probe`, browser probe loop (VARC-06)
+- [x] 02-01-PLAN.md — Authority state machine (`authority.py`) and the eight `authority_*` settings
+- [x] 02-02-PLAN.md — MSFS adapter command coverage: 20 missing events plus cross-language parity guards (CMD-07)
+- [x] 02-03-PLAN.md — Web-path semantic turn detection: decode helper, `/api/turn-probe`, browser probe loop (VARC-06)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -147,7 +147,7 @@ procedures through `set_aircraft_control` closes it.
 | Phase | Milestone | Plans Complete | Status      | Completed  |
 |-------|-----------|----------------|-------------|------------|
 | 1. Housekeeping           | v1.2 | 3/3 | Complete    | 2026-03-28 |
-| 2. TTS Integration        | v1.2 | 3/3 | Complete    | 2026-03-28 |
+| 2. TTS Integration        | v1.2 | 3/10 | In Progress|  |
 | 3. Whisper Consolidation  | v1.2 | 2/2 | Complete    | 2026-03-28 |
 | 4. Web Server Refactor    | v1.2 | 2/2 | Complete    | 2026-04-16 |
 | 5. Web Server Tests       | v1.2 | 2/2 | Complete    | 2026-03-28 |
