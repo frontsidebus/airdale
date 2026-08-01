@@ -12,6 +12,7 @@ from typing import Any
 
 import anthropic
 
+from .authority import AuthorityState
 from .command_history import CommandHistory
 from .command_verifier import CommandVerifier
 from .context_store import ContextStore
@@ -472,7 +473,28 @@ class ClaudeClient:
         temp_relaxed: float = 0.5,
         summary_interval: int = 10,
         summary_max_tokens: int = 256,
+        verify_timeout: float = 3.0,
+        command_tool_timeout: float = 12.0,
+        authority: AuthorityState | None = None,
     ) -> None:
+        """Build a Claude client.
+
+        Args:
+            verify_timeout: Seconds :class:`CommandVerifier` polls telemetry for
+                post-execution confirmation. Seeded from
+                ``Settings.authority_verify_timeout_s``; the default mirrors that
+                field's own default. Passed rather than read, so this module does
+                not import ``Settings``.
+            command_tool_timeout: Outer deadline for the tools in
+                :attr:`_COMMAND_PATH_TOOLS`. Seeded from
+                ``Settings.authority_tool_timeout_s``; see the ordering constraint
+                documented at :attr:`_TOOL_TIMEOUTS`.
+            authority: The one shared :class:`AuthorityState` for this process,
+                forwarded to every tool that can reach the sim. Accepted, never
+                constructed here (D-09): a client that built its own would drift
+                from the one ``TelemetryClient`` consults for the dispatch floor,
+                and the gate and the floor would disagree about the current level.
+        """
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
         self._model_fast = model_fast
@@ -490,9 +512,20 @@ class ClaudeClient:
         self._summary_max_tokens = summary_max_tokens
         self._conversation_summary: str = ""
         self._turns_since_summary: int = 0
+        self._authority = authority
         self._command_history = CommandHistory()
-        self._command_verifier = CommandVerifier(sim_client)
-        self._procedure_executor = ProcedureExecutor(sim_client)
+        self._command_verifier = CommandVerifier(sim_client, timeout=verify_timeout)
+        self._procedure_executor = ProcedureExecutor(
+            sim_client,
+            verifier=self._command_verifier,
+            command_history=self._command_history,
+            authority=self._authority,
+        )
+        # Per-instance deadlines for the tools that can reach the sim. These come
+        # from configuration rather than the class table -- see _TOOL_TIMEOUTS.
+        self._tool_timeouts: dict[str, float] = dict.fromkeys(
+            self._COMMAND_PATH_TOOLS, command_tool_timeout
+        )
 
     def _build_system_prompt(
         self,
@@ -703,22 +736,46 @@ class ClaudeClient:
                 )
             self._conversation.append({"role": "user", "content": tool_results})
 
-    # Timeout configuration per tool category (seconds)
+    #: Tools that can reach the sim. Their deadline is **not** in the class table
+    #: below: it comes from ``command_tool_timeout`` (``authority_tool_timeout_s``)
+    #: per instance, so it can be tuned alongside the two inner deadlines it has to
+    #: exceed.
+    _COMMAND_PATH_TOOLS: tuple[str, ...] = ("set_aircraft_control", "undo_last_command")
+
+    # Timeout configuration per tool category (seconds).
+    #
+    # Ordering constraint (RESEARCH B3), load-bearing: this outer asyncio.wait_for
+    # starts before send_command's inner one, so unless the deadline for a command-path
+    # tool is strictly greater than authority_command_timeout_s + authority_verify_timeout_s,
+    # a genuine ack timeout is cancelled here and reported as a tool timeout -- send_command's
+    # own `except TimeoutError` never runs and the watchdog counter never increments.
+    # Settings enforces that arithmetic at startup; test_claude_client.py pins it structurally.
     _TOOL_TIMEOUTS: dict[str, float] = {
         "get_sim_state": 2.0,
         "lookup_airport": 10.0,
         "search_manual": 5.0,
         "get_checklist": 5.0,
         "create_flight_plan": 10.0,
-        "set_aircraft_control": 5.0,
-        "undo_last_command": 5.0,
+        # A procedure runs N command-path steps in sequence, so the same ordering
+        # concern applies per step. Left as-is: no Settings field covers it yet.
         "execute_procedure": 30.0,
     }
     _DEFAULT_TOOL_TIMEOUT: float = 5.0
 
+    def tool_timeout_for(self, name: str) -> float:
+        """Resolve the outer deadline for one tool call, in seconds.
+
+        The per-instance table wins, because that is where the configured
+        command-path deadline lands; everything else falls back to the class table
+        and then to :attr:`_DEFAULT_TOOL_TIMEOUT`.
+        """
+        if name in self._tool_timeouts:
+            return self._tool_timeouts[name]
+        return self._TOOL_TIMEOUTS.get(name, self._DEFAULT_TOOL_TIMEOUT)
+
     async def _execute_tool(self, name: str, args: dict[str, Any], sim_state: SimState) -> Any:
         logger.info("Executing tool: %s(%s)", name, args)
-        timeout = self._TOOL_TIMEOUTS.get(name, self._DEFAULT_TOOL_TIMEOUT)
+        timeout = self.tool_timeout_for(name)
         try:
             result = await asyncio.wait_for(
                 self._dispatch_tool(name, args, sim_state),
@@ -758,6 +815,8 @@ class ClaudeClient:
                 route=args.get("route", ""),
             )
         elif name == "set_aircraft_control":
+            # safety_check is deliberately not passed: tools.py falls back to its
+            # module-level checker, which is the rule set production has always run.
             return await set_aircraft_control(
                 self._sim_client,
                 args["system"],
@@ -765,12 +824,14 @@ class ClaudeClient:
                 value=args.get("value"),
                 verifier=self._command_verifier,
                 command_history=self._command_history,
+                authority=self._authority,
             )
         elif name == "undo_last_command":
             return await undo_last_command(
                 self._sim_client,
                 self._command_history,
                 verifier=self._command_verifier,
+                authority=self._authority,
             )
         elif name == "execute_procedure":
             proc = get_procedure(args["procedure"])
