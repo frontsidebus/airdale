@@ -25,6 +25,11 @@ Bidirectional command path from natural language to SimConnect.
 - [x] **CMD-05** (retroactive): `_resolve_command()` translates human-friendly system/action/value parameters to SimConnect events
 - [x] **CMD-06** (retroactive): Supported systems include flaps, gear, autopilot, throttle, radio, barometer, trim, parking brake, spoilers, mixture, propeller
 
+> **Extended in Phase 2.** `CMD-07` and `CMD-08` continue this series — see the
+> Phase 2 section. `_resolve_command` grew past what CMD-06 records (it now also
+> handles `deice`, `fuel_selector`, `crossfeed`, and six systems the tool schema
+> never exposed), and CMD-08 fixes a resolution defect in two of them.
+
 ## Command Safety & Integrity ✅ COMPLETE (undocumented until now)
 
 Built during v1.3 Phase 1 but never specified. These partially satisfy what the
@@ -102,10 +107,24 @@ distinct from whether a specific command is safe right now.
 - [ ] **AUTH-05**: Pilot override detection identifies manual control input contradicting a MERLIN-issued command
 - [ ] **AUTH-06**: A detected override drops authority to `advisory` for a cooldown period and informs the pilot
 - [ ] **AUTH-07**: Watchdog bounds the interval between command dispatch and `AdapterCommandAck`; on expiry MERLIN stops issuing commands and says so
-- [ ] **AUTH-08**: Authority level is surfaced in `/api/status` and the web UI so the current mode is never ambiguous
+- [ ] **AUTH-08**: Authority level is surfaced in `/api/status` and the web UI so the current mode is never ambiguous, including *why* it is advisory (configured / pilot override / watchdog)
 
-**Explicit non-goals for Phase 2:** no new command types, no new envelope rules.
-Those are SAFE-* territory and already exist.
+Command surface (CMD series — extends Phase 1, delivered here because gating must exist first):
+
+- [ ] **CMD-07**: The six systems `_resolve_command` already handles but the `set_aircraft_control` enum omits — `magnetos`, `carb_heat`, `fuel_pump`, `starter`, `primer`, `lights` — are exposed in the enum, **after** AUTH gating exists. Sequencing is the requirement, not an implementation note: `magnetos: off` is an in-flight engine shutdown.
+- [ ] **CMD-08**: `carb_heat` and `fuel_pump` resolve `"on"` / `"off"` against current telemetry instead of emitting the same toggle event for both, so "carb heat off" cannot turn it on
+
+Voice architecture (VARC series — see the Voice Architecture section):
+
+- [ ] **VARC-06**: Semantic turn detection reaches the web path. The browser gates on a short RMS silence probe and a server endpoint runs the existing `SmartTurnDetector`; degrades to fixed-silence endpointing at `vad_silence_ms` when the model is unavailable.
+
+**Explicit non-goals for Phase 2:** no new envelope rules. Those are SAFE-*
+territory and already exist.
+
+> The original non-goal "no new command types" was **narrowed** on 2026-07-31.
+> CMD-07 adds no new capability — those six systems already resolve to SimConnect
+> events in shipped code; it makes reachable what is already there. Genuinely new
+> command types remain out of scope.
 
 ## Phase 3 — Automated Maneuvers ⬜ NOT STARTED
 
@@ -132,6 +151,7 @@ Sequenced after Phase 2. Step 0 shipped in PR #75 as VOIC-03…09 and EVAL-01…
 - [ ] **VARC-03**: Local TTS confirmed at parity for time-to-first-audio and ICAO-preprocessor compatibility
 - [ ] **VARC-04**: Architecture selection is flight-phase-routed — low-stakes phases may take a fast path; numerical, procedural, and command content always takes the validated cascade
 - [ ] **VARC-05**: Speech-LLM front-end evaluated as a time-boxed spike measuring aviation-term accuracy, not adopted by default
+- [ ] **VARC-06**: Semantic turn detection on the web path (claimed by Phase 2 — see that section). VARC-01 delivered it for the local/CLI path only; the browser still endpoints on fixed RMS silence at 1200ms, 3× the local fallback.
 
 **Recorded constraint:** every speech-to-speech and speech-LLM option requires an
 open-weight LLM backbone. Claude is API-only. Adopting one means replacing Claude,
@@ -144,7 +164,7 @@ incremental slide. See `TECH-STACK-REVIEW.md` §2.
 
 | Group | Total | Done | Open |
 |---|---|---|---|
-| CMD (Phase 1) | 6 | 6 | 0 |
+| CMD (Phase 1, +2 in Phase 2) | 8 | 6 | 2 |
 | SAFE | 8 | 8 | 0 |
 | PROA | 6 | 6 | 0 |
 | VALD | 3 | 3 | 0 |
@@ -154,9 +174,14 @@ incremental slide. See `TECH-STACK-REVIEW.md` §2.
 | AUTH (Phase 2) | 8 | 0 | 8 |
 | MNVR (Phase 3) | 4 | 0 | 4 |
 | VIS (Phase 4) | 4 | 0 | 4 |
-| VARC (voice arch) | 5 | 1 | 4 |
-| **Total** | **63** | **42** | **21** |
+| VARC (voice arch) | 6 | 1 | 5 |
+| **Total** | **66** | **42** | **24** |
 
 35 of the 42 completed requirements are retroactive — they describe work that
 existed before this file did. That ratio is the measure of the drift being
 corrected here.
+
+**Added 2026-07-31 (+3):** CMD-07, CMD-08, and VARC-06, all claimed by Phase 2.
+They were found during Phase 2 context-gathering as work that was already agreed
+but carried no requirement ID — the same untracked-scope pattern this file
+exists to catch, caught this time before the code landed rather than after.
