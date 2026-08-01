@@ -324,6 +324,70 @@ def wav_bytes_to_samples(wav_bytes: bytes) -> tuple[np.ndarray, int]:
         return np.array([], dtype=np.float32), TARGET_SAMPLE_RATE
 
 
+async def decode_webm_to_samples(webm_bytes: bytes) -> np.ndarray | None:
+    """Decode webm/ogg audio to 16 kHz mono float32 samples, exactly as recorded.
+
+    This is the turn-detection decode path. It deliberately does **not** call
+    :func:`preprocess_audio`, and must not be "fixed" later by reusing the
+    transcribe path:
+
+    * ``preprocess_audio`` trims leading and trailing silence. Trailing silence
+      is precisely the signal the end-of-turn model judges -- strip it and every
+      utterance looks like it ended mid-word.
+    * Its high-pass filter and peak normalisation alter the waveform, while the
+      golden-value-pinned feature path in ``turn/features.py`` was verified
+      against unmodified waveforms. A divergence there does not raise; it just
+      makes turn predictions quietly wrong.
+
+    The ``-ar 16000`` flag is load-bearing rather than incidental:
+    ``turn.features.log_mel_spectrogram`` raises on any other sample rate.
+
+    No 8 s truncation happens here -- ``turn.features.truncate_or_pad`` already
+    keeps the last 8 s and right-pads short input.
+
+    Args:
+        webm_bytes: Raw container bytes as produced by ``MediaRecorder``.
+
+    Returns:
+        Mono float32 samples in [-1, 1] at 16 kHz, or ``None`` if ffmpeg failed
+        or produced nothing. The caller needs an unambiguous failure signal, so
+        this never falls back to returning the input bytes the way
+        :func:`convert_webm_to_wav_normalized` does.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg",
+        "-y",
+        "-i",
+        "pipe:0",
+        "-ar",
+        str(TARGET_SAMPLE_RATE),
+        "-ac",
+        "1",
+        "-f",
+        "s16le",
+        "-acodec",
+        "pcm_s16le",
+        "pipe:1",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate(input=webm_bytes)
+
+    if proc.returncode != 0:
+        logger.error("ffmpeg decode failed: %s", stderr.decode(errors="replace")[:300])
+        return None
+
+    if len(stdout) == 0:
+        logger.warning("ffmpeg produced empty output while decoding for turn detection")
+        return None
+
+    samples = np.frombuffer(stdout, dtype=np.int16).astype(np.float32) / 32768.0
+    if samples.size == 0:
+        return None
+    return samples
+
+
 async def convert_webm_to_wav_normalized(webm_bytes: bytes) -> bytes:
     """Convert webm/ogg audio to normalized 16kHz mono WAV using ffmpeg + preprocessing.
 
