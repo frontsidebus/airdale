@@ -15,6 +15,7 @@ import asyncio
 import base64
 import json
 import logging
+import math
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -39,11 +40,22 @@ from orchestrator.audio_processing import (
     convert_webm_to_wav_normalized,
     decode_webm_to_samples,
 )
+from orchestrator.authority import (  # noqa: E402
+    AuthorityLevel,
+    AuthorityReason,
+    AuthorityState,
+    parse_authority_level,
+)
 from orchestrator.claude_client import ClaudeClient  # noqa: E402
 from orchestrator.config import load_settings  # noqa: E402
 from orchestrator.context_store import ContextStore  # noqa: E402
 from orchestrator.flight_phase import FlightPhaseDetector  # noqa: E402
-from orchestrator.sim_client import SimState, TelemetryClient  # noqa: E402
+from orchestrator.override_detector import OverrideDetector  # noqa: E402
+from orchestrator.sim_client import (  # noqa: E402
+    HealthMonitor,
+    SimState,
+    TelemetryClient,
+)
 from orchestrator.stt.deepgram import DeepgramSTTClient  # noqa: E402
 from orchestrator.tts.cartesia import CartesiaClient  # noqa: E402
 from orchestrator.tts_preprocessor import preprocess_for_tts  # noqa: E402
@@ -136,6 +148,14 @@ class AppState:
     cartesia_client: CartesiaClient | None = None  # v2 low-latency TTS
     tts_client: httpx.AsyncClient | None = None  # Legacy ElevenLabs HTTP
     turn_detector: TurnDetector | None = None  # End-of-turn detection for /api/turn-probe
+    #: How much MERLIN may do to the aircraft, and why. The ``None`` default is a
+    #: construction convenience for directly-built test states only -- ``lifespan``
+    #: guarantees a non-``None`` value on every path out of startup, because a
+    #: ``None`` authority reads as FULL to the gate in ``tools.py`` and makes the
+    #: dispatch floor in ``sim_client.py`` inert.
+    authority: AuthorityState | None = None
+    health: HealthMonitor | None = None  # Subsystem health, incl. command_path (D-17)
+    override_detector: OverrideDetector | None = None  # Drops authority on pilot override
     tts_cache: dict[str, bytes] = field(default_factory=dict)
     #: client host -> time.monotonic() of its last accepted turn probe
     turn_probe_seen: dict[str, float] = field(default_factory=dict)
@@ -157,6 +177,45 @@ def _int_setting(app_settings: Any, name: str, default: int) -> int:
         return int(getattr(app_settings, name, default))
     except (TypeError, ValueError):
         return default
+
+
+def _build_health_monitor() -> HealthMonitor:
+    """Register the same subsystem set the CLI registers (D-17).
+
+    ``orchestrator/main.py`` registers these five by name. The browser and the CLI
+    must not report different subsystem sets, or a pilot comparing the two would
+    have to work out which absence means "not wired here" and which means "down".
+    """
+    health = HealthMonitor()
+    health.register("simconnect_bridge")
+    health.register("chromadb")
+    health.register("whisper")
+    health.register("claude_api")
+    # Belt and braces -- TelemetryClient registers this too when it is handed a
+    # monitor. Registering here keeps command_path in summary() from process start,
+    # even if some future path builds the client without a monitor.
+    health.register("command_path")
+    return health
+
+
+def _json_safe_subsystems(health: HealthMonitor | None) -> dict[str, dict[str, Any]]:
+    """``HealthMonitor.summary()`` with ``age_seconds`` made JSON-legal.
+
+    A subsystem that has never reported healthy carries ``age_seconds == inf``, and
+    Starlette's ``JSONResponse`` renders with ``allow_nan=False`` -- so returning
+    the summary verbatim turns ``/api/status`` into a 500 the moment any registered
+    subsystem is unseen, which is all of them at startup. ``None`` is the honest
+    wire value for "never seen": a sentinel number would be one the browser could
+    not tell from a real age, and ``Infinity`` is not JSON the browser can parse.
+    """
+    if health is None:
+        return {}
+    summary = health.summary()
+    for entry in summary.values():
+        age = entry.get("age_seconds")
+        if isinstance(age, float) and not math.isfinite(age):
+            entry["age_seconds"] = None
+    return summary
 
 
 def get_app_state(request: Request) -> AppState:
@@ -225,8 +284,65 @@ async def lifespan(app: FastAPI):
     # Context store (ChromaDB) -- degrades gracefully if unavailable
     state.context_store = ContextStore(chromadb_url=settings.chromadb_url)
 
-    # Telemetry client
-    state.sim_client = TelemetryClient(url=settings.telemetry_service_url)
+    # --- Authority and subsystem health (fail SAFE, never fail silent) --------
+    #
+    # Deliberately carved out of the degrade-and-continue idiom used below for STT,
+    # TTS and the turn detector. For those, `None` means "this feature is off". For
+    # authority, `None` means *unrestricted*: the gate in tools.py reads a None
+    # authority as FULL, and the floor, the ack watchdog and the override cooldown
+    # in sim_client.py are all guarded on `is not None`. A swallowed exception here
+    # would therefore disable the whole authority layer on the browser path
+    # regardless of AUTHORITY_LEVEL, while /api/status reported it as a deliberate
+    # `full` / `config` setup -- indistinguishable from an operator's own choice.
+    #
+    # Do NOT "make this consistent" with its neighbours. On failure we substitute a
+    # degraded, advisory-only state; if even that cannot be built we let the
+    # exception out and the server does not start, because a web server serving
+    # with no authority object is strictly more dangerous than one that refuses to
+    # serve. The CLI fails CLOSED (orchestrator/main.py lets the exception abort
+    # startup); the browser fails SAFE. Different mechanism, same guarantee: a
+    # construction failure can never *grant* authority. See CLAUDE.md decision 26.
+    try:
+        state.health = _build_health_monitor()
+        state.authority = AuthorityState(
+            parse_authority_level(settings.authority_level),
+            override_cooldown_s=settings.authority_override_cooldown_s,
+            watchdog_max_timeouts=settings.authority_watchdog_max_timeouts,
+        )
+    except Exception as exc:
+        detail = f"authority subsystem failed to start: {exc}"
+        logger.error(
+            "Authority subsystem failed to start (%s); MERLIN is restricting itself "
+            "to advisory for the life of this process",
+            exc,
+            exc_info=True,
+        )
+        # The fallback below is built from enum literals only -- it reads no
+        # Settings and takes no collaborator -- so it is safe to call from inside
+        # the handler for the failure it replaces. If it raises anyway, that
+        # exception propagates and startup aborts: the fail-closed backstop under
+        # the fail-safe default.
+        state.authority = AuthorityState.degraded_fallback(detail)
+        state.health = _build_health_monitor()
+        state.health.update("command_path", False, detail)
+
+    logger.info(
+        "Authority: %s (reason: %s, configured: %s)",
+        state.authority.level.value,
+        state.authority.reason.value,
+        state.authority.configured_level.value,
+    )
+
+    # Telemetry client. One AuthorityState per process, shared by identity: the
+    # client reads it for the dispatch floor, ClaudeClient forwards it to the tool
+    # gate, and the override detector mutates it. A second instance would let the
+    # three disagree about the current level.
+    state.sim_client = TelemetryClient(
+        url=settings.telemetry_service_url,
+        authority=state.authority,
+        health=state.health,
+        command_timeout=settings.authority_command_timeout_s,
+    )
     try:
         await state.sim_client.connect()
         state.sim_connected = True
@@ -254,6 +370,34 @@ async def lifespan(app: FastAPI):
             sim_state.flight_phase = detected
 
         state.sim_client.subscribe(_on_state)
+
+        # Pilot-override detection. This one KEEPS the degrade-and-continue
+        # treatment: without it AUTH-06 never fires, so MERLIN simply never drops
+        # to advisory when the pilot takes the controls -- a capability loss that
+        # leaves the configured level in force. That is the line between the two
+        # treatments: a component whose absence *reduces* what MERLIN may do can
+        # degrade; a component whose absence *increases* it cannot. Logged at
+        # ERROR rather than WARNING because a silently missing detector is a
+        # safety feature that is simply not running.
+        try:
+            state.override_detector = OverrideDetector(
+                state.authority,
+                state.sim_client,
+                grace_s=settings.authority_override_grace_s,
+                settle_s=settings.authority_override_settle_s,
+                verify_timeout_s=settings.authority_verify_timeout_s,
+            )
+            # Its own subscriber, not a call from inside _on_state, so a failure
+            # in one cannot suppress the other (D-11).
+            state.sim_client.subscribe(state.override_detector.on_telemetry_update)
+        except Exception as exc:
+            state.override_detector = None
+            logger.error(
+                "Pilot-override detection unavailable (%s); MERLIN will not drop to "
+                "advisory when the pilot takes the controls",
+                exc,
+                exc_info=True,
+            )
 
     # STT client — route to configured backend
     stt_backend = getattr(settings, "stt_backend", "whisper")
@@ -287,7 +431,11 @@ async def lifespan(app: FastAPI):
             "Turn detector unavailable (%s); browser will endpoint on fixed silence", exc
         )
 
-    # Claude client
+    # Claude client. Handed the same AuthorityState object the telemetry client
+    # holds, so the tool gate and the dispatch floor read one state. The two
+    # timeouts come from settings for the ordering reason RESEARCH B3 names: the
+    # tool-layer deadline must exceed the ack + verify budget or a genuine ack
+    # timeout is cancelled as a tool timeout and the watchdog never sees it.
     state.claude_client = ClaudeClient(
         api_key=settings.anthropic_api_key,
         model=settings.claude_model,
@@ -297,6 +445,9 @@ async def lifespan(app: FastAPI):
         max_tokens_briefing=settings.claude_max_tokens_briefing,
         max_history=settings.claude_max_history,
         temperature=settings.claude_temperature,
+        verify_timeout=settings.authority_verify_timeout_s,
+        command_tool_timeout=settings.authority_tool_timeout_s,
+        authority=state.authority,
     )
 
     # TTS client — route to configured backend
@@ -437,6 +588,32 @@ async def get_status(state: AppState = Depends(get_app_state)):
         state.bridge_connected and (time.monotonic() - state.bridge_last_seen) < 10.0
     ) or state.sim_connected
 
+    # Feed what this endpoint just measured back into the monitor, so the
+    # subsystems block cannot contradict the top-level fields in the same response
+    # -- a payload saying chromadb_available: true beside chromadb.healthy: false
+    # is worse than no subsystems block at all. The CLI does the same thing
+    # (_update_bridge_health runs before get_health_summary). Nothing here writes
+    # an authority value: the level moves only from configuration at startup,
+    # override detection and the watchdog (T-02-09-03). claude_api is left alone
+    # because this endpoint has no signal for it, and "never observed" is the
+    # honest report.
+    if state.health is not None:
+        state.health.update(
+            "simconnect_bridge",
+            bool(bridge_ok),
+            "Connected" if bridge_ok else "Disconnected",
+        )
+        state.health.update(
+            "chromadb",
+            bool(chromadb_ok),
+            "Connected" if chromadb_ok else "Unavailable; RAG disabled",
+        )
+        state.health.update(
+            "whisper",
+            bool(whisper_ok),
+            "Responding" if whisper_ok else "Unavailable or not the active backend",
+        )
+
     stt_backend = getattr(state.settings, "stt_backend", "whisper")
     tts_backend = getattr(state.settings, "tts_backend", "elevenlabs")
 
@@ -449,6 +626,24 @@ async def get_status(state: AppState = Depends(get_app_state)):
         and state.turn_detector.available
         and not isinstance(state.turn_detector, SilenceTurnDetector)
     )
+
+    # Authority is read straight out of AuthorityState.summary() rather than
+    # formatted from the enums here, so the CLI and the browser render from one
+    # place. It also removes the branch: AuthorityLevel has three members and
+    # AuthorityReason four, and CLAUDE.md records what a missing branch costs --
+    # tts_configured reported a working Cartesia setup as unconfigured for months
+    # because one arm was absent. There is nothing to keep in sync here.
+    #
+    # An absent authority state reports advisory / degraded, never full / config.
+    # After lifespan this is unreachable in a running server, so this fallback is
+    # for a directly-constructed AppState and for any future path that reaches the
+    # route before startup finished. In both cases the honest answer is "MERLIN
+    # has no working authority state"; rendering that as a deliberate `full`
+    # configuration is the precise ambiguity AUTH-08 exists to remove. Omitting the
+    # keys would be the same ambiguity in a different costume.
+    authority_summary = state.authority.summary() if state.authority is not None else {}
+    authority_level = authority_summary.get("level", AuthorityLevel.ADVISORY.value)
+    authority_reason = authority_summary.get("reason", AuthorityReason.DEGRADED.value)
 
     return {
         "sim_connected": bridge_ok,
@@ -476,6 +671,16 @@ async def get_status(state: AppState = Depends(get_app_state)):
         "turn_probe_available": turn_probe_available,
         "turn_probe_silence_ms": _int_setting(state.settings, "turn_probe_silence_ms", 150),
         "vad_silence_ms": _int_setting(state.settings, "vad_silence_ms", 400),
+        # Authority: how much MERLIN may do to the aircraft, and why (AUTH-08).
+        # The reason is what keeps "deferring to the pilot", "cannot reach the sim"
+        # and "the authority subsystem failed to start" from all rendering as one
+        # undifferentiated advisory badge (D-10).
+        "authority_level": authority_level,
+        "authority_reason": authority_reason,
+        "authority": authority_summary,
+        # Subsystem health, including command_path -- what lets the browser render
+        # "advisory (command path down)" rather than an unexplained badge (D-17).
+        "subsystems": _json_safe_subsystems(state.health),
     }
 
 
@@ -1278,15 +1483,57 @@ async def _stream_response(
         command_status_queue: list[dict[str, Any]] = []
 
         def _on_tool_result(tool_name: str, tool_input: dict[str, Any], tool_result: Any) -> None:
+            """Classify a command outcome for the browser: advisory, withheld, failed, done.
+
+            The three-way split is explicit rather than inferred from the absence of
+            an ``"error"`` key, because the advisory dry run and the assisted
+            withhold both carry no ``"error"`` by design (plan 02-04). The previous
+            ``success = "error" not in tool_result`` therefore reported a command
+            that was never transmitted as executed -- the pilot saw "GEAR DOWN" for
+            a gear that never moved (RESEARCH B8, threat T-02-09-01).
+            """
             if tool_name != "set_aircraft_control":
                 return
             system = tool_input.get("system", "unknown")
             action = tool_input.get("action", "unknown")
-            success = not (isinstance(tool_result, dict) and "error" in tool_result)
-            if success:
-                message = f"{system.upper()} {action.upper()}"
-            else:
-                message = f"{system.upper()} {action.upper()} failed"
+            result = tool_result if isinstance(tool_result, dict) else {}
+            label = f"{system.upper()} {action.upper()}"
+
+            # authority_level / authority_reason are copied through verbatim, never
+            # mapped or defaulted. AuthorityReason has four members and the browser
+            # renders an unrecognised one as-is; substituting "config" for a missing
+            # reason would report a crashed subsystem as a deliberate configuration.
+            if result.get("advisory"):
+                command_status_queue.append(
+                    {
+                        "type": "command_advisory",
+                        "system": system,
+                        "action": action,
+                        "message": f"{label} -- advisory, not sent",
+                        "would_execute": result.get("would_execute"),
+                        "authority_level": result.get("authority_level"),
+                        "authority_reason": result.get("authority_reason"),
+                    }
+                )
+                return
+
+            if result.get("withheld"):
+                safety = result.get("safety") or {}
+                command_status_queue.append(
+                    {
+                        "type": "command_withheld",
+                        "system": system,
+                        "action": action,
+                        "message": f"{label} -- withheld, yours to make",
+                        "authority_level": result.get("authority_level"),
+                        "authority_reason": result.get("authority_reason"),
+                        "safety_reason": safety.get("reason"),
+                    }
+                )
+                return
+
+            success = "error" not in result
+            message = label if success else f"{label} failed"
             command_status_queue.append(
                 {
                     "type": "command_status",
