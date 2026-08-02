@@ -318,7 +318,7 @@ _CR01_REGRESSION = (
     "returns a negative adapter ack as `{'success': False, 'message': ...}` with "
     "no `error` key -- sim_client.py documents that shape as routine, because "
     "`SimConnectManager.ExecuteCommand` answers any unmapped command name or "
-    "COMException with it. Under `success = \"error\" not in result` the browser "
+    'COMException with it. Under `success = "error" not in result` the browser '
     "painted a green GEAR DOWN on a gear the adapter refused to move. Classify on "
     "the reported `result['success']`, not on the absence of an error key."
 )
@@ -342,8 +342,7 @@ _TIMED_OUT_RESULT = {
 _REFUSED_RESULT = {
     "success": False,
     "error": (
-        "Refused: MERLIN holds advisory authority only (config); "
-        "nothing was sent to the aircraft."
+        "Refused: MERLIN holds advisory authority only (config); nothing was sent to the aircraft."
     ),
     "refused": True,
     "authority_level": "advisory",

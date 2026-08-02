@@ -1491,6 +1491,20 @@ async def _stream_response(
             ``success = "error" not in tool_result`` therefore reported a command
             that was never transmitted as executed -- the pilot saw "GEAR DOWN" for
             a gear that never moved (RESEARCH B8, threat T-02-09-01).
+
+            The fall-through classifies on ``result["success"]`` as reported by the
+            adapter, not on the absence of an ``"error"`` key. The absence heuristic
+            survived here after 02-09 fixed the two arms above it, and it is wrong
+            for the commonest failure of all: ``SimConnectManager.ExecuteCommand``
+            answers any unmapped command name or ``COMException`` with
+            ``{"success": False, "message": "Unknown command"}`` and no ``"error"``
+            at all -- a shape ``sim_client.send_command`` documents as routine. A
+            gear the adapter refused therefore rendered as a green "GEAR DOWN"
+            (VERIFICATION Gap 1 / CR-01).
+
+            ``orchestrator/orchestrator/tools.py::_was_transmitted`` is the mirror of
+            this expression on the orchestrator side; the two must stay identical, or
+            the browser and Claude will disagree about whether the aircraft moved.
             """
             if tool_name != "set_aircraft_control":
                 return
@@ -1532,7 +1546,15 @@ async def _stream_response(
                 )
                 return
 
-            success = "error" not in result
+            # Both halves are required. `result.get("success")` alone reads the
+            # adapter's own verdict -- it catches the NACK, the ack timeout and the
+            # authority-floor refusal -- but it is absent entirely from a blocked or
+            # unresolvable result, which carry only an "error". `"error" not in
+            # result` alone lets the NACK through as a success, which is the CR-01
+            # defect. A result carrying neither key is not a success: the default is
+            # False, so an unrecognised shape fails closed rather than claiming the
+            # aircraft moved (threat T-02-12-02).
+            success = bool(result.get("success", False)) and "error" not in result
             message = label if success else f"{label} failed"
             command_status_queue.append(
                 {
