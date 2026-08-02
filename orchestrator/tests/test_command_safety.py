@@ -66,6 +66,7 @@ def _make_state(
     on_ground: bool = False,
     flight_phase: FlightPhase = FlightPhase.CRUISE,
     ap_master: bool = False,
+    ground_speed: float = 0.0,
 ) -> SimState:
     """Build a SimState with minimal overrides for safety check testing."""
     agl = altitude_agl
@@ -74,7 +75,7 @@ def _make_state(
         agl = 0.0
     return SimState(
         position=Position(altitude_agl=agl, altitude_msl=agl + 100),
-        speeds=Speeds(indicated_airspeed=indicated_airspeed),
+        speeds=Speeds(indicated_airspeed=indicated_airspeed, ground_speed=ground_speed),
         flight_phase=flight_phase,
         autopilot=AutopilotState(master=ap_master),
     )
@@ -294,3 +295,173 @@ class TestCommandSafetyCheckGeneral:
         result = checker.check("GEAR_UP", 0, state)
         assert result.safe is False
         assert result.severity == "blocked"
+
+
+# ---------------------------------------------------------------------------
+# Gap 2 / CR-05 -- the fuel, mixture and parking-brake surface CMD-07 made live
+# ---------------------------------------------------------------------------
+
+_CR05_REGRESSION = (
+    "CMD-07 registered FUEL_SELECTOR_* and CROSS_FEED_* in the adapter's CommandMap, "
+    "turning a NACK into a real TransmitClientEvent, and both systems were already in "
+    "the set_aircraft_control enum. MAGNETO_SET was held back from exactly that "
+    "treatment because it 'turns a named tool call into a working in-flight engine "
+    "shutdown with nothing in front of it' -- and fuel selector OFF in flight is an "
+    "in-flight engine shutdown by another route. With no DEFAULT_RULES entry, the "
+    "default AUTHORITY_LEVEL of full sends it unexamined and assisted cannot withhold "
+    "what nothing flagged (CR-05)."
+)
+
+_GROUND_REGRESSION = (
+    "A rule that fires during normal ground operations is worse than no rule: MERLIN "
+    "refuses a routine shutdown, and a safety layer that blocks normal operations gets "
+    "configured away (T-02-14-05)."
+)
+
+
+class TestFuelSelectorSafety:
+    """`fuel_selector off` in flight is an engine shutdown; on the ground it is a shutdown."""
+
+    def test_fuel_selector_off_in_flight_blocked(self) -> None:
+        state = _make_state(altitude_agl=3000)
+        result = CommandSafetyCheck().check("FUEL_SELECTOR_OFF", 0, state)
+        assert result.severity == "blocked", _CR05_REGRESSION
+        assert result.safe is False, _CR05_REGRESSION
+
+    def test_fuel_selector_off_on_ground_is_untouched(self) -> None:
+        state = _make_state(on_ground=True)
+        result = CommandSafetyCheck().check("FUEL_SELECTOR_OFF", 0, state)
+        assert result.severity == "", _GROUND_REGRESSION
+        assert result.safe is True, _GROUND_REGRESSION
+
+    def test_fuel_selector_set_to_index_zero_in_flight_blocked(self) -> None:
+        """Index 0 is the OFF position on the selectors FUEL_SELECTOR_SET drives."""
+        state = _make_state(altitude_agl=3000)
+        result = CommandSafetyCheck().check("FUEL_SELECTOR_SET", 0, state)
+        assert result.severity == "blocked", _CR05_REGRESSION
+
+    def test_fuel_selector_set_to_a_tank_in_flight_is_untouched(self) -> None:
+        """Which tank a non-zero index selects is aircraft-dependent; this layer cannot judge."""
+        state = _make_state(altitude_agl=3000)
+        result = CommandSafetyCheck().check("FUEL_SELECTOR_SET", 2, state)
+        assert result.severity == ""
+        assert result.safe is True
+
+    def test_fuel_selector_set_to_index_zero_on_ground_is_untouched(self) -> None:
+        state = _make_state(on_ground=True)
+        result = CommandSafetyCheck().check("FUEL_SELECTOR_SET", 0, state)
+        assert result.severity == "", _GROUND_REGRESSION
+
+    def test_selecting_a_named_tank_is_never_flagged(self) -> None:
+        """Selecting a tank is not selecting off, in any state."""
+        checker = CommandSafetyCheck()
+        for command in ("FUEL_SELECTOR_ALL", "FUEL_SELECTOR_LEFT", "FUEL_SELECTOR_RIGHT"):
+            for state in (
+                _make_state(altitude_agl=3000),
+                _make_state(on_ground=True),
+                _make_state(altitude_agl=100, flight_phase=FlightPhase.APPROACH),
+            ):
+                result = checker.check(command, 0, state)
+                assert result.severity == "", f"{command} was flagged: {result.reason}"
+
+
+class TestMixtureSafety:
+    """`mixture set 0` scales to MIXTURE_SET 0 -- idle cut-off."""
+
+    def test_mixture_idle_cutoff_in_flight_blocked(self) -> None:
+        state = _make_state(altitude_agl=3000)
+        result = CommandSafetyCheck().check("MIXTURE_SET", 0, state)
+        assert result.severity == "blocked", _CR05_REGRESSION
+        assert result.safe is False, _CR05_REGRESSION
+
+    def test_mixture_full_rich_in_flight_is_untouched(self) -> None:
+        state = _make_state(altitude_agl=3000)
+        result = CommandSafetyCheck().check("MIXTURE_SET", 16383, state)
+        assert result.severity == ""
+        assert result.safe is True
+
+    def test_mixture_idle_cutoff_on_ground_is_untouched(self) -> None:
+        """Mixture to cut-off on the ground IS the normal shutdown."""
+        state = _make_state(on_ground=True)
+        result = CommandSafetyCheck().check("MIXTURE_SET", 0, state)
+        assert result.severity == "", _GROUND_REGRESSION
+
+    def test_mixture_leaned_in_flight_is_untouched(self) -> None:
+        state = _make_state(altitude_agl=9000)
+        result = CommandSafetyCheck().check("MIXTURE_SET", 8000, state)
+        assert result.severity == ""
+
+
+class TestCrossfeedSafety:
+    """Crossfeed warns rather than blocks -- closing it is often the corrective move."""
+
+    def test_every_crossfeed_event_warns_in_flight(self) -> None:
+        checker = CommandSafetyCheck()
+        state = _make_state(altitude_agl=5000)
+        for command in ("CROSS_FEED_OPEN", "CROSS_FEED_OFF", "CROSS_FEED_TOGGLE"):
+            result = checker.check(command, 0, state)
+            assert result.severity == "warning", f"{command} did not warn in flight"
+            assert result.safe is True, f"{command} was blocked; closing crossfeed must stay open"
+
+    def test_crossfeed_on_ground_is_untouched(self) -> None:
+        checker = CommandSafetyCheck()
+        state = _make_state(on_ground=True)
+        for command in ("CROSS_FEED_OPEN", "CROSS_FEED_OFF", "CROSS_FEED_TOGGLE"):
+            result = checker.check(command, 0, state)
+            assert result.severity == "", _GROUND_REGRESSION
+
+
+class TestParkingBrakeSafety:
+    """The explicit toggle that survives the CR-04 refusal still needs a rule behind it."""
+
+    def test_parking_brake_while_rolling_is_blocked(self) -> None:
+        state = _make_state(on_ground=True, ground_speed=45.0, indicated_airspeed=45.0)
+        result = CommandSafetyCheck().check("PARKING_BRAKES", 0, state)
+        assert result.severity == "blocked", (
+            "a parking-brake toggle at landing-rollout speed is a runway excursion (T-02-14-01)"
+        )
+        assert result.safe is False
+
+    def test_parking_brake_at_rest_is_untouched(self) -> None:
+        state = _make_state(on_ground=True, ground_speed=0.0)
+        result = CommandSafetyCheck().check("PARKING_BRAKES", 0, state)
+        assert result.severity == "", _GROUND_REGRESSION
+        assert result.safe is True
+
+    def test_parking_brake_at_the_threshold_is_untouched(self) -> None:
+        """The threshold is 'stopped, or as good as' -- at it, not above it, is fine."""
+        from orchestrator.command_safety import PARKING_BRAKE_MAX_GROUND_SPEED_KT
+
+        state = _make_state(on_ground=True, ground_speed=PARKING_BRAKE_MAX_GROUND_SPEED_KT)
+        result = CommandSafetyCheck().check("PARKING_BRAKES", 0, state)
+        assert result.severity == ""
+
+    def test_parking_brake_in_flight_warns(self) -> None:
+        state = _make_state(altitude_agl=2000)
+        result = CommandSafetyCheck().check("PARKING_BRAKES", 0, state)
+        assert result.severity == "warning"
+        assert result.safe is True
+
+
+class TestRuleSetShape:
+    def test_rule_count(self) -> None:
+        assert len(DEFAULT_RULES) == 13, (
+            "seven original rules plus the six Gap 2 rules for the fuel, mixture and "
+            "parking-brake surface"
+        )
+
+    def test_every_message_template_formats_with_the_supported_keys(self) -> None:
+        """`check()` formats with exactly these five names and no others.
+
+        Any other placeholder raises `KeyError` at check time -- inside the command
+        path, only when the rule actually fires, which is in flight. That is the worst
+        possible place to discover a typo (T-02-14-07).
+        """
+        for rule in DEFAULT_RULES:
+            rule.message_template.format(
+                command="X",
+                ias=0.0,
+                agl=0.0,
+                phase="CRUISE",
+                vfe=0.0,
+            )

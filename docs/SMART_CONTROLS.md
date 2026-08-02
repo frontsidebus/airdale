@@ -107,6 +107,31 @@ Blocked rules short-circuit -- the first matching block stops evaluation. Warnin
 | `flaps_full_at_cruise_speed` | `FLAPS_SET`, `FLAPS_FULL` | Full flaps (value >= 16383) and IAS > 150 kt | warning |
 | `ap_disconnect_low` | `AP_MASTER` | Autopilot is ON and AGL < 500 ft, airborne | warning |
 | `throttle_idle_on_approach` | `THROTTLE_SET` | Throttle < 10% during approach phase, AGL > 100 ft | warning |
+| `fuel_selector_off_in_flight` | `FUEL_SELECTOR_OFF` | Airborne | **blocked** |
+| `fuel_selector_set_to_off_in_flight` | `FUEL_SELECTOR_SET` | Index value is 0 (the OFF position) and airborne | **blocked** |
+| `mixture_cutoff_in_flight` | `MIXTURE_SET` | Value <= 0 (idle cut-off) and airborne | **blocked** |
+| `crossfeed_change_in_flight` | `CROSS_FEED_OPEN`, `CROSS_FEED_OFF`, `CROSS_FEED_TOGGLE` | Airborne | warning |
+| `parking_brake_on_the_roll` | `PARKING_BRAKES` | On the ground above `PARKING_BRAKE_MAX_GROUND_SPEED_KT` (5 kt) | **blocked** |
+| `parking_brake_in_flight` | `PARKING_BRAKES` | Airborne | warning |
+
+The last six were added with Phase 2's authority work and cover the surface that phase itself
+made reachable. CMD-07 registered the `FUEL_SELECTOR_*` and `CROSS_FEED_*` events in the MSFS
+adapter's `CommandMap`; before that they NACKed, after it `TransmitClientEvent` fires for real,
+and both systems were already in the `set_aircraft_control` enum. `MAGNETO_SET` was held back
+from the same treatment precisely because registering it "turns a named tool call into a working
+in-flight engine shutdown with nothing in front of it" -- and fuel selector OFF in flight is that
+same shutdown by another route. The reachable set and the deferred set follow one severity
+rationale; these rules are that rationale applied to the reachable half.
+
+**Why crossfeed warns instead of blocking.** Crossfeed is a legitimate in-flight fuel-balancing
+action, and *closing* it is frequently the corrective move. Blocking `CROSS_FEED_OFF` in flight
+would prevent the safe action along with the unsafe one. A warning does the work: `assisted`
+withholds on it, `full` executes with the concern attached.
+
+**Every new rule is gated on being airborne** (or, for the parking brake, on ground speed), and
+each has an explicit negative test asserting it does not fire on the ground. Mixture to cut-off
+on the ground *is* the normal shutdown; fuel selector OFF on the ground is how you secure the
+aircraft. A rule that refused those would be worse than no rule -- it would get configured away.
 
 ### Aircraft-Specific Limits
 
@@ -195,32 +220,48 @@ A level travels with the reason it holds that value, because "MERLIN is only adv
 
 Anything that branches on the reason needs a `degraded` arm. A missing branch does not error, it renders a failed authority subsystem as a deliberate `advisory` configuration -- the pilot then reads a fault as a setting.
 
-### Coverage Caveat -- `assisted` Is Weaker Than It Sounds
+### Coverage Caveat -- `assisted` Is Narrower Than It Sounds
 
-**`assisted` withholds only on a `warning`-severity safety verdict.** If no rule fires, there is nothing to withhold on, and the command executes exactly as it would at `full`.
+**`assisted` withholds only on a `warning`-severity safety verdict, or on no verdict at all.** If a rule fires with `warning`, or telemetry was unreachable so no rule could be evaluated, the command is withheld. If every rule passes cleanly, the command executes exactly as it would at `full`.
 
-`DEFAULT_RULES` contains **7 rules, covering 4 systems**: gear, flaps, autopilot, and throttle. `_resolve_command` handles **20** commandable systems. For the other **16** -- including `mixture` (idle cutoff), `fuel_selector` (`off` starves the engine), `crossfeed`, and `deice` -- no `warning` rule exists, so **`assisted` behaves identically to `full` for those systems.**
+`DEFAULT_RULES` contains **13 rules, covering 8 systems**: gear, flaps, autopilot, throttle, fuel selector, mixture, crossfeed, and parking brake. `_resolve_command` handles **20** commandable systems.
 
-This follows correctly from an explicit non-goal: the authority phase deliberately added no new envelope rules, because authority and envelope protection are separate concerns and conflating them would have made both harder to reason about. It is not a defect in the authority layer -- the gate does exactly what it is specified to do. Closing the gap means adding safety rules for the remaining systems, which is tracked as a follow-on `SAFE-*` item.
+The **12** that remain unruled -- `radio`, `barometer`, `trim`, `spoilers`, `propeller`, `deice`, and the six systems deferred under CMD-09 (`magnetos`, `carb_heat`, `fuel_pump`, `starter`, `primer`, `lights`) -- have no rule of either severity, so **`assisted` behaves identically to `full` for them.** That is the honest shape of the caveat, and it has not gone away; what changed is which systems it applies to.
 
-Read plainly: **do not treat `assisted` as broad protection today.** It is real protection for gear, flaps, autopilot, and throttle, and it is a no-op everywhere else. Use `advisory` if you want MERLIN to touch nothing.
+Note where the six deferred systems sit in that list: they are unreachable anyway (absent from the tool enum, absent from the adapter's `CommandMap`), so the practical gap at `assisted` is `radio`, `barometer`, `trim`, `spoilers`, `propeller` and `deice`. Of those, `deice` is the one with real consequences.
 
-### Commands MERLIN Refuses Outright -- `carb_heat` and `fuel_pump`
+Read plainly: **`assisted` is now real protection for the systems that can hurt you fastest** -- gear, flaps, autopilot, throttle, and the fuel and brake surface -- **and remains a no-op for the rest.** Use `advisory` if you want MERLIN to touch nothing.
 
-Independent of authority level, `carb_heat` and `fuel_pump` refuse an absolute `on` or `off`:
+### Commands MERLIN Refuses Outright -- `parking_brake`, `carb_heat` and `fuel_pump`
+
+Independent of authority level, three systems refuse a request for an absolute *position*:
+
+| System | Refused actions | Still works | Reachable today? |
+|---|---|---|---|
+| `parking_brake` | `on`, `off`, `release`, `set`, `apply`, `engage` | `toggle` | **Yes** -- in the tool enum, in `CRITICAL_COMMANDS`, registered in the adapter |
+| `carb_heat` | `on`, `off` | `toggle` | No -- deferred under CMD-09, not exposed, not registered |
+| `fuel_pump` | `on`, `off` | `toggle` | No -- deferred under CMD-09, not exposed, not registered |
 
 ```
-set_aircraft_control("carb_heat", "off")
-  -> {"error": "I cannot confirm the current position of the carb heat ...",
+set_aircraft_control("parking_brake", "off")
+  -> {"error": "I cannot confirm the current position of the parking brake ...",
+      "system": "parking_brake", "action": "off", "command": null,
       "unresolvable": true}
 ```
 
-**Why.** Both systems map `"on"`, `"off"` and `"toggle"` to the *same* SimConnect toggle event (`ANTI_ICE_CARB_HEAT_TOGGLE`, `FUEL_PUMP_TOGGLE`). Emitting a toggle in response to "carb heat off" turns carb heat **on** whenever it was already off -- the command does the opposite of what was asked, which in icing conditions is a real hazard.
+**Why.** Each system maps its state words *and* `"toggle"` to the *same* SimConnect toggle event (`PARKING_BRAKES`, `ANTI_ICE_CARB_HEAT_TOGGLE`, `FUEL_PUMP_TOGGLE`). Emitting a toggle in response to "carb heat off" turns carb heat **on** whenever it was already off -- the command does the opposite of what was asked, which in icing conditions is a real hazard.
 
-The obvious fix -- emit the toggle only when the requested state differs from the current one -- is not implementable. There is no carb-heat or fuel-pump position anywhere in the telemetry chain: not in the SimConnect data definition, the adapter model, the universal schema, `SurfaceState`, or the mock adapter. There is nothing to read. Adding it is a four-layer change that is deliberately deferred.
+**`parking_brake` is the one of the three that was actually reachable.** The other two are held back by CMD-09, so their defect is latent; the parking brake is in the `set_aircraft_control` enum, in `CRITICAL_COMMANDS`, and registered in the adapter's `CommandMap`. "Parking brake off" on landing rollout -- with the brake already off, which is the whole point of saying it -- *set* the brake. That is a runway excursion, not a nuisance (CR-04).
+
+The obvious fix -- emit the toggle only when the requested state differs from the current one -- is not implementable. There is no parking-brake, carb-heat or fuel-pump position anywhere in the telemetry chain: not in the SimConnect data definition, the adapter model, the universal schema, `SurfaceState`, or the mock adapter. There is nothing to read. Adding it is a four-layer change that is deliberately deferred, and it should be taken once for all three rather than piecemeal.
+
+The refusal is checked *before* the resolver's result is turned into an error, so a refused action gets the explanation rather than "Unknown control". `command` in the returned dict is `null` when the resolver declines the action outright (`parking_brake`) and carries the toggle event when the resolver still resolves one but the refusal stops it being sent (`carb_heat`, `fuel_pump`) -- read it defensively.
+
+**A blocked safety rule sits behind the surviving `toggle` as well.** `PARKING_BRAKES` is blocked above 5 kt ground speed and warns in flight, so the explicit toggle is bounded too -- refusing the ambiguous verbs and guarding the unambiguous one are separate layers, and this system has both.
 
 **Workaround.** `action="toggle"` works normally and is unaffected. Tell MERLIN what the panel shows if you need a specific position:
 
+> "Parking brake is set, release it."
 > "Carb heat is currently off, toggle it on."
 
 ---

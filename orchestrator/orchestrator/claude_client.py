@@ -394,7 +394,13 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "spoilers: 'toggle', 'set'; "
                         "mixture/propeller: 'set'; "
                         "fuel_selector: 'off', 'all', 'both', 'left', 'right', 'set'; "
-                        "crossfeed: 'open', 'close', 'toggle'"
+                        "crossfeed: 'open', 'close', 'toggle'; "
+                        # A static schema edit, made once at deploy time. That is a
+                        # one-off prompt-cache invalidation and is NOT what D-07 rules
+                        # out — D-07 rejects varying the tool list *per request*, which
+                        # would invalidate the cached persona block on every turn.
+                        "parking_brake: 'toggle' only — on/off/set are refused "
+                        "because no telemetry reports brake position"
                     ),
                 },
                 "value": {

@@ -69,7 +69,10 @@ Voice command examples shown for each — MERLIN executes immediately on unambig
 | `down` / `extend` | "Gear down" | GEAR_DOWN | **YES** |
 | `toggle` | "Toggle gear" | GEAR_TOGGLE | **YES** |
 
-> Critical commands are flagged with a `safety_note` in the tool result.
+> Critical commands are flagged with a `safety_note` in the tool result **when the adapter
+> acknowledges them**. The note reads "Critical system change executed", which is a claim about
+> something that happened, so it is attached only to a command that actually reached the
+> aircraft — a refused, withheld or NACKed command carries no note (CR-02).
 
 ---
 
@@ -170,7 +173,18 @@ Voice command examples shown for each — MERLIN executes immediately on unambig
 ### Parking Brake
 | Action | Voice Example | SimConnect Event |
 |---|---|---|
-| *(any)* | "Parking brake" | PARKING_BRAKES |
+| `toggle` | "Parking brake" | PARKING_BRAKES |
+
+`on`, `off`, `release`, `set`, `apply` and `engage` are **refused** — they return
+`{"unresolvable": true}` and nothing is transmitted. `PARKING_BRAKES` is a toggle, and no
+telemetry anywhere in the chain reports brake position, so "parking brake off" could only ever
+be a blind toggle: on landing rollout, with the brake already off, it *set* the brake. Refusing
+is the fix that does not require adding brake position to the SimConnect struct, the adapter
+model, the universal schema and the mock adapter (CR-04, and see the `carb_heat` / `fuel_pump`
+note under Deferred systems — the same four-layer change covers all three).
+
+**Workaround.** Use `toggle`, and tell MERLIN what the panel shows if you need a specific
+position: *"Parking brake is set, release it."*
 
 ---
 
@@ -227,6 +241,30 @@ These commands trigger a `safety_note` in the tool result:
 Claude is instructed to execute direct orders immediately but may confirm ambiguous or phase-inappropriate commands (e.g., gear up at very low altitude).
 
 > The `safety_note` list is separate from, and much narrower than, the pre-execution rules in
-> `command_safety.py`. Neither currently covers `mixture` idle-cutoff, `fuel_selector: off`,
-> `crossfeed`, or `deice` — the highest-severity commands in the reachable surface. Closing
-> that gap is Phase 2 authority work, not part of this reference.
+> `command_safety.py`. It is an *advisory marker on a command that succeeded*; the rules are
+> what decide whether the command is sent at all.
+
+### Pre-execution rules on the highest-severity commands
+
+That gap is now closed for the fuel and brake surface. `command_safety.py` carries thirteen
+rules; six of them cover the commands Phase 2's own CMD-07 work made executable in the adapter:
+
+| Command | Condition | Verdict |
+|---|---|---|
+| `FUEL_SELECTOR_OFF` | airborne | **blocked** |
+| `FUEL_SELECTOR_SET` value `0` | airborne | **blocked** |
+| `MIXTURE_SET` value `<= 0` | airborne | **blocked** |
+| `CROSS_FEED_OPEN` / `CROSS_FEED_OFF` / `CROSS_FEED_TOGGLE` | airborne | warning |
+| `PARKING_BRAKES` | on the ground above 5 kt ground speed | **blocked** |
+| `PARKING_BRAKES` | airborne | warning |
+
+`blocked` wins at every authority level -- the safety short-circuit runs before the authority
+gate. A `warning` is what makes `assisted` withhold and `full` execute with the concern
+attached. `parking_brake` is therefore doubly bounded: it is in `CRITICAL_COMMANDS`, its
+ambiguous verbs are refused outright (see above), and the surviving `toggle` has rules behind
+it. Crossfeed warns rather than blocks on purpose — closing crossfeed in flight is often the
+*corrective* action, and blocking it would prevent the safe move along with the unsafe one.
+
+`deice` remains unruled. It is reachable and it is the one remaining system in the enum where
+`assisted` behaves identically to `full` with real consequences. See the coverage caveat in
+`SMART_CONTROLS.md`.

@@ -152,7 +152,13 @@ RESOLVER_BRANCH_TABLE: tuple[tuple[str, str, float | None], ...] = (
     ("deice", "windshield", None),
     ("deice", "props", None),
     ("deice", "prop_deice", None),
-    # parking_brake
+    # parking_brake -- `toggle` is the ONLY resolvable action, deliberately.
+    # "on", "off", "release", "set", "apply" and "engage" resolve to None and are
+    # refused by UNCONFIRMABLE_REFUSED_ACTIONS in tools.py: no telemetry reports
+    # brake position, so an absolute request cannot be turned into the right
+    # direction and a toggle would set the brake on landing rollout (CR-04).
+    # Adding a row here for any of them would re-assert the defect -- and would
+    # fail, because _events_by_system() asserts every row resolves.
     ("parking_brake", "toggle", None),
     # spoilers
     ("spoilers", "toggle", None),

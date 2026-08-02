@@ -41,20 +41,45 @@ CRITICAL_COMMANDS = {
 }
 
 # CMD-08 / D-02: systems whose absolute on/off cannot be resolved, mapped to the
-# label used in the refusal. Both map "on", "off" and "toggle" to the *same* toggle
-# event, so "carb heat off" turns it ON whenever it was already off — the command
-# does the opposite of what was asked.
+# label used in the refusal. Each maps its state words *and* "toggle" to the same
+# toggle event, so "carb heat off" turns it ON whenever it was already off — the
+# command does the opposite of what was asked.
 #
 # Resolving it properly ("emit the toggle only when the requested state differs")
-# is not implementable: there is no carb-heat or fuel-pump state in the SimConnect
-# data definition, the adapter model, the universal schema, ``SurfaceState`` or the
-# mock adapter. There is nothing to read. Refusing removes the defect's teeth
-# without the four-layer telemetry work, which is deliberately deferred.
+# is not implementable: there is no carb-heat, fuel-pump or parking-brake position
+# in the SimConnect data definition, the adapter model, the universal schema,
+# ``SurfaceState`` or the mock adapter. There is nothing to read. Refusing removes
+# the defect's teeth without the four-layer telemetry work, which is deliberately
+# deferred — and should be taken once for all three rather than piecemeal.
+#
+# ``parking_brake`` is the third entry and the reason this table stopped being a
+# theoretical concern (CR-04). ``carb_heat`` and ``fuel_pump`` are deferred under
+# CMD-09: absent from the tool enum and absent from the adapter's ``CommandMap``,
+# so their defect is latent. ``parking_brake`` is in the enum, in
+# ``CRITICAL_COMMANDS`` and registered in the adapter's ``CommandMap`` — it was the
+# one blind toggle a pilot could actually reach, and "parking brake off" on landing
+# rollout SET the brake.
 #
 # Do NOT "fix" this back into a toggle — restoring it reintroduces the defect.
 UNCONFIRMABLE_POSITION_SYSTEMS: dict[str, str] = {
     "carb_heat": "carb heat",
     "fuel_pump": "fuel pump",
+    "parking_brake": "parking brake",
+}
+
+# The actions each unconfirmable system refuses, keyed identically to the table
+# above (``set_aircraft_control`` looks the action up here and then reads the label
+# out of there, so a key in one and not the other is a ``KeyError`` in the command
+# path; a test in test_tools.py pins them together).
+#
+# ``parking_brake`` carries more verbs than the other two because they are what a
+# pilot actually says. A verb that reaches the resolver and finds no branch must
+# still produce the actionable refusal below rather than a bare "unknown control" —
+# "release the parking brake" deserves an explanation, not a typo message.
+UNCONFIRMABLE_REFUSED_ACTIONS: dict[str, frozenset[str]] = {
+    "carb_heat": frozenset({"on", "off"}),
+    "fuel_pump": frozenset({"on", "off"}),
+    "parking_brake": frozenset({"on", "off", "release", "set", "apply", "engage"}),
 }
 
 
@@ -165,7 +190,14 @@ def _resolve_command(system: str, action: str, value: float | None) -> tuple[str
             return "TOGGLE_PROPELLER_DEICE", 0
 
     elif system == "parking_brake":
-        return "PARKING_BRAKES", 0
+        # Only an explicit toggle resolves. "on" / "off" / "release" / "set" fall
+        # through to the terminal ``return None, 0`` below, so the resolver is now
+        # incapable of emitting a blind parking-brake toggle at all. That is defence
+        # in depth *under* the refusal in set_aircraft_control, not a substitute for
+        # it: today that function is the only caller, and this branch is what keeps
+        # the guarantee if a second one ever appears (CR-04).
+        if action == "toggle":
+            return "PARKING_BRAKES", 0
 
     elif system == "spoilers":
         if action == "toggle":
@@ -361,38 +393,52 @@ async def set_aircraft_control(
     """
     command, sim_value = _resolve_command(system, action, value)
 
-    if command is None:
-        return {"error": f"Unknown control: system={system}, action={action}"}
-
-    # --- CMD-08 / D-02: refuse an absolute on/off we cannot resolve ---
+    # --- CMD-08 / D-02: refuse an absolute position we cannot resolve ---
     # Lives here rather than in _resolve_command so the resolver stays a pure lookup
     # with a single failure channel, and so procedures inherit the check for free
     # once ProcedureExecutor is re-routed through this function (D-04) —
     # PROCEDURES["takeoff_config"] contains a fuel_pump step.
+    #
+    # This runs BEFORE the ``command is None`` return, and that order is load-bearing
+    # rather than cosmetic. The resolver no longer resolves a parking-brake "off" to
+    # anything, so with the two swapped the pilot would get "Unknown control:
+    # system=parking_brake, action=off" — a typo message for a well-formed request —
+    # instead of the sentence explaining why MERLIN will not guess (T-02-14-06). The
+    # lookup is on (system_key, action_key) and needs no resolved command, so it
+    # moves cleanly. Anything neither refused here nor resolvable still falls through
+    # to the unknown-control error below.
     system_key = system.lower().strip()
     action_key = action.lower().strip()
-    if system_key in UNCONFIRMABLE_POSITION_SYSTEMS and action_key in ("on", "off"):
+    if action_key in UNCONFIRMABLE_REFUSED_ACTIONS.get(system_key, frozenset()):
         label = UNCONFIRMABLE_POSITION_SYSTEMS[system_key]
         logger.warning(
-            "Refusing %s/%s: no telemetry reports %s position, so %s would be a blind toggle",
+            "Refusing %s/%s: no telemetry reports %s position, so any event resolved "
+            "for it would be a blind toggle",
             system,
             action,
             label,
-            command,
         )
         return {
             "error": (
                 f"I cannot confirm the current position of the {label} — no telemetry "
                 f"reports it. Sending {system}/{action} would emit a blind toggle, which "
-                f"turns the {label} the wrong way whenever it is already {action_key}. "
-                f"Use action='toggle' to change it, and tell me what the panel shows if "
-                f"you need it in a specific position."
+                f"does the opposite of what you asked whenever the {label} is already "
+                f"where you want it. Use action='toggle' to change it, and tell me what "
+                f"the panel shows if you need it in a specific position."
             ),
             "system": system,
             "action": action,
+            # Still five keys, but ``command`` is now **None** for a refused
+            # parking-brake action (the resolver declines it) and remains the resolved
+            # toggle event for carb_heat / fuel_pump (the resolver still returns one,
+            # and the refusal is what stops it being sent). A consumer reading this key
+            # must tolerate None.
             "command": command,
             "unresolvable": True,
         }
+
+    if command is None:
+        return {"error": f"Unknown control: system={system}, action={action}"}
 
     # --- Pre-execution safety check ---
     checker = safety_check or _safety_check

@@ -779,6 +779,126 @@ class TestUnconfirmablePositionRefusal:
 
 
 # ---------------------------------------------------------------------------
+# CR-04 / CMD-08 -- parking_brake, the blind toggle that was actually reachable
+# ---------------------------------------------------------------------------
+
+_CR04_REGRESSION = (
+    "parking_brake resolved EVERY action -- 'on', 'off', 'release', 'toggle' -- to the "
+    "same PARKING_BRAKES toggle event. Unlike carb_heat and fuel_pump it is in the "
+    "set_aircraft_control enum, in CRITICAL_COMMANDS and registered in the adapter's "
+    "CommandMap, so this was the one blind toggle a pilot could actually reach: "
+    "'parking brake off' on landing rollout SET the brake (CR-04)."
+)
+
+
+class TestParkingBrakeRefusal:
+    """`parking_brake` accepts an explicit toggle and nothing else.
+
+    No telemetry anywhere in the chain reports parking-brake position -- not the
+    SimConnect data definition, the adapter model, the universal schema,
+    ``SurfaceState`` or the mock adapter -- so an absolute "on"/"off"/"release"
+    cannot be resolved into the right direction. It is refused with the same
+    actionable message ``carb_heat`` gets rather than guessed at.
+    """
+
+    @pytest.mark.parametrize(
+        ("action", "expected"),
+        [
+            ("toggle", ("PARKING_BRAKES", 0)),
+            ("on", (None, 0)),
+            ("off", (None, 0)),
+            ("release", (None, 0)),
+            ("set", (None, 0)),
+            ("apply", (None, 0)),
+            ("engage", (None, 0)),
+        ],
+        ids=[
+            "toggle-resolves",
+            "on-unresolvable",
+            "off-unresolvable",
+            "release-unresolvable",
+            "set-unresolvable",
+            "apply-unresolvable",
+            "engage-unresolvable",
+        ],
+    )
+    def test_resolver_only_understands_toggle(
+        self, action: str, expected: tuple[str | None, int]
+    ) -> None:
+        """Defence in depth: the resolver itself cannot emit a blind parking-brake toggle."""
+        assert _resolve_command("parking_brake", action, None) == expected, _CR04_REGRESSION
+
+    @pytest.mark.parametrize(
+        "action",
+        ["on", "off", "release", "set", "apply", "engage", " OFF ", "Release"],
+        ids=[
+            "on",
+            "off",
+            "release",
+            "set",
+            "apply",
+            "engage",
+            "padded-uppercase-off",
+            "mixed-case-release",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_absolute_position_is_refused(self, action: str) -> None:
+        mock_client = _control_client()
+
+        result = await set_aircraft_control(mock_client, "parking_brake", action)
+
+        mock_client.send_command.assert_not_called()
+        assert result["unresolvable"] is True, _CR04_REGRESSION
+        assert "parking brake" in result["error"], _CR04_REGRESSION
+        assert "current position" in result["error"]
+        assert "toggle" in result["error"]
+        assert result["system"] == "parking_brake"
+        assert result["action"] == action
+        # The refusal now runs before the resolver's None is turned into an error,
+        # so a refused parking-brake action carries no resolved event at all.
+        assert result["command"] is None
+
+    @pytest.mark.asyncio
+    async def test_toggle_still_executes(self) -> None:
+        mock_client = _control_client()
+
+        await set_aircraft_control(mock_client, "parking_brake", "toggle")
+
+        mock_client.send_command.assert_awaited_once_with("PARKING_BRAKES", 0)
+
+    @pytest.mark.asyncio
+    async def test_unknown_system_still_reports_unknown_control(self) -> None:
+        """The reorder must not swallow a genuinely unknown system.
+
+        Moving the refusal above the ``command is None`` return is what makes the
+        parking-brake message reachable; if it swallowed everything unresolvable the
+        pilot would get a lecture about telemetry for a typo (T-02-14-06).
+        """
+        mock_client = _control_client()
+
+        result = await set_aircraft_control(mock_client, "nonsense", "wibble")
+
+        mock_client.send_command.assert_not_called()
+        assert "Unknown control" in result["error"]
+        assert "unresolvable" not in result
+
+    def test_refused_action_table_covers_every_unconfirmable_system(self) -> None:
+        """The two tables are read together and must not drift apart.
+
+        ``set_aircraft_control`` looks the action up in ``UNCONFIRMABLE_REFUSED_ACTIONS``
+        and then reads the label out of ``UNCONFIRMABLE_POSITION_SYSTEMS``. A system in
+        one table but not the other is either an unreachable refusal or a ``KeyError``
+        inside the command path.
+        """
+        assert set(tools_module.UNCONFIRMABLE_REFUSED_ACTIONS) == set(
+            tools_module.UNCONFIRMABLE_POSITION_SYSTEMS
+        )
+        assert "parking_brake" in tools_module.UNCONFIRMABLE_REFUSED_ACTIONS
+        assert tools_module.UNCONFIRMABLE_POSITION_SYSTEMS["parking_brake"] == "parking brake"
+
+
+# ---------------------------------------------------------------------------
 # set_aircraft_control
 # ---------------------------------------------------------------------------
 
