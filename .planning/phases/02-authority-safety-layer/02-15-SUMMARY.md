@@ -41,38 +41,39 @@ key-decisions:
   - "The three authority keys are present-and-None when no AuthorityState exists; inventing full/config would report a crashed subsystem as an operator's own choice"
   - "The announcement row does not carry .command-status-msg and has no outcome icon: a change in what MERLIN may do is not a command outcome and must not be scanned as one"
   - "The pump is cancelled first in shutdown, before the telemetry disconnect that feeds the detector"
+  - "The Task 3 checkpoint is recorded as approved without narrative detail — the developer's blanket approval is not written up as observations they did not report"
 
 patterns-established:
   - "A blocking queue consumer written as one literal, greppable expression so a competing drain is caught by grep -c"
   - "Announcement hues reuse the badge's level vocabulary; the distinguishing mark against command rows is form (filled banner + tag), not colour"
 
-requirements-completed: []  # AUTH-06/AUTH-08 deliberately left unmarked — see Decisions
+requirements-completed: []  # AUTH-06/AUTH-08 left for plan 02-16, which owns the ledger — see Decisions
 
 # Metrics
-duration: 12min
-completed: 2026-08-01
+duration: 12min implementation + human checkpoint
+completed: 2026-08-02
 ---
 
 # Phase 02 Plan 15: Browser Authority Announcements Summary
 
 **The two `ProactiveEvent` objects `OverrideDetector` has been building since 02-06 now reach every open browser tab as words the moment they happen, and the authority badge moves off the announcement itself instead of waiting up to ten seconds for the next status poll.**
 
-## Status: PAUSED AT CHECKPOINT
+## Status: COMPLETE
 
-Tasks 1 and 2 are complete, committed and verified. **Task 3 is a blocking
-`checkpoint:human-verify` and has NOT been performed** — it requires a live browser,
-a running mock adapter and a judgement about legibility and perceived latency that no
-assertion can make. It has not been self-approved and nothing below claims a human
-observed anything. The two `human_verification:` items in `02-VERIFICATION.md` remain
-open until it is walked.
+All three tasks are closed. Tasks 1 and 2 are implemented, committed and merged;
+Task 3 — the blocking `checkpoint:human-verify` — was returned to the developer and
+came back **approved**. Read the "Human Verification (Task 3)" section below before
+treating any individual step as observed: the approval was a bare `approved` with no
+narrative, and this summary says exactly that rather than reconstructing answers.
 
 ## Performance
 
-- **Duration:** 12 min (Tasks 1-2)
+- **Duration:** 12 min implementation (Tasks 1-2), plus the human checkpoint
 - **Started:** 2026-08-01T20:47Z (approx., worktree spawn)
 - **Paused at checkpoint:** 2026-08-01T20:59Z
-- **Tasks:** 2 of 3 complete (Task 1 TDD; Task 3 awaiting a human)
-- **Files modified:** 4 (1 created, 3 modified)
+- **Checkpoint approved / plan closed:** 2026-08-02
+- **Tasks:** 3 of 3 complete (Task 1 TDD; Task 3 a verification gate, no code)
+- **Files modified:** 4 (1 created, 3 modified) — unchanged by Task 3
 
 ## Accomplishments
 
@@ -102,11 +103,19 @@ open until it is walked.
 
 ## Task Commits
 
-1. **Task 1: A single pump draining the detector queue and fanning out to every chat socket** — `d54111c` (test, RED) → `1637683` (feat, GREEN)
-2. **Task 2: Render the announcement and refresh the badge from the frame** — `9a31dd5` (feat)
-3. **Task 3: Human verification in a running browser** — NOT RUN, checkpoint returned to the orchestrator
+| Task | Name | Commit | Outcome |
+|---|---|---|---|
+| 1 (RED) | Failing tests for the browser authority-event pump | `d54111c` | 14 tests added, all failing |
+| 1 (GREEN) | Pump draining the detector queue, fanning out to every chat socket | `1637683` | 14/14 passing |
+| 2 | Render the announcement and refresh the badge from the frame | `9a31dd5` | `node --check` clean, web suite green |
+| — | Summary written in paused-at-checkpoint state | `9aaf9df` | checkpoint returned to the orchestrator |
+| 3 | Verify the announcement and the degraded probe path in a running browser | *(no code commit)* | **approved** — a verification gate, and no defect was reported that would require one |
+| — | Summary closed out after approval | *(this commit)* | status COMPLETE, post-merge verification numbers |
 
-Task 1 needed no REFACTOR commit.
+Task 1 needed no REFACTOR commit. Task 3 is a `checkpoint:human-verify` whose
+`<action>` writes code only "unless a step below surfaces a defect"; none was
+reported, so the plan's own definition closes it with no code change. Inventing one
+would have been scope, not execution.
 
 ## Files Created/Modified
 
@@ -151,13 +160,20 @@ Task 1 needed no REFACTOR commit.
   `AUTHORITY` tag and no ✓/✗/○/⊘ — and takes its hue from the badge of the level it
   announces (cyan for the drop to advisory, green for the restore to full). Nothing
   else in the chat log carries a background fill.
-- **REQUIREMENTS.md deliberately not edited.** AUTH-06's browser half now exists, but
-  Task 3 is a *blocking* checkpoint and the phase's own verification report criticised
-  exactly the pattern of marking a requirement complete ahead of the evidence. AUTH-08
-  is likewise gated on the human confirming the badge moves on the announcement.
-  REQUIREMENTS.md is also a shared artifact with sibling plan 02-14 in flight this
-  wave. The orchestrator should mark both after the checkpoint is approved and the
-  wave merges.
+- **REQUIREMENTS.md deliberately not edited, before or after approval.** AUTH-06's
+  browser half now exists and Task 3 has since been approved, but the ledger is not
+  this plan's to write: it is a shared artifact, sibling plan 02-14 was in flight this
+  wave, and plan 02-16 owns the requirement ledger. Marking it from here would be the
+  same over-reach the phase's own verification report criticised — a requirement
+  ticked by the plan that would benefit from the tick. 02-16 marks AUTH-06 and
+  AUTH-08, and should read the approval caveat below before it does.
+- **The approval is recorded as given, not as hoped for.** The developer typed
+  `approved` and nothing else. Steps 9 and 10 asked for narrative answers; none were
+  supplied. Writing plausible answers into this summary would be exactly the failure
+  mode this phase exists to correct — a system reporting outcomes it had not
+  confirmed — so the caveat is stated explicitly rather than smoothed over. The plan's
+  criterion "Step 10 is answered in the summary in the developer's own words" is
+  therefore **not** satisfied on its own terms; the blanket approval stands in for it.
 
 ## Deviations from Plan
 
@@ -219,18 +235,23 @@ specified behaviour nor adds scope.
 
 ## Verification Results
 
+Re-run **after** the wave merge, so these are post-merge numbers rather than the
+pre-merge ones this summary carried while it was paused.
+
 | Check | Result |
 |---|---|
 | `cd web && python3 -m pytest -q` | **111 passed, 1 skipped** (baseline 97 / 1 — +14) |
-| `cd orchestrator && python3 -m pytest -q` | **1353 passed, 2 xfailed** (baseline unchanged — no orchestrator file touched) |
+| `cd orchestrator && python3 -m pytest -q` | **1389 passed, 2 xfailed** — up from the 1353 recorded pre-merge. The rise is sibling plan 02-14 landing after the first run, not anything this plan added; no orchestrator file is touched here |
 | `node --check web/static/app.js` | exit 0 |
 | `ruff check orchestrator/ telemetry-service/ web/ …` (CI form, repo root) | All checks passed |
 | `ruff format --check orchestrator/ telemetry-service/ web/ …` (CI form, repo root) | 111 files already formatted |
 | `grep -c "await state.override_detector.events.get()" web/server.py` | `1` — exactly one consumer per process |
 | `grep -c "AUTHORITY_REASON_TEXT" web/static/app.js` | `2` — unchanged; no second reason mapping |
+| `grep -n "case 'authority_event':" web/static/app.js` | line 1001 — the merged Task 2 case is present post-merge |
 | `git diff -U0 -- web/static/app.js \| grep innerHTML` | no output — no new `innerHTML`, server strings attached as text nodes |
-| Smoke: real `OverrideDetector._publish` × 40 with the real pump attached | published 40, delivered 40, queue backlog 0, **0** "No consumer appears to be draining it" WARNINGs |
+| Smoke: real `OverrideDetector._publish` × 40 with the real pump attached | published 40, delivered 40, queue backlog 0, **0** "No consumer appears to be draining it" WARNINGs *(run pre-merge; not repeated, no code changed since)* |
 | Files changed vs. wave base | `web/server.py`, `web/static/app.js`, `web/static/style.css`, `web/tests/test_authority_events.py` — nothing else |
+| Task 3 human checkpoint | **approved** — see the caveat below |
 
 ## Known Stubs
 
@@ -259,21 +280,48 @@ sockets already carry strictly more sensitive content to the same audience.
 - No edits to `.planning/STATE.md` or `.planning/ROADMAP.md` (orchestrator-owned).
 - No edits to `.planning/REQUIREMENTS.md` — see Decisions.
 
-## Awaiting Human Verification (Task 3)
+## Human Verification (Task 3) — approved, with the shape of the approval stated
 
-The checkpoint covers the two items `02-VERIFICATION.md` records as unverifiable by
-static analysis. Both are **unanswered**; neither is claimed here:
+**Result: approved.** The developer's response to the checkpoint was the single word
+`approved`.
+
+**Approved without narrative detail.** No answers were supplied to step 9
+(voice input surviving an absent `ffmpeg`) or step 10 (legibility of the announcement
+and the perceived delay between moving a control and seeing it). Those two steps are
+**accepted by the developer's blanket approval rather than by reported observation**,
+and this summary does not assert otherwise. Nothing below reconstructs, paraphrases or
+infers an observation the developer did not make.
+
+That distinction is recorded deliberately. This entire phase exists because a system
+reported outcomes it had not actually confirmed, and the same standard applies to the
+phase's own paperwork. A blanket approval closes the gate; it does not manufacture
+evidence, and the plan's criterion asking for step 10 "in the developer's own words"
+is not met on its own terms.
+
+What this does and does not license downstream:
+
+- **Does:** close the blocking gate, so the plan and the wave may proceed, and so
+  02-16 may act on the phase being executable end to end.
+- **Does not:** stand as observed evidence for the two `human_verification:` items in
+  `02-VERIFICATION.md`. Any later report should describe them as *approved* rather
+  than as *observed*, and should say by whom. If a future phase needs the timing
+  judgement specifically — for instance to decide whether the announcement path needs
+  to beat the 10 s poll by a wider margin — it needs a fresh observation, not a
+  citation of this line.
+
+For reference, the two items the checkpoint covered:
 
 1. **Authority badge live behaviour** — a pilot override induced through the mock
-   adapter, a watchdog latch, both tabs, the advisory command state during cooldown,
-   the disconnect path, and the client-side unknown state. Plus the judgement the
-   plan asks for in the developer's own words: at a glance, is it obvious MERLIN has
-   stood down and why, and is the delay short enough to be useful?
-2. **Turn-probe graceful degradation with no ffmpeg on `PATH`** — voice input still
+   adapter, both tabs receiving the announcement, the advisory command state during
+   cooldown, the disconnect path, and the client-side unknown state. Every mechanism
+   underneath is pinned by the 14 automated tests in
+   `web/tests/test_authority_events.py`; what the human step added was the live-browser
+   and perceived-latency judgement, which is the part left unnarrated.
+2. **Turn-probe graceful degradation with no `ffmpeg` on `PATH`** — voice input still
    working via the fixed-silence fallback, no HTTP 500 on `/api/turn-probe`, and a
    logged decode failure rather than a traceback per probe. Plan 02-12 restored the
-   never-raises contract and pinned it with two tests; what remains is the
-   user-visible symptom in a live browser.
+   never-raises contract and pinned it with two tests; the user-visible symptom in a
+   live browser is the part left unnarrated.
 
 **The `degraded` authority reason is deliberately not a manual step**, for the reason
 plan 02-10 recorded: `AUTHORITY_LEVEL` is validated at `Settings` construction, so a
@@ -287,8 +335,10 @@ criteria, and is not left unverified by omission.
   (02-13) and `_authority_event_pump` in the browser (here). Both names now exist in
   code, which is what `override_detector.py`'s `events` docstring already claims and
   what 02-16's decision-26 update needs to record.
-- **Blocked on Task 3.** The plan is `autonomous: false` and the checkpoint is
-  `gate="blocking"`; the phase should not be signed off until it is walked.
+- **No longer blocked.** The plan is `autonomous: false` and its checkpoint was
+  `gate="blocking"`; that gate is now approved and the plan is closed. 02-16 should
+  carry the approval caveat above into any phase-level sign-off rather than
+  reporting the two `human_verification:` items as observed.
 - **Deliberately still open, with reasons in the plan's `<notes>`:** WR-04 (no
   utterance token on the async turn probe), WR-03 (400 ms fixed-silence default),
   IN-03 (`undo_last_command` / `execute_procedure` emit no browser command frame),
@@ -299,14 +349,22 @@ criteria, and is not left unverified by omission.
 
 ## Self-Check: PASSED
 
-All claimed artifacts and commits verified on `worktree-agent-a9680f7a13cc32794`:
+Re-verified post-merge on `worktree-agent-ad3943baddaa1704b`, rebased onto the wave-8
+tracking commit `04a8760`:
 
 - Files present: `web/server.py`, `web/static/app.js`, `web/static/style.css`,
   `web/tests/test_authority_events.py`, this summary
-- Commits present: `d54111c`, `1637683`, `9a31dd5`
-- No file deletions in any commit (`git diff --diff-filter=D` empty for each)
+- Commits present in this branch's ancestry: `d54111c`, `1637683`, `9a31dd5`, `9aaf9df`
+- The merged Task 1/2 work is live in the working tree, not merely in history:
+  `_authority_event_pump` in `web/server.py`, `case 'authority_event':` at
+  `web/static/app.js:1001`, `authority-event-msg` in `web/static/style.css`
+- Tasks 1 and 2 were **not** re-run or re-committed; only this summary changed in the
+  closing commit
+- No file deletions in any commit
 - No untracked files left behind
+- `.planning/STATE.md`, `.planning/ROADMAP.md` and `.planning/REQUIREMENTS.md`
+  untouched — owned by the orchestrator and by plan 02-16 respectively
 
 ---
 *Phase: 02-authority-safety-layer*
-*Paused at human checkpoint: 2026-08-01*
+*Implemented: 2026-08-01 · Human checkpoint approved and plan closed: 2026-08-02*
