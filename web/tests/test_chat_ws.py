@@ -313,6 +313,45 @@ _EXECUTED_RESULT = {
     "sim_value": 0,
 }
 
+_CR01_REGRESSION = (
+    "REGRESSION (VERIFICATION Gap 1 / CR-01): `TelemetryClient.send_command` "
+    "returns a negative adapter ack as `{'success': False, 'message': ...}` with "
+    "no `error` key -- sim_client.py documents that shape as routine, because "
+    "`SimConnectManager.ExecuteCommand` answers any unmapped command name or "
+    'COMException with it. Under `success = "error" not in result` the browser '
+    "painted a green GEAR DOWN on a gear the adapter refused to move. Classify on "
+    "the reported `result['success']`, not on the absence of an error key."
+)
+
+# The exact ack shape sim_client.py returns for a command the adapter refused:
+# `success` is False and there is no `error` key at all. This is CR-01.
+_NACKED_RESULT = {
+    "success": False,
+    "message": "Unknown command",
+    "command": "GEAR_DOWN",
+    "sim_value": 0,
+}
+
+# The ack-timeout shape: the future never resolved, so nothing confirmed.
+_TIMED_OUT_RESULT = {
+    "success": False,
+    "error": "Command timed out",
+}
+
+# The `send_command` authority-floor refusal (sim_client.py), verbatim.
+_REFUSED_RESULT = {
+    "success": False,
+    "error": (
+        "Refused: MERLIN holds advisory authority only (config); nothing was sent to the aircraft."
+    ),
+    "refused": True,
+    "authority_level": "advisory",
+    "authority_reason": "config",
+}
+
+# Neither marker present: an unrecognised shape must fail closed, never succeed.
+_SHAPELESS_RESULT = {"command": "GEAR_DOWN"}
+
 
 def _chat_emitting(tool_result, *, tool_input=None, tool_name="set_aircraft_control"):
     """Build a fake ``ClaudeClient.chat`` that fires one tool result, then a chunk."""
@@ -434,6 +473,57 @@ async def test_executed_result_still_reports_a_successful_command_status(test_ap
     assert frame["type"] == "command_status"
     assert frame["success"] is True
     assert frame["message"] == "GEAR DOWN"
+
+
+async def test_nacked_result_reports_a_failed_command_status(test_app, mock_app_state):
+    """CR-01: an adapter NACK carries no `error` key and must still read as failed."""
+    outcomes = await _outcome_messages(test_app, mock_app_state, _NACKED_RESULT)
+
+    assert len(outcomes) == 1, f"expected one outcome frame, got {outcomes}"
+    frame = outcomes[0]
+    assert frame["type"] == "command_status", _CR01_REGRESSION
+    assert frame["success"] is False, _CR01_REGRESSION
+    assert frame["message"] == "GEAR DOWN failed", _CR01_REGRESSION
+
+
+async def test_timed_out_result_reports_a_failed_command_status(test_app, mock_app_state):
+    """An ack that never arrived is not a command that executed."""
+    outcomes = await _outcome_messages(test_app, mock_app_state, _TIMED_OUT_RESULT)
+
+    assert len(outcomes) == 1
+    frame = outcomes[0]
+    assert frame["type"] == "command_status"
+    assert frame["success"] is False, (
+        "A dispatch whose ack timed out proves nothing about the aircraft; the "
+        "watchdog counts it as a dead command path (CR-01)."
+    )
+
+
+async def test_authority_floor_refusal_reports_a_failed_command_status(test_app, mock_app_state):
+    """The `send_command` floor refusal states nothing was sent -- render it as failed."""
+    outcomes = await _outcome_messages(test_app, mock_app_state, _REFUSED_RESULT)
+
+    assert len(outcomes) == 1
+    frame = outcomes[0]
+    assert frame["type"] == "command_status"
+    assert frame["success"] is False, (
+        "The floor refusal says in its own error text that nothing reached the "
+        "aircraft; a green tick here is the CR-01 false confirmation exactly."
+    )
+
+
+async def test_result_with_neither_marker_fails_closed(test_app, mock_app_state):
+    """An unrecognised result shape renders as failed, not as done (T-02-12-02)."""
+    outcomes = await _outcome_messages(test_app, mock_app_state, _SHAPELESS_RESULT)
+
+    assert len(outcomes) == 1
+    frame = outcomes[0]
+    assert frame["type"] == "command_status"
+    assert frame["success"] is False, (
+        "A result carrying neither `success` nor `error` is not evidence the "
+        "aircraft moved. The browser fails closed: `result.get('success', False)` "
+        "defaults to False (CR-01, threat T-02-12-02)."
+    )
 
 
 async def test_non_command_tool_results_are_ignored(test_app, mock_app_state):
