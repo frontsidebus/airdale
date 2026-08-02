@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import logging
 import signal
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from .authority import AuthorityState, parse_authority_level
@@ -19,6 +20,7 @@ from .config import Settings, load_settings
 from .context_store import ContextStore
 from .flight_phase import FlightPhaseDetector
 from .override_detector import OverrideDetector
+from .proactive_monitor import ProactiveEvent
 from .screen_capture import CaptureManager
 from .sim_client import (
     ConnectionState,
@@ -32,6 +34,85 @@ from .voice import InputMode, VoiceInput, VoiceOutput
 from .whisper_client import WhisperClient
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Authority surface (AUTH-06 announcements, AUTH-07 status)
+#
+# Module-level rather than methods so both are testable without constructing an
+# Orchestrator, which eagerly builds a TelemetryClient, a ContextStore, a
+# WhisperClient and a ClaudeClient. An untestable announcement path is how the
+# announcements shipped with no consumer in the first place.
+# ---------------------------------------------------------------------------
+
+
+def format_authority_status(summary: dict[str, Any]) -> list[str]:
+    """Render :meth:`AuthorityState.summary` as printable CLI lines.
+
+    Pure: it takes the snapshot dict and returns strings, so nothing here can
+    change what MERLIN is allowed to do.
+
+    The four reasons (``config``, ``override``, ``watchdog``, ``degraded``) are
+    printed verbatim rather than mapped to friendly prose. The CLI reader is the
+    operator, and an unmapped value must look unmapped -- CLAUDE.md's
+    ``tts_configured`` lesson is that a missing branch which prints something
+    plausible hides for months.
+    """
+    lines = [
+        f"Authority: {summary['level']} "
+        f"(reason: {summary['reason']}, configured: {summary['configured_level']})"
+    ]
+
+    cooldown = float(summary.get("cooldown_remaining_s") or 0.0)
+    if cooldown > 0:
+        lines.append(f"  Pilot override cooldown: {int(cooldown)}s remaining")
+
+    if summary.get("watchdog_latched"):
+        lines.append(
+            "  Watchdog: LATCHED after "
+            f"{summary.get('consecutive_timeouts', 0)} consecutive command timeouts"
+        )
+
+    detail = summary.get("degraded_detail") or ""
+    if detail:
+        lines.append(f"  DEGRADED: {detail}")
+
+    return lines
+
+
+async def drain_authority_events(
+    events: asyncio.PriorityQueue[ProactiveEvent],
+    *,
+    announce: Callable[[str], None],
+    speak: Callable[[str], Awaitable[None]] | None = None,
+) -> None:
+    """Deliver authority announcements to the pilot on the CLI, forever.
+
+    This coroutine is the CLI half of AUTH-06's "informs the pilot" clause and
+    the only consumer of :attr:`OverrideDetector.events` in this process. It
+    is read-only with respect to authority: it consumes events and calls the two
+    callbacks, and reaches no ``AuthorityState`` mutator.
+
+    Args:
+        events: The detector's announcement queue, highest priority first.
+        announce: Prints one message. Called for every event.
+        speak: Optional TTS coroutine; skipped entirely when TTS is off.
+    """
+    while True:
+        event = await events.get()
+        try:
+            announce(event.message)
+            if speak is not None:
+                await speak(event.message)
+        except Exception:
+            # ``except Exception`` does not catch asyncio.CancelledError (it is a
+            # BaseException since 3.8), which is load-bearing: stop() cancels this
+            # task and that cancellation must propagate rather than be logged and
+            # looped over. Everything else is caught deliberately -- this task is
+            # the only thing between the detector and the pilot, and a loop that
+            # dies on one bad announcement silently restores the exact gap this
+            # exists to close.
+            logger.exception("Failed to deliver authority announcement: %s", event.message)
 
 
 class Orchestrator:
@@ -146,6 +227,7 @@ class Orchestrator:
         self._running = False
         self._sim_connected = False
         self._tts_enabled = settings.tts_configured
+        self._announce_task: asyncio.Task[None] | None = None
 
         # Whisper degradation tracking
         self._whisper_available = True
@@ -163,6 +245,7 @@ class Orchestrator:
                 # Its own subscriber, not a call from inside _on_state_update, so a
                 # failure in one cannot suppress the other (D-11).
                 self._sim_client.subscribe(self._override_detector.on_telemetry_update)
+                self._start_announcements()
                 self._health.update("simconnect_bridge", True, "Connected")
             except Exception:
                 logger.warning(
@@ -201,12 +284,41 @@ class Orchestrator:
 
         print(f"\n=== MERLIN AI Co-Pilot ({mode_label}, {tts_label}) ===")
         print("Type your message, or use /voice to toggle voice input.")
-        print("Commands: /voice, /vad, /ptt, /capture, /tts, /clear, /status, /health, /quit\n")
+        print(
+            "Commands: /voice, /vad, /ptt, /capture, /tts, /clear, /status, "
+            "/authority, /health, /quit\n"
+        )
 
         await self._conversation_loop()
 
+    def _start_announcements(self) -> None:
+        """Start the background task that tells the pilot about authority changes.
+
+        A task rather than a poll inside ``_conversation_loop``: that loop blocks
+        on ``input()`` in an executor thread for as long as the operator is not
+        typing, so a drain there would deliver an override announcement only
+        after the pilot's next keystroke -- the moment it is least useful. Only
+        started when telemetry is connected, since that is the only thing that
+        can produce an announcement.
+        """
+        self._announce_task = asyncio.create_task(
+            drain_authority_events(
+                self._override_detector.events,
+                announce=lambda message: print(f"\n[AUTHORITY] {message}"),
+                speak=self._voice_output.speak if self._tts_enabled else None,
+            )
+        )
+        # Same fire-and-forget bookkeeping as TTS playback: an unexpected death
+        # of this task must be logged, never swallowed.
+        self._announce_task.add_done_callback(self._on_announce_task_done)
+
     async def stop(self) -> None:
         self._running = False
+        if self._announce_task is not None:
+            self._announce_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._announce_task
+            self._announce_task = None
         await self._capture_manager.stop()
         if self._sim_connected:
             await self._sim_client.disconnect()
@@ -365,6 +477,25 @@ class Orchestrator:
         if exc is not None:
             logger.error("TTS playback task failed: %s", exc)
 
+    @staticmethod
+    def _on_announce_task_done(task: asyncio.Task[None]) -> None:
+        """Log the death of the authority announcement drain.
+
+        ``drain_authority_events`` loops forever, so anything other than
+        cancellation reaching here means the pilot has stopped being told about
+        override drops and restores -- which is the failure this task exists to
+        prevent, and must not be swallowed.
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "Authority announcement task failed; the pilot is no longer being "
+                "told about authority changes: %s",
+                exc,
+            )
+
     def _get_current_sim_state(self) -> SimState:
         """Return the latest sim state, or a default empty state."""
         if self._sim_connected:
@@ -457,6 +588,17 @@ class Orchestrator:
             print(f"TTS: {'enabled' if self._tts_enabled else 'disabled'}")
             print(f"Screen capture: {'on' if self._capture_manager.enabled else 'off'}")
             print(f"Whisper: {'available' if self._whisper_available else 'unavailable'}")
+            for line in format_authority_status(self._authority.summary()):
+                print(line)
+            return True
+
+        if cmd == "/authority":
+            # The same lines as /status, on their own, so "what am I allowed to
+            # do and why" can be asked without reading everything else.
+            print("\n--- Authority ---")
+            for line in format_authority_status(self._authority.summary()):
+                print(line)
+            print()
             return True
 
         print(f"Unknown command: {cmd}")

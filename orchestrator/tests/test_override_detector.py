@@ -9,6 +9,7 @@ one monotonic clock, fully under the test's control.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Iterable
 from unittest.mock import MagicMock
 
@@ -17,6 +18,7 @@ from orchestrator.authority import AuthorityLevel, AuthorityReason, AuthoritySta
 from orchestrator.command_history import _get_nested_attr
 from orchestrator.override_detector import (
     COMMAND_WATCHED_FIELDS,
+    MAX_PENDING_ANNOUNCEMENTS,
     WATCHED_FIELD_EPSILON,
     WATCHED_FIELDS,
     OverrideDetector,
@@ -482,3 +484,89 @@ class TestCooldownAndAnnouncements:
         restore = [e for e in _drain(detector.events) if e.data["event"] == "restore"][0]
         assert restore.data["level"] == AuthorityLevel.FULL.value
         assert "full" in restore.message
+
+
+# ---------------------------------------------------------------------------
+# Announcement queue bounds (Gap 3 / WR-06)
+# ---------------------------------------------------------------------------
+
+
+class TestAnnouncementQueueIsBounded:
+    """The queue is bounded and publishing cannot raise.
+
+    The overflow cases call ``_publish`` directly rather than driving telemetry.
+    That is the honest test here: reaching 33 announcements through
+    ``on_telemetry_update`` needs 33 cooldown lapses at 120 s apiece, and every
+    one of those frames exercises attribution and epsilon comparison rather than
+    the drop policy under test. ``_publish`` is the only thing standing between
+    the two production call sites and the queue, so it is the unit.
+    """
+
+    @staticmethod
+    def _event(n: int) -> ProactiveEvent:
+        """A synthetic announcement whose message identifies its ordinal."""
+        return ProactiveEvent(
+            type="authority",
+            priority=0,
+            message=f"announcement-{n}",
+            data={"event": "override", "n": n},
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_default_queue_is_bounded(self) -> None:
+        detector, _authority = _detector(_FakeClock(), _client())
+        assert MAX_PENDING_ANNOUNCEMENTS == 32
+        assert detector.events.maxsize == MAX_PENDING_ANNOUNCEMENTS
+
+    @pytest.mark.asyncio
+    async def test_a_caller_supplied_queue_is_used_as_given(self) -> None:
+        clock = _FakeClock()
+        supplied: asyncio.PriorityQueue[ProactiveEvent] = asyncio.PriorityQueue(maxsize=3)
+        authority = AuthorityState(AuthorityLevel.FULL, override_cooldown_s=COOLDOWN_S, clock=clock)
+        detector = OverrideDetector(authority, _client(), event_queue=supplied, clock=clock)
+
+        assert detector.events is supplied
+        assert detector.events.maxsize == 3
+
+    @pytest.mark.asyncio
+    async def test_overflow_does_not_raise_and_holds_at_the_bound(self) -> None:
+        detector, _authority = _detector(_FakeClock(), _client())
+
+        for n in range(MAX_PENDING_ANNOUNCEMENTS + 8):
+            detector._publish(self._event(n))  # must never raise
+
+        assert detector.events.qsize() == MAX_PENDING_ANNOUNCEMENTS
+
+    @pytest.mark.asyncio
+    async def test_the_newest_announcement_survives_an_overflow(self) -> None:
+        detector, _authority = _detector(_FakeClock(), _client())
+        last = MAX_PENDING_ANNOUNCEMENTS + 7
+
+        for n in range(last + 1):
+            detector._publish(self._event(n))
+
+        messages = [event.message for event in _drain(detector.events)]
+        assert f"announcement-{last}" in messages
+
+    @pytest.mark.asyncio
+    async def test_overflow_logs_a_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        detector, _authority = _detector(_FakeClock(), _client())
+
+        with caplog.at_level(logging.WARNING, logger="orchestrator.override_detector"):
+            for n in range(MAX_PENDING_ANNOUNCEMENTS + 2):
+                detector._publish(self._event(n))
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings, "an overflow must be logged at WARNING"
+
+    @pytest.mark.asyncio
+    async def test_a_full_queue_does_not_break_detection(self) -> None:
+        """A missing consumer must not stop authority dropping to advisory."""
+        clock = _FakeClock()
+        detector, authority = _detector(clock, _client())
+        for n in range(MAX_PENDING_ANNOUNCEMENTS):
+            detector._publish(self._event(n))
+
+        await _feed(detector, _make_state(flaps=0.0), _make_state(flaps=30.0))
+
+        assert authority.level is AuthorityLevel.ADVISORY
