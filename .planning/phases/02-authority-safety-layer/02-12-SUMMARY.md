@@ -168,6 +168,13 @@ than adding one.
 None. No new network endpoint, auth path, file-access pattern or schema change at a trust
 boundary was introduced; both edits narrow existing surface.
 
+## Self-Check: PASSED
+
+All four claimed files exist on disk (`web/server.py`, `web/tests/test_chat_ws.py`,
+`web/tests/test_turn_probe.py`, this summary) and all five claimed commits are present in
+`git log aab726f..HEAD` (`67fce13`, `7a77aa4`, `91ef07a`, `1090706`, `344e98f`). No file
+deletions in any commit; working tree clean.
+
 ---
 *Phase: 02-authority-safety-layer*
 *Completed: 2026-08-02*
