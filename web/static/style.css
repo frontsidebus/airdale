@@ -679,6 +679,72 @@ html, body {
   letter-spacing: 2px;
 }
 
+/* ── Authority announcements ─────────────────────────── */
+
+/* AUTH-06: MERLIN reporting a change in what it may do. Not a command outcome —
+   nothing was asked for and nothing was sent — so it deliberately does not use
+   .command-status-msg and carries no ✓/✗/○/⊘ icon. The filled background and the
+   AUTHORITY tag are the distinguishing marks: none of the four command rows has
+   either, so this cannot be scanned as an executed, failed, advisory or withheld
+   command. The hues are the existing badge vocabulary rather than new colours —
+   an announcement is painted in the colour of the level it announces. */
+.authority-event-msg {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-sm);
+  padding: var(--space-sm);
+  margin: var(--space-xs) 0;
+  font-size: var(--text-sm);
+  border-left: 3px solid var(--border-bright);
+  border-radius: 2px;
+  background: rgba(240, 192, 64, 0.05);
+}
+
+.authority-event-msg .auth-event-tag {
+  font-weight: 700;
+  font-size: var(--text-xs);
+  letter-spacing: 2px;
+}
+
+.authority-event-msg .auth-event-text {
+  font-weight: 400;
+  letter-spacing: 0.5px;
+  color: var(--text-primary);
+}
+
+/* Override: MERLIN has stood down to advisory. Cyan, matching the ADVISORY badge
+   the same event drives — restricted, not faulted. */
+.authority-event-msg.auth-event-override {
+  border-left-color: var(--cyan);
+  background: rgba(78, 205, 196, 0.08);
+}
+
+.authority-event-msg.auth-event-override .auth-event-tag {
+  color: var(--cyan);
+  text-shadow: 0 0 6px var(--cyan-glow);
+}
+
+/* Restore: the cooldown lapsed and the configured level is back. Green, matching
+   the FULL badge — MERLIN is armed again. */
+.authority-event-msg.auth-event-restore {
+  border-left-color: var(--green);
+  background: rgba(68, 255, 102, 0.06);
+}
+
+.authority-event-msg.auth-event-restore .auth-event-tag {
+  color: var(--green);
+  text-shadow: 0 0 6px var(--green-glow);
+}
+
+/* An announcement whose event name the browser does not recognise still renders,
+   in the neutral amber of the surrounding chrome. Rendering it plainly is the
+   point: an unknown authority event must look unfamiliar rather than be
+   laundered into one of the two known ones. */
+.authority-event-msg.auth-event-other .auth-event-tag {
+  color: var(--amber);
+}
+
 /* ── Command toast notifications ────────────────────── */
 
 #command-toast-container {
