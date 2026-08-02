@@ -522,9 +522,7 @@ class TestAnnouncementQueueIsBounded:
     async def test_a_caller_supplied_queue_is_used_as_given(self) -> None:
         clock = _FakeClock()
         supplied: asyncio.PriorityQueue[ProactiveEvent] = asyncio.PriorityQueue(maxsize=3)
-        authority = AuthorityState(
-            AuthorityLevel.FULL, override_cooldown_s=COOLDOWN_S, clock=clock
-        )
+        authority = AuthorityState(AuthorityLevel.FULL, override_cooldown_s=COOLDOWN_S, clock=clock)
         detector = OverrideDetector(authority, _client(), event_queue=supplied, clock=clock)
 
         assert detector.events is supplied

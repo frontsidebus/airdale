@@ -42,6 +42,7 @@ detection and checklist automation as a side effect. Only its
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import Callable
@@ -53,6 +54,16 @@ from .proactive_monitor import ProactiveEvent
 from .sim_client import SimState, TelemetryClient
 
 logger = logging.getLogger(__name__)
+
+
+#: Announcements the queue will hold before it starts discarding.
+#:
+#: An authority announcement is produced at most once per cooldown drop and once
+#: per lapse, so a live consumer is never more than one or two behind. Thirty-two
+#: is therefore far beyond any real backlog: a queue that reaches it is evidence
+#: the consumer is *gone*, not that it is slow. Bounding it turns "nobody is
+#: draining" from an invisible slow leak into a logged warning.
+MAX_PENDING_ANNOUNCEMENTS: int = 32
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +206,9 @@ class OverrideDetector:
         self._verify_timeout_s = verify_timeout_s
         self._clock = clock
         self._events: asyncio.PriorityQueue[ProactiveEvent] = (
-            event_queue if event_queue is not None else asyncio.PriorityQueue()
+            event_queue
+            if event_queue is not None
+            else asyncio.PriorityQueue(maxsize=MAX_PENDING_ANNOUNCEMENTS)
         )
 
         self._prev_state: SimState | None = None
@@ -203,11 +216,23 @@ class OverrideDetector:
 
     @property
     def events(self) -> asyncio.PriorityQueue[ProactiveEvent]:
-        """Announcements awaiting a consumer.
+        """Announcements awaiting delivery to the pilot.
 
-        This phase's pilot-facing channel is ``/api/status`` plus the browser
-        badge; the queue exists so a later consumer can drain it without this
-        module knowing who that is.
+        This queue is the pilot-facing half of AUTH-06 and it has exactly one
+        consumer per process, named here so it cannot ship unconsumed again:
+
+        * CLI -- :func:`orchestrator.main.drain_authority_events`, a background
+          task that prints each message and speaks it through ``VoiceOutput``.
+        * Browser -- ``web.server._authority_event_pump``, which forwards each
+          message to the connected clients.
+
+        Exactly one of the two drains it in a given process; a second consumer
+        would split the stream and each would see only some announcements.
+
+        The queue is bounded at :data:`MAX_PENDING_ANNOUNCEMENTS`, and reaching
+        that bound means the consumer is not running -- the level drop still
+        happened, but nobody told the pilot. It shipped that way once (Gap 3 /
+        WR-06): the drop worked and the announcement went nowhere.
         """
         return self._events
 
@@ -282,6 +307,43 @@ class OverrideDetector:
                 return True
         return False
 
+    def _publish(self, event: ProactiveEvent) -> None:
+        """Queue an announcement. Never raises, never awaits.
+
+        Both call sites run inside the telemetry callback, whose exceptions
+        ``TelemetryClient``'s subscriber loop swallows -- so anything that can
+        raise here fails silently, and a lost announcement would be invisible.
+
+        **Drop policy on a full queue.** An ``asyncio.PriorityQueue`` has no
+        "oldest" accessor, so the item removed to make room is whichever the
+        heap yields: for this queue, the highest-priority pending event. Which
+        one goes matters less than that the newest one gets in. "Is MERLIN
+        advisory right now" is a question only the latest event answers, and an
+        announcement nobody has drained in :data:`MAX_PENDING_ANNOUNCEMENTS`
+        events is already stale.
+        """
+        # Deliberately a single enqueue call site rather than a write/discard/write
+        # sequence: this method is the sole writer to the queue, and grepping the
+        # module for a second occurrence is how a future edit that publishes around
+        # it gets caught. The loop runs at most twice -- the discard is the only
+        # thing that can make room, so a still-full queue on the retry means
+        # someone else is writing, and dropping this announcement beats raising.
+        for attempt in range(2):
+            try:
+                self._events.put_nowait(event)
+                return
+            except asyncio.QueueFull:
+                if attempt > 0:
+                    return
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    self._events.get_nowait()
+                logger.warning(
+                    "Authority announcement queue is full (%d pending); discarded one "
+                    "queued announcement to make room. No consumer appears to be "
+                    "draining it -- the pilot is not being told about authority changes",
+                    MAX_PENDING_ANNOUNCEMENTS,
+                )
+
     def _record_override(self, paths: list[str]) -> None:
         """Drop authority for the cooldown, announcing only on the first drop."""
         systems = ", ".join(FIELD_LABELS.get(path, path) for path in paths)
@@ -295,7 +357,7 @@ class OverrideDetector:
             "Pilot override detected on %s; MERLIN is advisory only until the cooldown lapses",
             systems,
         )
-        self._events.put_nowait(
+        self._publish(
             ProactiveEvent(
                 type="authority",
                 priority=1,
@@ -308,7 +370,7 @@ class OverrideDetector:
         """Announce the auto-restore half of D-14, once per lapsed cooldown."""
         level = self._authority.configured_level.value
         logger.info("Override cooldown lapsed; MERLIN is back to %s authority", level)
-        self._events.put_nowait(
+        self._publish(
             ProactiveEvent(
                 type="authority",
                 priority=0,
