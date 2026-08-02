@@ -13,6 +13,7 @@ from orchestrator.command_history import CommandHistory
 from orchestrator.command_safety import CommandSafetyCheck, SafetyResult
 from orchestrator.command_verifier import CommandVerifier
 from orchestrator.sim_client import (
+    AutopilotState,
     EngineData,
     Engines,
     Environment,
@@ -1432,20 +1433,37 @@ class TestAuthorityNoneEquivalentToFull:
         assert "authority or _authority" not in text
 
 
+_CR03_REGRESSION = (
+    "REGRESSION (VERIFICATION Gap 1, finding CR-03, threat T-02-11-02/03): "
+    "`undo_last_command` popped the history record *before* the authority gate "
+    "ran and then wrote `undo_description: \"Reversed <cmd>\"` unconditionally. At "
+    "advisory, on a withhold, on a block or on an adapter NACK the pilot was told "
+    "the command had been reversed, while the record that would have let them try "
+    "again had already been destroyed -- they could neither undo it later nor tell "
+    "that the undo had not happened. Pop only after `_was_transmitted(result)`."
+)
+
+
+def _history_with_gear_down() -> CommandHistory:
+    """One reversible GEAR_DOWN record — the fixture every undo case starts from."""
+    history = CommandHistory()
+    history.record(
+        command="GEAR_DOWN",
+        value=0,
+        system="gear",
+        action="down",
+        state_before=SimState(),
+    )
+    return history
+
+
 class TestUndoThreadsAuthority:
     """The undo path is a command path; it must go through the same gate."""
 
     @pytest.mark.asyncio
     async def test_undo_at_advisory_sends_nothing(self) -> None:
         mock_client = _control_client()
-        history = CommandHistory()
-        history.record(
-            command="GEAR_DOWN",
-            value=0,
-            system="gear",
-            action="down",
-            state_before=SimState(),
-        )
+        history = _history_with_gear_down()
 
         result = await undo_last_command(
             mock_client,
@@ -1459,4 +1477,154 @@ class TestUndoThreadsAuthority:
         mock_client.send_command.assert_not_called()
         assert result["advisory"] is True
         assert result["would_execute"] == "GEAR_UP"
+        assert len(history) == 1, _CR03_REGRESSION
+        assert result["undo_target"] == "GEAR_DOWN"
+        assert result["undo_description"].startswith("Would reverse"), _CR03_REGRESSION
+        assert "undone_command" not in result, _CR03_REGRESSION
+
+    @pytest.mark.asyncio
+    async def test_undo_withheld_at_assisted_keeps_the_record(self) -> None:
+        mock_client = _control_client()
+        history = _history_with_gear_down()
+
+        result = await undo_last_command(
+            mock_client,
+            history,
+            safety_check=_StubSafetyCheck("warning", "gear retraction below 50 ft"),
+            authority=AuthorityState(AuthorityLevel.ASSISTED),
+        )
+
+        mock_client.send_command.assert_not_called()
+        assert result["withheld"] is True
+        assert len(history) == 1, _CR03_REGRESSION
+        assert result["undo_description"].startswith("Would reverse"), _CR03_REGRESSION
+        assert "undone_command" not in result, _CR03_REGRESSION
+
+    @pytest.mark.asyncio
+    async def test_undo_nacked_by_the_adapter_keeps_the_record(self) -> None:
+        """The shape with no `error` key — the one every heuristic here has missed."""
+        mock_client = _control_client(dict(_NACK))
+        history = _history_with_gear_down()
+
+        result = await undo_last_command(
+            mock_client,
+            history,
+            safety_check=_StubSafetyCheck(),
+            authority=AuthorityState(AuthorityLevel.FULL),
+        )
+
+        mock_client.send_command.assert_awaited_once_with("GEAR_UP", 0)
+        assert result["success"] is False
+        assert len(history) == 1, _CR03_REGRESSION
+        assert result["undo_description"].startswith("Would reverse"), _CR03_REGRESSION
+        assert "undone_command" not in result, _CR03_REGRESSION
+
+    @pytest.mark.asyncio
+    async def test_undo_refused_by_the_authority_floor_keeps_the_record(self) -> None:
+        mock_client = _control_client(dict(_FLOOR_REFUSAL))
+        history = _history_with_gear_down()
+
+        result = await undo_last_command(
+            mock_client,
+            history,
+            safety_check=_StubSafetyCheck(),
+            authority=AuthorityState(AuthorityLevel.FULL),
+        )
+
+        assert result["refused"] is True
+        assert len(history) == 1, _CR03_REGRESSION
+        assert "undone_command" not in result, _CR03_REGRESSION
+
+    @pytest.mark.asyncio
+    async def test_undo_blocked_by_safety_keeps_the_record(self) -> None:
+        mock_client = _control_client()
+        history = _history_with_gear_down()
+
+        result = await undo_last_command(
+            mock_client,
+            history,
+            safety_check=_StubSafetyCheck("blocked", "gear up on the ground"),
+            authority=AuthorityState(AuthorityLevel.FULL),
+        )
+
+        mock_client.send_command.assert_not_called()
+        assert result["blocked"] is True
+        assert len(history) == 1, _CR03_REGRESSION
+        assert result["undo_description"].startswith("Would reverse"), _CR03_REGRESSION
+        assert "undone_command" not in result, _CR03_REGRESSION
+
+    @pytest.mark.asyncio
+    async def test_undo_transmitted_pops_exactly_one_record(self) -> None:
+        mock_client = _control_client({"success": True, "message": ""})
+        history = _history_with_gear_down()
+
+        result = await undo_last_command(
+            mock_client,
+            history,
+            safety_check=_StubSafetyCheck(),
+            authority=AuthorityState(AuthorityLevel.FULL),
+        )
+
+        mock_client.send_command.assert_awaited_once_with("GEAR_UP", 0)
+        assert len(history) == 0, _CR03_REGRESSION
         assert result["undone_command"] == "GEAR_DOWN"
+        assert result["undo_description"].startswith("Reversed GEAR_DOWN"), _CR03_REGRESSION
+
+    @pytest.mark.asyncio
+    async def test_undo_description_keeps_the_value_suffix_on_both_branches(self) -> None:
+        """A value-restore undo names the value it would set, sent or not."""
+        state_before = SimState(autopilot=AutopilotState(heading=270))
+        history = CommandHistory()
+        history.record(
+            command="HEADING_BUG_SET",
+            value=90,
+            system="autopilot",
+            action="heading",
+            state_before=state_before,
+        )
+
+        withheld_client = _control_client()
+        withheld = await undo_last_command(
+            withheld_client,
+            history,
+            safety_check=_StubSafetyCheck(),
+            authority=AuthorityState(AuthorityLevel.ADVISORY),
+        )
+
+        assert withheld["undo_description"].endswith("270.0"), _CR03_REGRESSION
+        assert len(history) == 1, _CR03_REGRESSION
+
+        sent = await undo_last_command(
+            _control_client({"success": True, "message": ""}),
+            history,
+            safety_check=_StubSafetyCheck(),
+            authority=AuthorityState(AuthorityLevel.FULL),
+        )
+
+        assert sent["undo_description"].endswith("270.0")
+        assert sent["undone_command"] == "HEADING_BUG_SET"
+        assert len(history) == 0
+
+    @pytest.mark.asyncio
+    async def test_undo_with_empty_history_is_unchanged(self) -> None:
+        result = await undo_last_command(_control_client(), CommandHistory())
+
+        assert result == {"error": "No commands to undo"}
+
+    @pytest.mark.asyncio
+    async def test_undo_non_reversible_does_not_pop(self) -> None:
+        mock_client = _control_client()
+        history = CommandHistory()
+        history.record(
+            command="TOGGLE_STARTER1",
+            value=0,
+            system="starter",
+            action="engage",
+            state_before=SimState(),
+        )
+
+        result = await undo_last_command(mock_client, history)
+
+        assert "not reversible" in result["error"]
+        mock_client.send_command.assert_not_called()
+        assert len(history) == 1, _CR03_REGRESSION
