@@ -121,8 +121,8 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 02-14-PLAN.md — Bound the newly-reachable command surface: `parking_brake` refusal and six fuel/mixture/brake safety rules (Gap 2 / CR-04, CR-05)
-- [ ] 02-15-PLAN.md — `authority_event` frames to every chat socket and the browser announcement, with a human verification checkpoint (Gap 3 browser half, AUTH-06)
+- [x] 02-14-PLAN.md — Bound the newly-reachable command surface: `parking_brake` refusal and six fuel/mixture/brake safety rules (Gap 2 / CR-04, CR-05)
+- [x] 02-15-PLAN.md — `authority_event` frames to every chat socket and the browser announcement, with a human verification checkpoint (Gap 3 browser half, AUTH-06)
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
@@ -170,7 +170,7 @@ procedures through `set_aircraft_control` closes it.
 | Phase | Milestone | Plans Complete | Status      | Completed  |
 |-------|-----------|----------------|-------------|------------|
 | 1. Housekeeping           | v1.2 | 3/3 | Complete    | 2026-03-28 |
-| 2. TTS Integration        | v1.2 | 13/16 | In Progress|  |
+| 2. TTS Integration        | v1.2 | 15/16 | In Progress|  |
 | 3. Whisper Consolidation  | v1.2 | 2/2 | Complete    | 2026-03-28 |
 | 4. Web Server Refactor    | v1.2 | 2/2 | Complete    | 2026-04-16 |
 | 5. Web Server Tests       | v1.2 | 2/2 | Complete    | 2026-03-28 |
