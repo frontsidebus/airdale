@@ -413,7 +413,7 @@ Claude is instructed to execute commands immediately when the pilot's order is u
 5. The confirmation text passes through the TTS preprocessor (ICAO digit pronunciation, markdown stripping)
 6. Cartesia Sonic-3 synthesizes the audio and streams it to the browser
 
-Critical system commands (gear, autopilot master, parking brake) are flagged with a `safety_note` in the tool result, which Claude can use to add appropriate emphasis or caution to the confirmation.
+Critical system commands (gear, autopilot master, parking brake) are flagged with a `safety_note` in the tool result, which Claude can use to add appropriate emphasis or caution to the confirmation. The note is attached only when the command was actually transmitted and acknowledged — one refused by the authority gate, NACKed by the adapter, or timed out carries no `safety_note`, so the confirmation never claims a critical change that did not reach the aircraft.
 
 ---
 
