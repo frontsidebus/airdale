@@ -272,6 +272,33 @@ def _resolve_authority(
     return AuthorityLevel.FULL, AuthorityReason.CONFIG
 
 
+def _was_transmitted(result: dict[str, Any]) -> bool:
+    """Did this command actually reach the aircraft?
+
+    The one predicate every "say it happened" decision on this path reads. Both
+    halves are load-bearing:
+
+    - ``bool(result.get("success"))`` alone is not enough: the authority floor
+      refusal and the ack timeout both set ``success: False`` *and* an ``error``,
+      and reading only ``error`` would be the same heuristic that made the browser
+      render a refused command as a green success (CR-01).
+    - ``"error" not in result`` alone is not enough either: a negative adapter ack
+      is ``{"success": False, "message": "Unknown command"}`` with **no** ``error``
+      key. ``sim_client.send_command`` documents that shape as routine —
+      unregistered events return exactly it — and it is the shape every heuristic
+      in this codebase has got wrong.
+
+    A dict carrying neither key is not evidence of a transmission, so it fails
+    closed. So does a contradictory dict carrying both.
+
+    ``web/server.py::_on_tool_result`` mirrors this exact expression for the
+    browser, because the same tool result crosses both surfaces. The two must not
+    drift: a divergence recreates precisely the false-confirmation class of bug
+    this predicate exists to close (threat T-02-11-05).
+    """
+    return bool(result.get("success")) and "error" not in result
+
+
 def _describe_intent(system: str, action: str, value: float | None) -> str:
     """Render a requested command as a short human-readable phrase."""
     phrase = f"set {system} {action}"
@@ -303,8 +330,16 @@ async def set_aircraft_control(
       action is returned instead, carrying the safety verdict so Claude can
       describe both what it would do and any concern.
     - ``assisted`` -- a ``warning``-severity verdict withholds the command; a
-      clean verdict executes it.
+      clean verdict executes it; an *absent* verdict (telemetry unreachable, so
+      ``command_safety`` never ran) also withholds. Missing evidence is not
+      evidence of safety, and ``assisted`` is the level whose whole job is to be
+      conservative — treating "I could not check" as "it checked out" is a
+      fail-open at exactly the wrong level (WR-10). The discriminator is the
+      ``None``-ness of the verdict, never its severity string: a *clean* verdict
+      also carries ``severity == ""``.
     - ``full`` -- unchanged behaviour: execute unless safety says ``blocked``.
+      That deliberately includes executing when telemetry is unavailable and there
+      is therefore no verdict at all (AUTH-04).
 
     ``blocked`` always wins: the safety short-circuit runs before the gate, so a
     blocked command reports as blocked at every authority level.
@@ -388,6 +423,10 @@ async def set_aircraft_control(
     # definitions or the system prompt, and set_aircraft_control stays in
     # TOOL_DEFINITIONS at every level (D-07) so the cached persona block survives.
     level, reason = _resolve_authority(authority)
+    # A CLEAN verdict and an ABSENT verdict both render as severity "", so the
+    # severity string cannot tell them apart. Keep the distinction in its own
+    # local and branch on that -- see the assisted arm below (WR-10).
+    has_safety_verdict = safety_result is not None
     safety_severity = safety_result.severity if safety_result is not None else ""
     safety_detail = safety_result.reason if safety_result is not None else ""
 
@@ -417,15 +456,47 @@ async def set_aircraft_control(
             "message": message,
         }
 
-    if level == AuthorityLevel.ASSISTED and safety_severity == "warning":
-        logger.info(
-            "Authority %s (%s): withholding %s -- %s",
-            level.value,
-            reason.value,
-            command,
-            safety_detail,
-        )
-        return {
+    # ``not has_safety_verdict`` is deliberately NOT a test for an empty severity
+    # string: a clean verdict also carries one, so widening the severity tuple would
+    # withhold every command at assisted, including the ones that checked out. The
+    # discriminator is whether a verdict exists at all (02-REVIEW.md proposed the
+    # broken form; a structural test in test_tools.py keeps it out).
+    if level == AuthorityLevel.ASSISTED and (
+        safety_severity == "warning" or not has_safety_verdict
+    ):
+        if has_safety_verdict:
+            logger.info(
+                "Authority %s (%s): withholding %s -- %s",
+                level.value,
+                reason.value,
+                command,
+                safety_detail,
+            )
+            safety_payload = {"severity": "warning", "reason": safety_detail}
+            message = (
+                f"Holding {command} -- {safety_detail}. At assisted authority I don't "
+                f"act on a flagged command, so this one is yours to make. Say the word "
+                f"and I'll send it."
+            )
+        else:
+            logger.info(
+                "Authority %s (%s): withholding %s -- no safety verdict "
+                "(telemetry unavailable, so command_safety never ran)",
+                level.value,
+                reason.value,
+                command,
+            )
+            safety_payload = {
+                "severity": "",
+                "reason": "telemetry unavailable -- no safety verdict",
+            }
+            message = (
+                f"Holding {command} -- I can't see the aircraft's state right now, so I "
+                f"have no verdict on this command. Nothing was sent. At assisted authority "
+                f"I don't act on a command I couldn't check; tell me to go ahead and I'll "
+                f"send it."
+            )
+        withheld: dict[str, Any] = {
             "withheld": True,
             "command": command,
             "sim_value": sim_value,
@@ -433,13 +504,14 @@ async def set_aircraft_control(
             "action": action,
             "authority_level": level.value,
             "authority_reason": reason.value,
-            "safety": {"severity": "warning", "reason": safety_detail},
-            "message": (
-                f"Holding {command} -- {safety_detail}. At assisted authority I don't "
-                f"act on a flagged command, so this one is yours to make. Say the word "
-                f"and I'll send it."
-            ),
+            "safety": safety_payload,
+            "message": message,
         }
+        if not has_safety_verdict:
+            # Its own marker so a reader -- Claude, web/server.py, app.js -- never
+            # mistakes "I couldn't check" for "a safety rule fired".
+            withheld["no_verdict"] = True
+        return withheld
 
     # Capture pre-command state for verification and undo
     state_before = sim_state
@@ -466,7 +538,11 @@ async def set_aircraft_control(
             state_before=state_before or SimState(),
         )
 
-    if command in CRITICAL_COMMANDS:
+    # "executed" is a claim, and it is only true of a command the adapter
+    # acknowledged. This dict goes to Claude verbatim on both the CLI and the
+    # browser path, so an ungated attach told the pilot a critical system had
+    # changed in the same dict whose ``error`` said nothing was sent (CR-02).
+    if command in CRITICAL_COMMANDS and _was_transmitted(result):
         result["safety_note"] = "Critical system change executed"
 
     # Verify the command took effect if verifier is available and command succeeded
