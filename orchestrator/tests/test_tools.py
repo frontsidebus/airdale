@@ -26,6 +26,7 @@ from orchestrator.sim_client import (
 from orchestrator.tools import (
     DEFAULT_CHECKLISTS,
     _resolve_command,
+    _was_transmitted,
     create_flight_plan,
     get_checklist,
     get_sim_state,
@@ -1072,6 +1073,311 @@ class TestAuthorityWithhold:
         assert result["authority_level"] == "assisted"
         assert "error" not in result
         assert "gear extension above 180 kt" in result["message"]
+
+
+# ---------------------------------------------------------------------------
+# Gap 1 / CR-02 -- "executed" is a claim, and it must be earned
+# ---------------------------------------------------------------------------
+
+
+_CR02_REGRESSION = (
+    "REGRESSION (VERIFICATION Gap 1, finding CR-02, threat T-02-11-01): "
+    '`safety_note` said "Critical system change executed" on a command the '
+    "adapter NACKed or the authority floor refused -- in the same dict whose "
+    "`error` said nothing was sent. Claude relays that dict to the pilot on both "
+    "the CLI and the browser path, so a gear that never moved is reported as a "
+    "critical system change. Gate the note on `_was_transmitted(result)`, never on "
+    "membership in CRITICAL_COMMANDS alone."
+)
+
+_NACK = {"success": False, "message": "Unknown command"}
+_FLOOR_REFUSAL = {
+    "success": False,
+    "error": (
+        "Refused: MERLIN holds advisory authority only (watchdog); "
+        "nothing was sent to the aircraft."
+    ),
+    "refused": True,
+    "authority_level": "advisory",
+    "authority_reason": "watchdog",
+}
+
+
+class TestWasTransmitted:
+    """The one predicate every "did this actually reach the aircraft" check reads.
+
+    Both halves of the expression are load-bearing. ``success`` alone misses the
+    floor refusal and the ack timeout (both set ``success: False`` *and* an
+    ``error``); ``"error" not in result`` alone misses the negative adapter ack,
+    which ``sim_client.py`` documents as routine and which carries no ``error``
+    key at all. It is the shape every heuristic in this codebase has got wrong.
+    """
+
+    @pytest.mark.parametrize(
+        ("result", "expected"),
+        [
+            ({"success": True, "message": ""}, True),
+            ({"success": True}, True),
+            (_NACK, False),
+            (_FLOOR_REFUSAL, False),
+            ({"success": False, "error": "Command timed out"}, False),
+            ({"success": False, "error": "Failed to send command: boom"}, False),
+            ({"advisory": True, "would_execute": "GEAR_DOWN"}, False),
+            ({"withheld": True, "command": "GEAR_DOWN"}, False),
+            ({"command": "GEAR_DOWN"}, False),
+            ({}, False),
+            ({"success": True, "error": "Command timed out"}, False),
+        ],
+        ids=[
+            "positive-ack-is-a-transmission",
+            "bare-success-is-a-transmission",
+            "negative-ack-carries-no-error-key",
+            "authority-floor-refusal",
+            "ack-timeout",
+            "send-failure",
+            "advisory-dry-run",
+            "assisted-withhold",
+            "neither-key-fails-closed",
+            "empty-dict-fails-closed",
+            "contradictory-dict-fails-closed",
+        ],
+    )
+    def test_predicate(self, result: dict[str, object], expected: bool) -> None:
+        assert _was_transmitted(result) is expected, _CR02_REGRESSION
+
+
+class TestCriticalSafetyNoteRequiresTransmission:
+    """CR-02: the note is attached only to a command the adapter acknowledged."""
+
+    @pytest.mark.asyncio
+    async def test_nacked_critical_command_has_no_safety_note(self) -> None:
+        mock_client = _control_client(dict(_NACK))
+
+        result = await set_aircraft_control(
+            mock_client,
+            "gear",
+            "down",
+            safety_check=_StubSafetyCheck(),
+            authority=AuthorityState(AuthorityLevel.FULL),
+        )
+
+        assert result["success"] is False
+        assert "safety_note" not in result, _CR02_REGRESSION
+
+    @pytest.mark.asyncio
+    async def test_floor_refused_critical_command_has_no_safety_note(self) -> None:
+        """The floor re-reads authority at dispatch, so the gate can allow and it refuse."""
+        mock_client = _control_client(dict(_FLOOR_REFUSAL))
+
+        result = await set_aircraft_control(
+            mock_client,
+            "gear",
+            "down",
+            safety_check=_StubSafetyCheck(),
+            authority=AuthorityState(AuthorityLevel.FULL),
+        )
+
+        assert result["refused"] is True
+        assert "safety_note" not in result, _CR02_REGRESSION
+
+    @pytest.mark.asyncio
+    async def test_advisory_dry_run_has_no_safety_note(self) -> None:
+        mock_client = _control_client()
+
+        result = await set_aircraft_control(
+            mock_client,
+            "gear",
+            "down",
+            safety_check=_StubSafetyCheck(),
+            authority=AuthorityState(AuthorityLevel.ADVISORY),
+        )
+
+        mock_client.send_command.assert_not_called()
+        assert result["advisory"] is True
+        assert "safety_note" not in result, _CR02_REGRESSION
+
+    @pytest.mark.asyncio
+    async def test_transmitted_critical_command_still_carries_the_note(self) -> None:
+        mock_client = _control_client({"success": True})
+
+        result = await set_aircraft_control(
+            mock_client,
+            "gear",
+            "down",
+            safety_check=_StubSafetyCheck(),
+            authority=AuthorityState(AuthorityLevel.FULL),
+        )
+
+        assert result["safety_note"] == "Critical system change executed"
+
+    @pytest.mark.parametrize(
+        "send_result",
+        [{"success": True, "message": ""}, dict(_NACK)],
+        ids=["acknowledged", "nacked"],
+    )
+    @pytest.mark.asyncio
+    async def test_non_critical_command_never_carries_the_note(
+        self, send_result: dict[str, object]
+    ) -> None:
+        mock_client = _control_client(send_result)
+
+        result = await set_aircraft_control(
+            mock_client,
+            "flaps",
+            "2",
+            safety_check=_StubSafetyCheck(),
+            authority=AuthorityState(AuthorityLevel.FULL),
+        )
+
+        assert "safety_note" not in result
+
+
+# ---------------------------------------------------------------------------
+# WR-10 part 1 -- assisted must not read "I could not check" as "it checked out"
+# ---------------------------------------------------------------------------
+
+
+_WR10_REGRESSION = (
+    "REGRESSION (VERIFICATION WR-10 part 1, threat T-02-11-04): at `assisted`, an "
+    "absent safety verdict (`safety_result is None`, telemetry unreachable) took "
+    "the same branch as a clean one, so the one level whose job is to be "
+    "conservative transmitted an unchecked command the moment it could not see the "
+    "aircraft. Missing evidence is not evidence of safety. Discriminate on "
+    "`safety_result is None` -- never on the severity string, because a CLEAN "
+    'verdict also renders as "" and gating on that withholds everything.'
+)
+
+
+def _blind_client() -> MagicMock:
+    """A client that cannot report state: every safety check comes back absent."""
+    mock_client = _control_client()
+    mock_client.get_state = AsyncMock(side_effect=ConnectionError("telemetry down"))
+    return mock_client
+
+
+class TestAssistedWithholdsWithoutAVerdict:
+    """AUTH-03: no verdict is not a clean verdict."""
+
+    @pytest.mark.asyncio
+    async def test_assisted_withholds_when_telemetry_is_unreachable(self) -> None:
+        mock_client = _blind_client()
+
+        result = await set_aircraft_control(
+            mock_client,
+            "gear",
+            "down",
+            authority=AuthorityState(AuthorityLevel.ASSISTED),
+        )
+
+        mock_client.send_command.assert_not_called()
+        assert result["withheld"] is True, _WR10_REGRESSION
+        assert result["no_verdict"] is True, _WR10_REGRESSION
+        assert result["command"] == "GEAR_DOWN"
+        assert result["authority_level"] == "assisted"
+        # A withhold is a decision, not a failure -- an "error" key makes the web
+        # layer render it as a failed command (B8).
+        assert "error" not in result, result
+
+    @pytest.mark.asyncio
+    async def test_no_verdict_withhold_does_not_claim_a_safety_warning(self) -> None:
+        mock_client = _blind_client()
+
+        result = await set_aircraft_control(
+            mock_client,
+            "gear",
+            "down",
+            authority=AuthorityState(AuthorityLevel.ASSISTED),
+        )
+
+        assert result["safety"]["severity"] == "", _WR10_REGRESSION
+        assert "no safety verdict" in result["safety"]["reason"]
+        message = result["message"].lower()
+        assert "nothing was sent" in message
+        assert "no verdict" in message
+        assert "warning" not in message, (
+            "the no-verdict withhold must not be mistaken for a flagged command: "
+            "nothing fired, MERLIN simply cannot see the aircraft (WR-10)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_assisted_clean_verdict_still_executes(self) -> None:
+        """The other half of WR-10: a clean verdict must NOT be caught by the fix."""
+        mock_client = _control_client()
+
+        result = await set_aircraft_control(
+            mock_client,
+            "gear",
+            "down",
+            safety_check=_StubSafetyCheck(),
+            authority=AuthorityState(AuthorityLevel.ASSISTED),
+        )
+
+        mock_client.send_command.assert_awaited_once_with("GEAR_DOWN", 0)
+        assert "withheld" not in result, _WR10_REGRESSION
+        assert "no_verdict" not in result, _WR10_REGRESSION
+
+    @pytest.mark.asyncio
+    async def test_assisted_warning_withhold_is_not_marked_no_verdict(self) -> None:
+        mock_client = _control_client()
+
+        result = await set_aircraft_control(
+            mock_client,
+            "gear",
+            "down",
+            safety_check=_StubSafetyCheck("warning", "gear extension above 180 kt"),
+            authority=AuthorityState(AuthorityLevel.ASSISTED),
+        )
+
+        assert result["withheld"] is True
+        assert "no_verdict" not in result, (
+            "a flagged command and an unseeable aircraft are different states and "
+            "must stay distinguishable in the dict Claude reads (WR-10)"
+        )
+        assert result["safety"]["severity"] == "warning"
+
+    @pytest.mark.asyncio
+    async def test_full_still_executes_without_a_verdict(self) -> None:
+        """AUTH-04: `full` deliberately keeps today's behaviour when telemetry is down."""
+        mock_client = _blind_client()
+
+        result = await set_aircraft_control(
+            mock_client,
+            "gear",
+            "down",
+            authority=AuthorityState(AuthorityLevel.FULL),
+        )
+
+        mock_client.send_command.assert_awaited_once_with("GEAR_DOWN", 0)
+        assert "withheld" not in result
+        assert "no_verdict" not in result
+
+    @pytest.mark.asyncio
+    async def test_advisory_without_a_verdict_is_still_a_dry_run(self) -> None:
+        """Advisory outranks the no-verdict withhold: it already sends nothing."""
+        mock_client = _blind_client()
+
+        result = await set_aircraft_control(
+            mock_client,
+            "gear",
+            "down",
+            authority=AuthorityState(AuthorityLevel.ADVISORY),
+        )
+
+        mock_client.send_command.assert_not_called()
+        assert result["advisory"] is True
+        assert "withheld" not in result
+
+    def test_the_broken_review_fix_is_not_present(self) -> None:
+        """02-REVIEW.md proposed a form that withholds every assisted command."""
+        source = tools_module.__file__
+        assert source is not None
+        with open(source, encoding="utf-8") as handle:
+            text = handle.read()
+        assert 'safety_severity in ("warning", "")' not in text, (
+            "a CLEAN verdict also carries severity == '', so this form withholds "
+            "every command at assisted, including the ones that checked out "
+            "(WR-10). Discriminate on `safety_result is None`."
+        )
 
 
 class TestAuthorityNoneEquivalentToFull:
