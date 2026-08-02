@@ -205,22 +205,36 @@ This follows correctly from an explicit non-goal: the authority phase deliberate
 
 Read plainly: **do not treat `assisted` as broad protection today.** It is real protection for gear, flaps, autopilot, and throttle, and it is a no-op everywhere else. Use `advisory` if you want MERLIN to touch nothing.
 
-### Commands MERLIN Refuses Outright -- `carb_heat` and `fuel_pump`
+### Commands MERLIN Refuses Outright -- `parking_brake`, `carb_heat` and `fuel_pump`
 
-Independent of authority level, `carb_heat` and `fuel_pump` refuse an absolute `on` or `off`:
+Independent of authority level, three systems refuse a request for an absolute *position*:
+
+| System | Refused actions | Still works | Reachable today? |
+|---|---|---|---|
+| `parking_brake` | `on`, `off`, `release`, `set`, `apply`, `engage` | `toggle` | **Yes** -- in the tool enum, in `CRITICAL_COMMANDS`, registered in the adapter |
+| `carb_heat` | `on`, `off` | `toggle` | No -- deferred under CMD-09, not exposed, not registered |
+| `fuel_pump` | `on`, `off` | `toggle` | No -- deferred under CMD-09, not exposed, not registered |
 
 ```
-set_aircraft_control("carb_heat", "off")
-  -> {"error": "I cannot confirm the current position of the carb heat ...",
+set_aircraft_control("parking_brake", "off")
+  -> {"error": "I cannot confirm the current position of the parking brake ...",
+      "system": "parking_brake", "action": "off", "command": null,
       "unresolvable": true}
 ```
 
-**Why.** Both systems map `"on"`, `"off"` and `"toggle"` to the *same* SimConnect toggle event (`ANTI_ICE_CARB_HEAT_TOGGLE`, `FUEL_PUMP_TOGGLE`). Emitting a toggle in response to "carb heat off" turns carb heat **on** whenever it was already off -- the command does the opposite of what was asked, which in icing conditions is a real hazard.
+**Why.** Each system maps its state words *and* `"toggle"` to the *same* SimConnect toggle event (`PARKING_BRAKES`, `ANTI_ICE_CARB_HEAT_TOGGLE`, `FUEL_PUMP_TOGGLE`). Emitting a toggle in response to "carb heat off" turns carb heat **on** whenever it was already off -- the command does the opposite of what was asked, which in icing conditions is a real hazard.
 
-The obvious fix -- emit the toggle only when the requested state differs from the current one -- is not implementable. There is no carb-heat or fuel-pump position anywhere in the telemetry chain: not in the SimConnect data definition, the adapter model, the universal schema, `SurfaceState`, or the mock adapter. There is nothing to read. Adding it is a four-layer change that is deliberately deferred.
+**`parking_brake` is the one of the three that was actually reachable.** The other two are held back by CMD-09, so their defect is latent; the parking brake is in the `set_aircraft_control` enum, in `CRITICAL_COMMANDS`, and registered in the adapter's `CommandMap`. "Parking brake off" on landing rollout -- with the brake already off, which is the whole point of saying it -- *set* the brake. That is a runway excursion, not a nuisance (CR-04).
+
+The obvious fix -- emit the toggle only when the requested state differs from the current one -- is not implementable. There is no parking-brake, carb-heat or fuel-pump position anywhere in the telemetry chain: not in the SimConnect data definition, the adapter model, the universal schema, `SurfaceState`, or the mock adapter. There is nothing to read. Adding it is a four-layer change that is deliberately deferred, and it should be taken once for all three rather than piecemeal.
+
+The refusal is checked *before* the resolver's result is turned into an error, so a refused action gets the explanation rather than "Unknown control". `command` in the returned dict is `null` when the resolver declines the action outright (`parking_brake`) and carries the toggle event when the resolver still resolves one but the refusal stops it being sent (`carb_heat`, `fuel_pump`) -- read it defensively.
+
+**A blocked safety rule sits behind the surviving `toggle` as well.** `PARKING_BRAKES` is blocked above 5 kt ground speed and warns in flight, so the explicit toggle is bounded too -- refusing the ambiguous verbs and guarding the unambiguous one are separate layers, and this system has both.
 
 **Workaround.** `action="toggle"` works normally and is unaffected. Tell MERLIN what the panel shows if you need a specific position:
 
+> "Parking brake is set, release it."
 > "Carb heat is currently off, toggle it on."
 
 ---
