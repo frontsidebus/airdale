@@ -17,7 +17,7 @@ import json
 import logging
 import math
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -51,6 +51,7 @@ from orchestrator.config import load_settings  # noqa: E402
 from orchestrator.context_store import ContextStore  # noqa: E402
 from orchestrator.flight_phase import FlightPhaseDetector  # noqa: E402
 from orchestrator.override_detector import OverrideDetector  # noqa: E402
+from orchestrator.proactive_monitor import ProactiveEvent  # noqa: E402
 from orchestrator.sim_client import (  # noqa: E402
     HealthMonitor,
     SimState,
@@ -156,6 +157,15 @@ class AppState:
     authority: AuthorityState | None = None
     health: HealthMonitor | None = None  # Subsystem health, incl. command_path (D-17)
     override_detector: OverrideDetector | None = None  # Drops authority on pilot override
+    #: Every currently connected ``/ws/chat`` socket. A fan-out registry for
+    #: server-initiated frames, *not* a session store -- nothing per-client is
+    #: kept here, and two tabs of the same browser are two independent members.
+    #: Membership is owned entirely by ``ws_chat``'s ``accept()`` and its
+    #: ``finally``, plus ``_broadcast_chat`` discarding a socket whose send fails.
+    chat_clients: set[WebSocket] = field(default_factory=set)
+    #: Handle for ``_authority_event_pump``, so shutdown can cancel it. ``None``
+    #: on a directly-built test state, and until ``lifespan`` starts the task.
+    authority_event_task: asyncio.Task[None] | None = None
     tts_cache: dict[str, bytes] = field(default_factory=dict)
     #: client host -> time.monotonic() of its last accepted turn probe
     turn_probe_seen: dict[str, float] = field(default_factory=dict)
@@ -268,6 +278,138 @@ async def _prepopulate_tts_cache(state: AppState) -> None:
             logger.info("Cached TTS phrase: '%s' (%d bytes)", sanitized, len(resp.content))
         except Exception as exc:
             logger.debug("Failed to cache TTS phrase '%s': %s", sanitized, exc)
+
+
+# ---------------------------------------------------------------------------
+# Authority announcements -- AUTH-06's "informs the pilot" clause, browser half
+#
+# ``OverrideDetector`` builds two announcements: one when the pilot works a
+# control MERLIN did not command, and one when the cooldown lapses (D-14). Both
+# went onto a queue this module constructed and never read -- the drop to
+# advisory happened and nobody told the pilot (VERIFICATION Gap 3 / WR-06).
+#
+# The badge added by plan 02-10 is not a substitute. It renders on a 10 s
+# ``pollStatus`` interval and carries no words, so it can read FULL (configured)
+# while the gate is already refusing, and it cannot say "you've taken the flaps".
+# ---------------------------------------------------------------------------
+
+
+def _authority_event_frame(
+    event: ProactiveEvent,
+    authority: AuthorityState | None,
+) -> dict[str, Any]:
+    """Build the ``authority_event`` wire frame for one announcement.
+
+    The three authority keys carry the live ``summary()`` so the browser can move
+    the badge from the announcement itself rather than waiting up to ten seconds
+    for the next poll (IN-04). ``renderAuthority`` reads exactly
+    ``authority_level``, ``authority_reason`` and ``authority``, which is why the
+    frame names them that way and not something tidier.
+
+    With no ``AuthorityState`` the three keys are ``None`` -- present, so the
+    browser's ``typeof`` branch still fires, but not filled in. Substituting
+    ``full``/``config`` would report a crashed authority subsystem as an
+    operator's own choice, which is the same rule ``_on_tool_result`` follows for
+    ``command_advisory``, and ``renderAuthority`` already renders an unreported
+    level verbatim rather than laundering it.
+    """
+    data = event.data or {}
+    summary = authority.summary() if authority is not None else None
+    return {
+        "type": "authority_event",
+        "event": data.get("event"),
+        "message": event.message,
+        "priority": event.priority,
+        "fields": data.get("fields", []),
+        "authority_level": summary["level"] if summary is not None else None,
+        "authority_reason": summary["reason"] if summary is not None else None,
+        "authority": summary,
+    }
+
+
+async def _broadcast_chat(state: AppState, frame: dict[str, Any]) -> None:
+    """Send one server-initiated frame to every registered chat socket.
+
+    Iterates a snapshot copy rather than the live set for two reasons that both
+    end the broadcast early: ``discard`` during iteration raises, and a raised
+    exception here would deny the announcement to every client after the one that
+    went away (T-02-15-02). A socket whose send fails is dropped from the registry
+    on the spot, which is also what keeps the registry from growing for the life
+    of the process (T-02-15-03).
+
+    Never raises. The caller is a forever-loop whose death restores Gap 3.
+    """
+    for ws in list(state.chat_clients):
+        try:
+            await ws.send_json(frame)
+        except Exception as exc:
+            state.chat_clients.discard(ws)
+            logger.debug("Dropped a chat client from the announcement fan-out: %s", exc)
+
+
+async def _authority_event_pump(state: AppState) -> None:
+    """Drain ``OverrideDetector.events`` forever, fanning each one out to the browser.
+
+    The browser half of AUTH-06 and the only consumer of that queue in this
+    process; the CLI's sibling is ``orchestrator.main.drain_authority_events``.
+    Exactly one drains per process -- a second would split the stream and each
+    would see only some announcements.
+
+    Read-only with respect to authority: it consumes events, reads ``summary()``
+    and sends frames. No ``AuthorityState`` mutator is reachable from here, and
+    nothing the browser can send reaches this path (T-02-15-07).
+    """
+    if state.override_detector is None:
+        # The degrade-and-continue path in `lifespan` can leave it None, and so
+        # can a telemetry service that never came up. Either way the missing
+        # announcements are a symptom rather than the disease: with no detector
+        # MERLIN also never *drops* to advisory when the pilot takes the controls.
+        logger.info(
+            "No pilot-override detector; authority announcements are not running. "
+            "MERLIN will also not drop to advisory when the pilot takes the controls"
+        )
+        return
+
+    while True:
+        # Deliberately re-read through `state.override_detector` rather than
+        # binding the queue to a local: this is the one blocking consumer in the
+        # process, and grepping for a second occurrence of this exact expression
+        # is how a future edit that adds a competing drain gets caught.
+        event = await state.override_detector.events.get()
+        try:
+            # Logged before the fan-out so a headless deployment with no browser
+            # attached still records that MERLIN told the pilot something.
+            logger.info("Authority announcement: %s", event.message)
+            await _broadcast_chat(state, _authority_event_frame(event, state.authority))
+        except Exception:
+            # `except Exception` does not catch asyncio.CancelledError (a
+            # BaseException since 3.8), which is load-bearing here: shutdown
+            # cancels this task and that cancellation must propagate rather than
+            # be logged and looped over. Everything else is caught deliberately --
+            # this task is the only thing between the detector and the browser,
+            # and a loop that dies on one bad announcement silently restores the
+            # exact gap it exists to close (T-02-15-01).
+            logger.exception("Failed to broadcast authority announcement: %s", event.message)
+
+
+def _on_authority_pump_done(task: asyncio.Task[None]) -> None:
+    """Log the death of the announcement pump.
+
+    ``_authority_event_pump`` loops forever, so anything other than cancellation
+    reaching here means the browser has stopped being told about override drops
+    and restores. The ``cancelled()`` guard is not decoration: ``task.exception()``
+    re-raises ``CancelledError`` on a cancelled task, and shutdown cancels this one
+    on every clean stop.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(
+            "Authority announcement pump failed; the browser is no longer being "
+            "told about authority changes: %s",
+            exc,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +541,15 @@ async def lifespan(app: FastAPI):
                 exc_info=True,
             )
 
+    # The one consumer of the detector's announcement queue on this path.
+    # Started unconditionally, including when telemetry never connected and no
+    # detector was built: the pump logs that absence and returns, so "the pilot
+    # is not being told" is a line in the log rather than a silence. Without it
+    # the queue fills to its 32-slot bound and the detector logs the "no consumer
+    # appears to be draining it" WARNING on every announcement after that.
+    state.authority_event_task = asyncio.create_task(_authority_event_pump(state))
+    state.authority_event_task.add_done_callback(_on_authority_pump_done)
+
     # STT client — route to configured backend
     stt_backend = getattr(settings, "stt_backend", "whisper")
     if stt_backend == "deepgram" and getattr(settings, "deepgram_api_key", ""):
@@ -483,6 +634,16 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down MERLIN web server")
+
+    # Cancelled before the telemetry client disconnects: the detector publishes
+    # from inside the telemetry callback, so stopping the consumer first means no
+    # announcement is built for sockets that are already going away.
+    if state.authority_event_task is not None:
+        state.authority_event_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await state.authority_event_task
+        state.authority_event_task = None
+
     if state.sim_connected and state.sim_client is not None:
         await state.sim_client.disconnect()
 
@@ -1046,6 +1207,11 @@ async def ws_chat(ws: WebSocket, state: AppState = Depends(get_ws_app_state)):
       {"type": "listening"}                   -- MERLIN is ready for input
     """
     await ws.accept()
+    # Registered only after accept() succeeds, so a connection the server rejected
+    # never enters the fan-out registry. The matching discard is in the `finally`
+    # below -- the two together are the whole of this socket's membership, and a
+    # return path that skipped the finally would leak a dead socket per client.
+    state.chat_clients.add(ws)
     logger.info("Chat WebSocket client connected")
 
     pending_audio_mime: str | None = None
@@ -1175,6 +1341,11 @@ async def ws_chat(ws: WebSocket, state: AppState = Depends(get_ws_app_state)):
     except Exception as exc:
         logger.warning("Chat WebSocket error: %s", exc)
         await _cancel_active_response()
+    finally:
+        # Both `except` arms above already return through here, and so would any
+        # future one -- which is the point of putting the removal in a `finally`
+        # rather than duplicating it into each arm.
+        state.chat_clients.discard(ws)
 
 
 # ---------------------------------------------------------------------------
