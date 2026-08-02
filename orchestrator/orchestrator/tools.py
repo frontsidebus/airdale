@@ -272,6 +272,33 @@ def _resolve_authority(
     return AuthorityLevel.FULL, AuthorityReason.CONFIG
 
 
+def _was_transmitted(result: dict[str, Any]) -> bool:
+    """Did this command actually reach the aircraft?
+
+    The one predicate every "say it happened" decision on this path reads. Both
+    halves are load-bearing:
+
+    - ``bool(result.get("success"))`` alone is not enough: the authority floor
+      refusal and the ack timeout both set ``success: False`` *and* an ``error``,
+      and reading only ``error`` would be the same heuristic that made the browser
+      render a refused command as a green success (CR-01).
+    - ``"error" not in result`` alone is not enough either: a negative adapter ack
+      is ``{"success": False, "message": "Unknown command"}`` with **no** ``error``
+      key. ``sim_client.send_command`` documents that shape as routine —
+      unregistered events return exactly it — and it is the shape every heuristic
+      in this codebase has got wrong.
+
+    A dict carrying neither key is not evidence of a transmission, so it fails
+    closed. So does a contradictory dict carrying both.
+
+    ``web/server.py::_on_tool_result`` mirrors this exact expression for the
+    browser, because the same tool result crosses both surfaces. The two must not
+    drift: a divergence recreates precisely the false-confirmation class of bug
+    this predicate exists to close (threat T-02-11-05).
+    """
+    return bool(result.get("success")) and "error" not in result
+
+
 def _describe_intent(system: str, action: str, value: float | None) -> str:
     """Render a requested command as a short human-readable phrase."""
     phrase = f"set {system} {action}"
@@ -303,8 +330,16 @@ async def set_aircraft_control(
       action is returned instead, carrying the safety verdict so Claude can
       describe both what it would do and any concern.
     - ``assisted`` -- a ``warning``-severity verdict withholds the command; a
-      clean verdict executes it.
+      clean verdict executes it; an *absent* verdict (telemetry unreachable, so
+      ``command_safety`` never ran) also withholds. Missing evidence is not
+      evidence of safety, and ``assisted`` is the level whose whole job is to be
+      conservative — treating "I could not check" as "it checked out" is a
+      fail-open at exactly the wrong level (WR-10). The discriminator is the
+      ``None``-ness of the verdict, never its severity string: a *clean* verdict
+      also carries ``severity == ""``.
     - ``full`` -- unchanged behaviour: execute unless safety says ``blocked``.
+      That deliberately includes executing when telemetry is unavailable and there
+      is therefore no verdict at all (AUTH-04).
 
     ``blocked`` always wins: the safety short-circuit runs before the gate, so a
     blocked command reports as blocked at every authority level.
@@ -388,6 +423,10 @@ async def set_aircraft_control(
     # definitions or the system prompt, and set_aircraft_control stays in
     # TOOL_DEFINITIONS at every level (D-07) so the cached persona block survives.
     level, reason = _resolve_authority(authority)
+    # A CLEAN verdict and an ABSENT verdict both render as severity "", so the
+    # severity string cannot tell them apart. Keep the distinction in its own
+    # local and branch on that -- see the assisted arm below (WR-10).
+    has_safety_verdict = safety_result is not None
     safety_severity = safety_result.severity if safety_result is not None else ""
     safety_detail = safety_result.reason if safety_result is not None else ""
 
@@ -417,15 +456,47 @@ async def set_aircraft_control(
             "message": message,
         }
 
-    if level == AuthorityLevel.ASSISTED and safety_severity == "warning":
-        logger.info(
-            "Authority %s (%s): withholding %s -- %s",
-            level.value,
-            reason.value,
-            command,
-            safety_detail,
-        )
-        return {
+    # ``not has_safety_verdict`` is deliberately NOT a test for an empty severity
+    # string: a clean verdict also carries one, so widening the severity tuple would
+    # withhold every command at assisted, including the ones that checked out. The
+    # discriminator is whether a verdict exists at all (02-REVIEW.md proposed the
+    # broken form; a structural test in test_tools.py keeps it out).
+    if level == AuthorityLevel.ASSISTED and (
+        safety_severity == "warning" or not has_safety_verdict
+    ):
+        if has_safety_verdict:
+            logger.info(
+                "Authority %s (%s): withholding %s -- %s",
+                level.value,
+                reason.value,
+                command,
+                safety_detail,
+            )
+            safety_payload = {"severity": "warning", "reason": safety_detail}
+            message = (
+                f"Holding {command} -- {safety_detail}. At assisted authority I don't "
+                f"act on a flagged command, so this one is yours to make. Say the word "
+                f"and I'll send it."
+            )
+        else:
+            logger.info(
+                "Authority %s (%s): withholding %s -- no safety verdict "
+                "(telemetry unavailable, so command_safety never ran)",
+                level.value,
+                reason.value,
+                command,
+            )
+            safety_payload = {
+                "severity": "",
+                "reason": "telemetry unavailable -- no safety verdict",
+            }
+            message = (
+                f"Holding {command} -- I can't see the aircraft's state right now, so I "
+                f"have no verdict on this command. Nothing was sent. At assisted authority "
+                f"I don't act on a command I couldn't check; tell me to go ahead and I'll "
+                f"send it."
+            )
+        withheld: dict[str, Any] = {
             "withheld": True,
             "command": command,
             "sim_value": sim_value,
@@ -433,13 +504,14 @@ async def set_aircraft_control(
             "action": action,
             "authority_level": level.value,
             "authority_reason": reason.value,
-            "safety": {"severity": "warning", "reason": safety_detail},
-            "message": (
-                f"Holding {command} -- {safety_detail}. At assisted authority I don't "
-                f"act on a flagged command, so this one is yours to make. Say the word "
-                f"and I'll send it."
-            ),
+            "safety": safety_payload,
+            "message": message,
         }
+        if not has_safety_verdict:
+            # Its own marker so a reader -- Claude, web/server.py, app.js -- never
+            # mistakes "I couldn't check" for "a safety rule fired".
+            withheld["no_verdict"] = True
+        return withheld
 
     # Capture pre-command state for verification and undo
     state_before = sim_state
@@ -466,7 +538,11 @@ async def set_aircraft_control(
             state_before=state_before or SimState(),
         )
 
-    if command in CRITICAL_COMMANDS:
+    # "executed" is a claim, and it is only true of a command the adapter
+    # acknowledged. This dict goes to Claude verbatim on both the CLI and the
+    # browser path, so an ungated attach told the pilot a critical system had
+    # changed in the same dict whose ``error`` said nothing was sent (CR-02).
+    if command in CRITICAL_COMMANDS and _was_transmitted(result):
         result["safety_note"] = "Critical system change executed"
 
     # Verify the command took effect if verifier is available and command succeeded
@@ -775,11 +851,27 @@ async def undo_last_command(
 ) -> dict[str, Any]:
     """Reverse the last aircraft control command.
 
-    Looks up the most recent command in the history, determines the undo
-    action, executes it, and removes the command from the history stack.
+    Looks up the most recent command in the history, determines the undo action,
+    and attempts it. The record is removed from the history stack **only once the
+    reversal is confirmed on the wire** — ``_was_transmitted(result)``.
 
     The undo goes through the same authority gate as any other command: an undo
     is a command, so at ``advisory`` it is described rather than sent.
+
+    That ordering is the fix for CR-03, and the old order is worth stating because
+    it was the worse of two failures at once. ``pop_last()`` used to run *before*
+    the gate, and the past-tense ``"Reversed <cmd>"`` description was written
+    unconditionally afterwards. So at ``advisory``, on an ``assisted`` withhold, on
+    a safety block, on an adapter NACK or on an authority-floor refusal, the record
+    that would have let the pilot try again was destroyed while the returned dict —
+    which Claude relays verbatim — claimed the command had been reversed. The pilot
+    could then neither undo that command later nor tell that the undo had not
+    happened, on the very path they reach for when something has already gone wrong.
+
+    On the not-transmitted branch the result carries ``undo_target`` and a
+    conditional ``"Would reverse ..."`` description, and deliberately **no**
+    ``undone_command`` key: the presence of that key is what tells a reader the
+    reversal actually happened.
 
     Returns a dict describing what was undone (or an error if nothing to undo).
     """
@@ -793,10 +885,15 @@ async def undo_last_command(
         return {"error": f"Cannot undo {cmd_name} — command is not reversible"}
 
     system, action, value = undo_action
-    last = command_history.pop_last()
-    original_command = last.command if last else "unknown"
+    # Peek, do not mutate: whether this record survives depends on what the gate
+    # and the adapter do with the reversal below.
+    target = command_history.last_command
+    original_command = target.command if target else "unknown"
+    suffix = f" {value}" if value is not None else ""
 
-    logger.info("Undoing command %s -> %s/%s/%s", original_command, system, action, value)
+    logger.info(
+        "Attempting to undo command %s -> %s/%s/%s", original_command, system, action, value
+    )
 
     result = await set_aircraft_control(
         sim_client,
@@ -805,14 +902,27 @@ async def undo_last_command(
         value=value,
         verifier=verifier,
         safety_check=safety_check,
-        # Do not record the undo itself in history
+        # Do not record the undo itself in history — override_detector.py's module
+        # docstring depends on an undo never appearing as a MERLIN dispatch here.
         command_history=None,
         authority=authority,
     )
 
-    result["undone_command"] = original_command
-    result["undo_description"] = f"Reversed {original_command}: {system} {action}"
-    if value is not None:
-        result["undo_description"] += f" {value}"
+    if not _was_transmitted(result):
+        # Nothing reached the aircraft, so the command is still undoable. Leave the
+        # record where it is and describe the reversal in the conditional.
+        logger.info(
+            "Undo of %s was not transmitted; leaving it on the history stack so the "
+            "pilot can still reverse it",
+            original_command,
+        )
+        result["undo_target"] = original_command
+        result["undo_description"] = f"Would reverse {original_command}: {system} {action}{suffix}"
+        return result
+
+    popped = command_history.pop_last()
+    undone_command = popped.command if popped else original_command
+    result["undone_command"] = undone_command
+    result["undo_description"] = f"Reversed {undone_command}: {system} {action}{suffix}"
 
     return result
