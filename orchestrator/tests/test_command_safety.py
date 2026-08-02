@@ -69,6 +69,7 @@ def _make_state(
     ap_master: bool = False,
     ground_speed: float = 0.0,
     gear_handle: bool = True,
+    spoilers_percent: float = 0.0,
 ) -> SimState:
     """Build a SimState with minimal overrides for safety check testing.
 
@@ -85,7 +86,7 @@ def _make_state(
         speeds=Speeds(indicated_airspeed=indicated_airspeed, ground_speed=ground_speed),
         flight_phase=flight_phase,
         autopilot=AutopilotState(master=ap_master),
-        surfaces=SurfaceState(gear_handle=gear_handle),
+        surfaces=SurfaceState(gear_handle=gear_handle, spoilers_percent=spoilers_percent),
     )
 
 
@@ -512,11 +513,87 @@ class TestParkingBrakeSafety:
         assert result.safe is True
 
 
+class TestSpoilerSafety:
+    """Spoilers were reachable through `spoilers`/`set` and `spoilers`/`toggle`
+    with no rule. Warning rather than blocked: in-flight speedbrake use is a
+    normal descent tool, and blocking it would refuse the routine case along
+    with the hazardous one.
+    """
+
+    def test_deploy_low_warns(self) -> None:
+        state = _make_state(altitude_agl=400)
+        result = CommandSafetyCheck().check("SPOILERS_SET", 8000, state)
+        assert result.severity == "warning"
+        assert result.safe is True
+
+    def test_deploy_high_is_untouched(self) -> None:
+        """Speedbrake in the descent is routine."""
+        state = _make_state(altitude_agl=9000)
+        result = CommandSafetyCheck().check("SPOILERS_SET", 8000, state)
+        assert result.severity == ""
+
+    def test_retracting_low_is_untouched(self) -> None:
+        """Stowing spoilers is never the hazard the rule exists for."""
+        state = _make_state(altitude_agl=400)
+        result = CommandSafetyCheck().check("SPOILERS_SET", 0, state)
+        assert result.severity == ""
+
+    def test_toggle_low_while_stowed_warns(self) -> None:
+        """A toggle is direction-blind; stowed means it deploys."""
+        state = _make_state(altitude_agl=400, spoilers_percent=0.0)
+        result = CommandSafetyCheck().check("SPOILERS_TOGGLE", 0, state)
+        assert result.severity == "warning"
+
+    def test_toggle_low_while_deployed_is_untouched(self) -> None:
+        """Already deployed means the toggle stows them -- the safe direction."""
+        state = _make_state(altitude_agl=400, spoilers_percent=60.0)
+        result = CommandSafetyCheck().check("SPOILERS_TOGGLE", 0, state)
+        assert result.severity == ""
+
+    def test_on_ground_is_untouched(self) -> None:
+        """Ground spoilers on rollout are the whole point of the system."""
+        state = _make_state(on_ground=True, spoilers_percent=0.0)
+        assert CommandSafetyCheck().check("SPOILERS_TOGGLE", 0, state).severity == ""
+        assert CommandSafetyCheck().check("SPOILERS_SET", 16383, state).severity == ""
+
+
+class TestFlapRetractionSafety:
+    """`FLAPS_INCR` was ruled for overspeed but its opposite had no floor."""
+
+    def test_decr_low_warns(self) -> None:
+        state = _make_state(altitude_agl=120)
+        result = CommandSafetyCheck().check("FLAPS_DECR", 0, state)
+        assert result.severity == "warning"
+        assert result.safe is True
+
+    def test_flaps_up_low_warns(self) -> None:
+        """`flaps up` resolves to FLAPS_SET 0 -- a full retraction, not a notch."""
+        state = _make_state(altitude_agl=120)
+        result = CommandSafetyCheck().check("FLAPS_SET", 0, state)
+        assert result.severity == "warning"
+
+    def test_decr_above_the_floor_is_untouched(self) -> None:
+        """Retracting flaps in the climb-out is the normal sequence."""
+        state = _make_state(altitude_agl=800)
+        assert CommandSafetyCheck().check("FLAPS_DECR", 0, state).severity == ""
+
+    def test_extending_low_is_untouched(self) -> None:
+        """Adding flap on final is the expected action, not the hazard."""
+        state = _make_state(altitude_agl=120, indicated_airspeed=70)
+        assert CommandSafetyCheck().check("FLAPS_SET", 8000, state).severity == ""
+
+    def test_on_ground_is_untouched(self) -> None:
+        state = _make_state(on_ground=True)
+        assert CommandSafetyCheck().check("FLAPS_DECR", 0, state).severity == ""
+        assert CommandSafetyCheck().check("FLAPS_SET", 0, state).severity == ""
+
+
 class TestRuleSetShape:
     def test_rule_count(self) -> None:
-        assert len(DEFAULT_RULES) == 13, (
-            "seven original rules plus the six Gap 2 rules for the fuel, mixture and "
-            "parking-brake surface"
+        assert len(DEFAULT_RULES) == 15, (
+            "seven original rules, the six Gap 2 rules for the fuel, mixture and "
+            "parking-brake surface, plus two from the reachable-surface classification "
+            "guard (spoiler deployment low, flap retraction low)"
         )
 
     def test_every_message_template_formats_with_the_supported_keys(self) -> None:

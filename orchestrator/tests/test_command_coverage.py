@@ -277,6 +277,21 @@ SAFETY_EXEMPT_EVENTS: frozenset[str] = frozenset(
         "TOGGLE_PROPELLER_DEICE",
         "TOGGLE_STRUCTURAL_DEICE",
         "WINDSHIELD_DEICE_TOGGLE",
+        # Fuel tank selection. FUEL_SELECTOR_OFF and _SET(0) are blocked
+        # airborne; selecting a *named* tank is exempt, and the distinction is
+        # deliberate (see test_selecting_a_named_tank_is_never_flagged).
+        #
+        # This layer cannot see per-tank quantity, so it cannot tell a switch
+        # onto a full tank from a switch onto a dry one -- a rule here would
+        # fire on 100% of tank changes and therefore carry no information. It
+        # would also actively harm: a `warning` is *withheld* at `assisted`,
+        # and switching tanks in flight is routine and often required for
+        # lateral balance, so MERLIN would refuse a normal action. A warning
+        # that always fires is noise, and noise trains pilots past warnings
+        # that matter.
+        "FUEL_SELECTOR_ALL",
+        "FUEL_SELECTOR_LEFT",
+        "FUEL_SELECTOR_RIGHT",
     }
 )
 
@@ -291,20 +306,20 @@ SAFETY_EXEMPT_EVENTS: frozenset[str] = frozenset(
 # fix. Emptying this set is the goal.
 UNGUARDED_KNOWN_GAPS: frozenset[str] = frozenset(
     {
-        # Retracting flaps at low speed on approach is the hazard; FLAPS_INCR
-        # is ruled for overspeed but its opposite has no floor.
-        "FLAPS_DECR",
-        # Spoiler deployment in flight. Needs a phase/altitude threshold.
-        "SPOILERS_SET",
-        "SPOILERS_TOGGLE",
-        # Propeller feathering. Needs an airborne + RPM condition.
+        # Propeller feathering. Left unruled DELIBERATELY, not for lack of
+        # effort: _resolve_command scales a percentage into PROP_PITCH_SET's
+        # 0-16383 range, but which end of that range is coarse pitch is
+        # aircraft-dependent -- on a constant-speed prop a low value can be a
+        # normal cruise RPM setting or an approach to feather depending on the
+        # airframe. A rule keyed on "low value while airborne" would either
+        # nuisance-warn through every cruise descent or miss the real case.
+        #
+        # Guessing at that mapping inside a safety rule is precisely the error
+        # that made carb_heat and fuel_pump blind-toggle (CMD-08): a control
+        # whose position could not be resolved was commanded anyway. The
+        # honest state is "not yet classifiable", and it stays here until
+        # someone verifies the mapping against a real aircraft.
         "PROP_PITCH_SET",
-        # Tank selection. FUEL_SELECTOR_OFF and _SET(0) are blocked airborne;
-        # selecting a specific tank is far milder but still uncommanded fuel
-        # system reconfiguration with nothing checking fuel quantity per tank.
-        "FUEL_SELECTOR_ALL",
-        "FUEL_SELECTOR_LEFT",
-        "FUEL_SELECTOR_RIGHT",
     }
 )
 

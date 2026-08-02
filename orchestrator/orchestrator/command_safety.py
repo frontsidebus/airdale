@@ -224,6 +224,69 @@ def _parking_brake_in_flight(
     return not state.on_ground
 
 
+# ---------------------------------------------------------------------------
+# Remaining reachable-surface gaps found by the classification guard
+# ---------------------------------------------------------------------------
+#
+# test_every_reachable_command_is_ruled_or_classified forced every enum-reachable
+# event into one of three buckets. These are the ones that landed in
+# UNGUARDED_KNOWN_GAPS -- reachable, hazardous under some telemetry condition,
+# and previously carrying no rule at all.
+#
+# All are WARNING rather than blocked. Each has a legitimate in-flight use that a
+# block would refuse along with the unsafe one -- the same reasoning that gave
+# crossfeed a warning. A warning is sufficient: `assisted` withholds on it, and
+# `full` executes with the concern attached to the result.
+#
+# The thresholds below are conservative defaults, not certified numbers. They are
+# named constants precisely so they can be retuned without touching predicates.
+
+#: Below this AGL a speedbrake deployment is a sink-rate problem rather than a
+#: descent-planning one. Above it, in-flight speedbrake use is routine.
+SPOILER_LOW_ALTITUDE_AGL_FT = 1000.0
+
+#: Below this AGL, retracting flaps removes lift where there is no height to
+#: trade for speed. Deliberately the same floor as gear retraction.
+FLAP_RETRACT_LOW_ALTITUDE_AGL_FT = 200.0
+
+
+def _spoilers_would_deploy(cmd: str, val: int, state: SimState) -> bool:
+    """Whether this command increases spoiler deflection.
+
+    ``SPOILERS_TOGGLE`` is direction-blind in the same way ``GEAR_TOGGLE`` is, so
+    it is read against ``spoilers_percent``: a toggle deploys only when they are
+    currently stowed. Retracting spoilers is never the hazard, so neither a
+    ``SPOILERS_SET`` of 0 nor a toggle that stows them should warn.
+    """
+    if cmd == "SPOILERS_TOGGLE":
+        return state.surfaces.spoilers_percent <= 1.0
+    return val > 0
+
+
+def _spoilers_deployed_low(
+    cmd: str, val: int, state: SimState, _limits: AircraftLimits | None
+) -> bool:
+    return (
+        _spoilers_would_deploy(cmd, val, state)
+        and not state.on_ground
+        and state.position.altitude_agl < SPOILER_LOW_ALTITUDE_AGL_FT
+    )
+
+
+def _flaps_retracted_low(
+    cmd: str, val: int, state: SimState, _limits: AircraftLimits | None
+) -> bool:
+    # FLAPS_DECR steps up one notch; "flaps up" resolves to FLAPS_SET with 0.
+    # Guarding only the first would leave the more drastic of the two unguarded --
+    # the same asymmetry that produced Gap 2.
+    retracting = cmd == "FLAPS_DECR" or (cmd == "FLAPS_SET" and val == 0)
+    return (
+        retracting
+        and not state.on_ground
+        and state.position.altitude_agl < FLAP_RETRACT_LOW_ALTITUDE_AGL_FT
+    )
+
+
 DEFAULT_RULES: list[SafetyRule] = [
     SafetyRule(
         name="gear_up_on_ground",
@@ -342,6 +405,26 @@ DEFAULT_RULES: list[SafetyRule] = [
         message_template=(
             "Parking brake toggled in flight at {agl:.0f} ft AGL -- a set brake locks "
             "the wheels on touchdown"
+        ),
+    ),
+    SafetyRule(
+        name="spoilers_deployed_low",
+        commands={"SPOILERS_SET", "SPOILERS_TOGGLE"},
+        condition=_spoilers_deployed_low,
+        severity="warning",
+        message_template=(
+            "Spoiler deployment at {agl:.0f} ft AGL -- lift dumped this low increases "
+            "sink rate with little height to recover it"
+        ),
+    ),
+    SafetyRule(
+        name="flaps_retracted_low",
+        commands={"FLAPS_DECR", "FLAPS_SET"},
+        condition=_flaps_retracted_low,
+        severity="warning",
+        message_template=(
+            "Flap retraction at {agl:.0f} ft AGL -- removing lift below 200 ft leaves no "
+            "height to trade for the speed it costs"
         ),
     ),
 ]
