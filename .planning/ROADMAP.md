@@ -32,7 +32,7 @@ previously had none, which is how substantial work landed outside this roadmap).
 - [x] **Command Safety & Integrity** — pre-execution safety rules, post-execution verification, undo history, multi-step procedures (SAFE-01…08, merged; **was not a planned phase** — see reconciliation note below)
 - [x] **Proactive Co-Pilot** — callout engine, deviation monitor, checklist automation, emergency fast paths (PROA-01…06, merged; **was not a planned phase**)
 - [x] **Voice Backend Abstraction** — STT/TTS protocols and factories, aviation-WER gate (VOIC-01…09, EVAL-01…04, PR #75)
-- [x] **Phase 2: Authority & Safety Layer** *(rescoped 2026-07-29, scope extended 2026-07-31)* — configurable authority levels (advisory/assisted/full), pilot override detection, watchdog timer (AUTH-01…08); plus the unreachable-enum fix and its resolution defect (CMD-07…08) and semantic turn detection on the web path (VARC-06) (completed 2026-08-01)
+- [ ] **Phase 2: Authority & Safety Layer** *(rescoped 2026-07-29, scope extended 2026-07-31)* — configurable authority levels (advisory/assisted/full), pilot override detection, watchdog timer (AUTH-01…08); plus the unreachable-enum fix and its resolution defect (CMD-07…08) and semantic turn detection on the web path (VARC-06). Plans 02-01…02-10 executed 2026-08-01; verification returned `gaps_found` (8/12 must-haves), so plans 02-11…02-16 were added to close three blocking gaps before sign-off.
 - [ ] **Phase 3: Automated Maneuvers** — PID control loops for takeoff/landing/go-around, cancellable long-running maneuvers, server-side control at 20Hz (MNVR-01…04)
 - [ ] **Phase 4: Vision Cockpit Reading** — lower-latency screen capture, Claude vision for instrument reading, third-party gauge interpretation (VIS-01…04)
 - [ ] **Voice Architecture** *(sequenced after Phase 2; VARC-06 pulled into it)* — local-default hybrid, flight-phase-routed architecture (VARC-02…05, see `.planning/TECH-STACK-REVIEW.md`). VARC-01 shipped in PR #77 for the local path; VARC-06 extends it to the web path and is claimed by Phase 2.
@@ -179,7 +179,7 @@ procedures through `set_aircraft_control` closes it.
 | Command Safety & Integrity  | v1.3 | — | Complete (SAFE-01…08), unplanned | 2026-07-29 |
 | Proactive Co-Pilot          | v1.3 | — | Complete (PROA-01…06), unplanned | — |
 | Voice Backend Abstraction   | v1.3 | — | Complete (VOIC-01…09, EVAL-01…04) | 2026-07-29 |
-| 2. Authority & Safety Layer | v1.3 | 0/10 | Planned (AUTH-01…08, CMD-07…08, VARC-06) | — |
+| 2. Authority & Safety Layer | v1.3 | 10/16 | Executed; gaps found — 02-11…02-16 planned (AUTH-01…08, CMD-07…08, VARC-06) | — |
 | 3. Automated Maneuvers    | v1.3 | 0/— | Not started (MNVR-01…04) | —      |
 | 4. Vision Cockpit Reading | v1.3 | 0/— | Not started (VIS-01…04) | —       |
 | Voice Architecture        | v1.3 | 0/— | VARC-01 complete; VARC-02…05 not started | — |
