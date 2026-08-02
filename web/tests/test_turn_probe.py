@@ -186,6 +186,69 @@ async def test_decode_failure_is_transient_not_permanent(test_app, probe_state, 
     assert data["ended"] is False
 
 
+_WR01_REGRESSION = (
+    "REGRESSION (VERIFICATION WR-01): the handler documents 'Never raises. Every "
+    "failure path returns a not-ended answer', then called decode_webm_to_samples "
+    "outside any try. With no ffmpeg on PATH that raises FileNotFoundError, so a "
+    "browser probing at roughly 7 Hz during speech collected a 500 and a traceback "
+    "per probe instead of degrading to its fixed-silence fallback."
+)
+
+
+def _raising_decode(exc: Exception):
+    """A decode stand-in that raises rather than returning None."""
+
+    async def _decode(webm_bytes: bytes):
+        raise exc
+
+    return _decode
+
+
+async def test_missing_ffmpeg_returns_200_not_a_traceback(test_app, probe_state, monkeypatch):
+    """WR-01: FileNotFoundError from create_subprocess_exec must not reach the browser."""
+    import web.server as srv
+
+    monkeypatch.setattr(
+        srv,
+        "decode_webm_to_samples",
+        _raising_decode(FileNotFoundError("[Errno 2] No such file or directory: 'ffmpeg'")),
+    )
+
+    resp = await _probe(test_app)
+
+    assert resp.status_code == 200, _WR01_REGRESSION
+    data = resp.json()
+    assert data["ended"] is False, _WR01_REGRESSION
+    assert data["detector"] == "decode_failed"
+    assert data["available"] is True, (
+        "A decode failure is transient from the endpoint's point of view. "
+        "available=False would stop the browser probing for the whole session "
+        "over what may be one bad blob (WR-01)."
+    )
+
+
+async def test_truncated_ffmpeg_buffer_returns_200(test_app, probe_state, monkeypatch):
+    """np.frombuffer raises ValueError on an odd-length buffer; same contract applies."""
+    import web.server as srv
+
+    monkeypatch.setattr(
+        srv,
+        "decode_webm_to_samples",
+        _raising_decode(ValueError("buffer size must be a multiple of element size")),
+    )
+
+    resp = await _probe(test_app)
+
+    assert resp.status_code == 200, _WR01_REGRESSION
+    data = resp.json()
+    assert data["ended"] is False
+    assert data["detector"] == "decode_failed", (
+        "A raise and a None return are the same event to the browser; one tag for "
+        "both, because a second tag would only fragment the signal (WR-01)."
+    )
+    assert data["available"] is True
+
+
 async def test_inference_failure_returns_error_shape(test_app, probe_state, patched_decode):
     """An exploding model yields a not-ended answer, never a 500."""
     probe_state.turn_detector = _detector_with(_FakeSession(raises=RuntimeError("onnx exploded")))
