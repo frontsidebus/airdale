@@ -851,11 +851,27 @@ async def undo_last_command(
 ) -> dict[str, Any]:
     """Reverse the last aircraft control command.
 
-    Looks up the most recent command in the history, determines the undo
-    action, executes it, and removes the command from the history stack.
+    Looks up the most recent command in the history, determines the undo action,
+    and attempts it. The record is removed from the history stack **only once the
+    reversal is confirmed on the wire** — ``_was_transmitted(result)``.
 
     The undo goes through the same authority gate as any other command: an undo
     is a command, so at ``advisory`` it is described rather than sent.
+
+    That ordering is the fix for CR-03, and the old order is worth stating because
+    it was the worse of two failures at once. ``pop_last()`` used to run *before*
+    the gate, and the past-tense ``"Reversed <cmd>"`` description was written
+    unconditionally afterwards. So at ``advisory``, on an ``assisted`` withhold, on
+    a safety block, on an adapter NACK or on an authority-floor refusal, the record
+    that would have let the pilot try again was destroyed while the returned dict —
+    which Claude relays verbatim — claimed the command had been reversed. The pilot
+    could then neither undo that command later nor tell that the undo had not
+    happened, on the very path they reach for when something has already gone wrong.
+
+    On the not-transmitted branch the result carries ``undo_target`` and a
+    conditional ``"Would reverse ..."`` description, and deliberately **no**
+    ``undone_command`` key: the presence of that key is what tells a reader the
+    reversal actually happened.
 
     Returns a dict describing what was undone (or an error if nothing to undo).
     """
@@ -869,10 +885,15 @@ async def undo_last_command(
         return {"error": f"Cannot undo {cmd_name} — command is not reversible"}
 
     system, action, value = undo_action
-    last = command_history.pop_last()
-    original_command = last.command if last else "unknown"
+    # Peek, do not mutate: whether this record survives depends on what the gate
+    # and the adapter do with the reversal below.
+    target = command_history.last_command
+    original_command = target.command if target else "unknown"
+    suffix = f" {value}" if value is not None else ""
 
-    logger.info("Undoing command %s -> %s/%s/%s", original_command, system, action, value)
+    logger.info(
+        "Attempting to undo command %s -> %s/%s/%s", original_command, system, action, value
+    )
 
     result = await set_aircraft_control(
         sim_client,
@@ -881,14 +902,27 @@ async def undo_last_command(
         value=value,
         verifier=verifier,
         safety_check=safety_check,
-        # Do not record the undo itself in history
+        # Do not record the undo itself in history — override_detector.py's module
+        # docstring depends on an undo never appearing as a MERLIN dispatch here.
         command_history=None,
         authority=authority,
     )
 
-    result["undone_command"] = original_command
-    result["undo_description"] = f"Reversed {original_command}: {system} {action}"
-    if value is not None:
-        result["undo_description"] += f" {value}"
+    if not _was_transmitted(result):
+        # Nothing reached the aircraft, so the command is still undoable. Leave the
+        # record where it is and describe the reversal in the conditional.
+        logger.info(
+            "Undo of %s was not transmitted; leaving it on the history stack so the "
+            "pilot can still reverse it",
+            original_command,
+        )
+        result["undo_target"] = original_command
+        result["undo_description"] = f"Would reverse {original_command}: {system} {action}{suffix}"
+        return result
+
+    popped = command_history.pop_last()
+    undone_command = popped.command if popped else original_command
+    result["undone_command"] = undone_command
+    result["undo_description"] = f"Reversed {undone_command}: {system} {action}{suffix}"
 
     return result

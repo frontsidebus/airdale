@@ -1436,7 +1436,7 @@ class TestAuthorityNoneEquivalentToFull:
 _CR03_REGRESSION = (
     "REGRESSION (VERIFICATION Gap 1, finding CR-03, threat T-02-11-02/03): "
     "`undo_last_command` popped the history record *before* the authority gate "
-    "ran and then wrote `undo_description: \"Reversed <cmd>\"` unconditionally. At "
+    'ran and then wrote `undo_description: "Reversed <cmd>"` unconditionally. At '
     "advisory, on a withhold, on a block or on an adapter NACK the pilot was told "
     "the command had been reversed, while the record that would have let them try "
     "again had already been destroyed -- they could neither undo it later nor tell "
