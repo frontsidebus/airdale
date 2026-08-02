@@ -794,7 +794,11 @@ async def turn_probe(
 
     Never raises. Every failure path returns a not-ended answer, because the
     browser's fixed-silence fallback is what keeps voice input working and a
-    5xx here would only add latency to reaching it.
+    5xx here would only add latency to reaching it. That claim is enforced
+    rather than asserted: the decode spawns ffmpeg, so it raises
+    ``FileNotFoundError`` when ffmpeg is not on ``PATH`` and ``ValueError`` from
+    ``np.frombuffer`` on a truncated ffmpeg buffer -- both are caught here, and
+    the detector call carries its own guard (WR-01).
     """
     detector = state.turn_detector
     if detector is None or not detector.available:
@@ -826,9 +830,24 @@ async def turn_probe(
         )
         return _turn_probe_result("too_large", available=True)
 
-    samples = await decode_webm_to_samples(audio_bytes)
+    # The decode is guarded, not merely checked for None: it raises
+    # FileNotFoundError when ffmpeg is not on PATH and ValueError from
+    # np.frombuffer on a truncated ffmpeg buffer. Unguarded, a browser probing at
+    # roughly 7 Hz during speech takes a 500 per probe (WR-01).
+    try:
+        samples = await decode_webm_to_samples(audio_bytes)
+    except Exception as exc:
+        logger.error("Turn probe decode failed: %s", exc)
+        samples = None
+
     if samples is None:
         # Transient: one undecodable blob should not disable probing for good.
+        # `available=True` is deliberate. A raise and a None are the same event
+        # from the browser's point of view, so they share one tag; reporting
+        # available=False would permanently stop the browser probing for the rest
+        # of the session over what may be a single bad blob. A missing ffmpeg is
+        # not transient, but it is already covered -- the fixed-silence fallback
+        # keeps voice input working, which is what this contract exists to protect.
         return _turn_probe_result("decode_failed", available=True)
 
     try:
