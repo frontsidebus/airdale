@@ -567,6 +567,63 @@
     showCommandToast('⊘ ' + label, 'caution');
   }
 
+  // ── Authority announcements ───────────────────────────
+  //
+  // AUTH-06's "informs the pilot" half. The override detector raises these when
+  // it sees the pilot working a control MERLIN did not command, and again when
+  // the cooldown lapses and the configured level comes back (D-14).
+  //
+  // Deliberately not a command outcome, and deliberately not styled as one:
+  // nothing was asked for and nothing was sent. A drop in authority read as a
+  // command that failed would be the same class of confusion the four-outcome
+  // split above exists to prevent.
+
+  function authorityEventKind(event) {
+    if (event === 'override' || event === 'restore') return event;
+    return 'other';
+  }
+
+  function showAuthorityEvent(msg) {
+    var kind = authorityEventKind(msg.event);
+    var text = (typeof msg.message === 'string' && msg.message)
+      ? msg.message
+      : 'MERLIN authority changed.';
+
+    // Text nodes throughout, like appendCommandOutcome: `message` is assembled
+    // server-side and embeds field labels derived from telemetry, so it is a
+    // server-supplied string and is attached as text, never interpolated.
+    var el = document.createElement('div');
+    el.className = 'chat-msg authority-event-msg auth-event-' + kind;
+    el.appendChild(spanWithText('timestamp', '[' + timestamp() + ']'));
+    el.appendChild(spanWithText('auth-event-tag', 'AUTHORITY'));
+    el.appendChild(spanWithText('auth-event-text', text));
+    if (dom.chatMessages) dom.chatMessages.appendChild(el);
+    scrollChatIfNeeded();
+
+    // Prefixed the same way applyAuthority prefixes its badge-transition toast,
+    // so the announcement and the badge read as one voice rather than two
+    // subsystems that happen to agree. Anything other than the two known events
+    // falls through to 'info', which toastToneClass already handles.
+    var tone = kind === 'override' ? 'caution' : (kind === 'restore' ? 'advisory' : 'info');
+    showCommandToast('AUTHORITY: ' + text, tone);
+
+    // IN-04: move the badge now instead of up to ten seconds from now on the
+    // next pollStatus, which is how it could read FULL (configured) while the
+    // gate was already refusing. renderAuthority reads exactly
+    // `authority_level`, `authority_reason` and `authority` — the three keys the
+    // frame carries — so no second reason-to-text mapping is written here. The
+    // badge's reason map is deliberately declared exactly once (see the authority
+    // rendering section below) so the badge and these messages cannot describe
+    // the same state two different ways; a copy here would be that second way.
+    //
+    // applyAuthority suppresses its own transition toast when `level|reason` is
+    // unchanged, so an announcement whose state matches the last poll raises the
+    // one toast above rather than two.
+    if (typeof msg.authority_level === 'string') {
+      renderAuthority(msg);
+    }
+  }
+
   // `tone` accepts the original booleans (true = executed, false = failed) as
   // well as the named tones the authority states use, so every pre-existing
   // caller keeps its meaning unchanged.
@@ -939,6 +996,13 @@
       case 'command_withheld':
         // Assisted authority + a flagged command: MERLIN deferred to the pilot.
         showCommandWithheld(msg);
+        break;
+
+      case 'authority_event':
+        // AUTH-06: MERLIN announcing a change in what it may do — a pilot
+        // override, or the auto-restore when the cooldown lapses. Arrives the
+        // moment it happens rather than on the next 10 s status poll.
+        showAuthorityEvent(msg);
         break;
 
       default:
