@@ -14,6 +14,7 @@ from orchestrator.sim_client import (
     Position,
     SimState,
     Speeds,
+    SurfaceState,
 )
 
 # ---------------------------------------------------------------------------
@@ -67,8 +68,14 @@ def _make_state(
     flight_phase: FlightPhase = FlightPhase.CRUISE,
     ap_master: bool = False,
     ground_speed: float = 0.0,
+    gear_handle: bool = True,
 ) -> SimState:
-    """Build a SimState with minimal overrides for safety check testing."""
+    """Build a SimState with minimal overrides for safety check testing.
+
+    ``gear_handle`` defaults to True (gear down) because that is the position
+    from which ``GEAR_TOGGLE`` is hazardous -- a toggle only retracts when the
+    gear is already extended.
+    """
     agl = altitude_agl
     # on_ground is derived from altitude_agl < 10
     if on_ground:
@@ -78,6 +85,7 @@ def _make_state(
         speeds=Speeds(indicated_airspeed=indicated_airspeed, ground_speed=ground_speed),
         flight_phase=flight_phase,
         autopilot=AutopilotState(master=ap_master),
+        surfaces=SurfaceState(gear_handle=gear_handle),
     )
 
 
@@ -110,6 +118,67 @@ class TestGearUpSafety:
         result = checker.check("GEAR_UP", 0, state)
         assert result.safe is False
         assert result.severity == "blocked"
+
+    def test_gear_up_on_ground_blocked_regardless_of_handle_position(self) -> None:
+        """GEAR_UP must not become conditional on gear_handle.
+
+        The toggle guard reads ``gear_handle``; if it ever leaked into the
+        GEAR_UP path, a stale or defaulted handle reading would silently
+        unblock retraction on the ground.
+        """
+        state = _make_state(on_ground=True, gear_handle=False)
+        checker = CommandSafetyCheck()
+        result = checker.check("GEAR_UP", 0, state)
+        assert result.safe is False
+        assert result.severity == "blocked"
+
+
+# ---------------------------------------------------------------------------
+# Gear toggle rules -- the direction-blind command
+# ---------------------------------------------------------------------------
+
+
+class TestGearToggleSafety:
+    """``GEAR_TOGGLE`` reaches the same hazard as ``GEAR_UP`` by another route.
+
+    ``gear``/``toggle`` is in the tool enum and registered in the adapter, but
+    carried no rule at all -- the same blind-toggle shape as ``parking_brake``
+    (Gap 2 / CR-04), on a system where the consequence is a gear-up landing or
+    a retraction on the runway. The rules key on ``gear_handle`` so a toggle
+    that would *extend* stays available: blocking that would refuse a
+    legitimate approach configuration, the same reasoning that gave crossfeed
+    a warning rather than a block.
+    """
+
+    def test_toggle_on_ground_with_gear_down_blocked(self) -> None:
+        state = _make_state(on_ground=True, gear_handle=True)
+        checker = CommandSafetyCheck()
+        result = checker.check("GEAR_TOGGLE", 0, state)
+        assert result.safe is False
+        assert result.severity == "blocked"
+
+    def test_toggle_below_200ft_with_gear_down_blocked(self) -> None:
+        state = _make_state(altitude_agl=150, gear_handle=True)
+        checker = CommandSafetyCheck()
+        result = checker.check("GEAR_TOGGLE", 0, state)
+        assert result.safe is False
+        assert result.severity == "blocked"
+
+    def test_toggle_below_200ft_with_gear_already_up_is_allowed(self) -> None:
+        """A toggle that would extend is the approach configuration, not the hazard."""
+        state = _make_state(altitude_agl=150, gear_handle=False)
+        checker = CommandSafetyCheck()
+        result = checker.check("GEAR_TOGGLE", 0, state)
+        assert result.safe is True
+        assert result.severity == ""
+
+    def test_toggle_at_cruise_altitude_with_gear_down_is_allowed(self) -> None:
+        """Retraction well above the floor is normal after takeoff."""
+        state = _make_state(altitude_agl=1500, gear_handle=True)
+        checker = CommandSafetyCheck()
+        result = checker.check("GEAR_TOGGLE", 0, state)
+        assert result.safe is True
+        assert result.severity == ""
 
 
 # ---------------------------------------------------------------------------

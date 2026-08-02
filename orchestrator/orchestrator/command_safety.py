@@ -71,13 +71,32 @@ class SafetyRule:
 # ---------------------------------------------------------------------------
 
 
-def _gear_up_too_low(_cmd: str, _val: int, state: SimState, _limits: AircraftLimits | None) -> bool:
+def _toggle_would_retract(cmd: str, state: SimState) -> bool:
+    """Whether this command is a gear toggle that would *raise* the gear.
+
+    ``GEAR_TOGGLE`` is direction-blind: it means "retract" only when the gear is
+    currently extended. ``gear_handle`` is True when the gear is down, so a
+    toggle with the handle already up would *extend* -- never the hazard the
+    retraction rules exist to stop, and blocking it would refuse a legitimate
+    approach-configuration command.
+
+    Returning False for non-toggle commands leaves ``GEAR_UP`` evaluated purely
+    on its own terms, exactly as before.
+    """
+    return cmd == "GEAR_TOGGLE" and not state.surfaces.gear_handle
+
+
+def _gear_up_too_low(cmd: str, _val: int, state: SimState, _limits: AircraftLimits | None) -> bool:
+    if _toggle_would_retract(cmd, state):
+        return False
     return state.position.altitude_agl < 200 and not state.on_ground
 
 
 def _gear_up_on_ground(
-    _cmd: str, _val: int, state: SimState, _limits: AircraftLimits | None
+    cmd: str, _val: int, state: SimState, _limits: AircraftLimits | None
 ) -> bool:
+    if _toggle_would_retract(cmd, state):
+        return False
     return state.on_ground
 
 
@@ -208,14 +227,14 @@ def _parking_brake_in_flight(
 DEFAULT_RULES: list[SafetyRule] = [
     SafetyRule(
         name="gear_up_on_ground",
-        commands={"GEAR_UP"},
+        commands={"GEAR_UP", "GEAR_TOGGLE"},
         condition=_gear_up_on_ground,
         severity="blocked",
         message_template="Cannot retract gear while on the ground",
     ),
     SafetyRule(
         name="gear_up_too_low",
-        commands={"GEAR_UP"},
+        commands={"GEAR_UP", "GEAR_TOGGLE"},
         condition=_gear_up_too_low,
         severity="blocked",
         message_template="Gear retraction blocked -- altitude AGL ({agl:.0f} ft) is below 200 ft",

@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 from orchestrator.claude_client import TOOL_DEFINITIONS
+from orchestrator.command_safety import DEFAULT_RULES
 from orchestrator.tools import _resolve_command
 
 # ---------------------------------------------------------------------------
@@ -225,6 +226,106 @@ CMD09_EVENTS = frozenset(
 )
 
 
+# ---------------------------------------------------------------------------
+# Safety-rule coverage of the reachable command surface
+# ---------------------------------------------------------------------------
+
+# Reachable events that deliberately carry no SafetyRule. An entry here is a
+# *classification*, not a shrug: it asserts that no telemetry-conditioned
+# hazard exists for this event, so there is nothing a rule could usefully key
+# on. Grouped by why.
+SAFETY_EXEMPT_EVENTS: frozenset[str] = frozenset(
+    {
+        # Avionics tuning. A wrong frequency is a communications problem, not
+        # an airframe one -- nothing about the flight envelope makes any value
+        # unsafe, and validation.py already range-checks the numbers.
+        "COM_RADIO_SET_HZ",
+        "COM2_RADIO_SET_HZ",
+        "NAV1_RADIO_SET_HZ",
+        "NAV2_RADIO_SET_HZ",
+        "KOHLSMAN_SET",
+        "HEADING_BUG_SET",
+        # Autopilot mode arming and target setting. AP_MASTER -- the one that
+        # actually hands control over -- is ruled. These arm a mode or set a
+        # target within an already-engaged autopilot; validation.py checks the
+        # target values against per-aircraft limits.
+        "AP_HDG_HOLD",
+        "AP_ALT_HOLD",
+        "AP_VS_HOLD",
+        "AP_APR_HOLD",
+        "AP_NAV1_HOLD",
+        "AP_AIRSPEED_HOLD",
+        "AP_ALT_VAR_SET_ENGLISH",
+        "AP_VS_VAR_SET_ENGLISH",
+        "AP_SPD_VAR_SET",
+        # Trim. Incremental, continuously pilot-correctable, and no telemetry
+        # threshold distinguishes a safe trim input from an unsafe one.
+        "AILERON_TRIM_LEFT",
+        "AILERON_TRIM_RIGHT",
+        "AILERON_TRIM_SET",
+        "ELEVATOR_TRIM_SET",
+        "ELEV_TRIM_UP",
+        "ELEV_TRIM_DN",
+        "RUDDER_TRIM_LEFT",
+        "RUDDER_TRIM_RIGHT",
+        "RUDDER_TRIM_SET",
+        # Ice protection. These are toggles whose *on* direction is the safe
+        # one; switching them off during icing would be the hazard, but no
+        # icing condition exists anywhere in the telemetry chain to key on.
+        # Revisit if icing telemetry is ever added.
+        "PITOT_HEAT_TOGGLE",
+        "TOGGLE_PROPELLER_DEICE",
+        "TOGGLE_STRUCTURAL_DEICE",
+        "WINDSHIELD_DEICE_TOGGLE",
+    }
+)
+
+# Reachable events that SHOULD have a rule and do not. This is a declared
+# debt list, not an exemption list -- each entry names a real unguarded path.
+# The guard below tolerates these so the suite stays green, but they are
+# written down here rather than living as an unnoticed absence, which is
+# exactly how Gap 2 happened (02-VERIFICATION.md): CMD-07 widened the
+# reachable surface and DEFAULT_RULES was never widened to match.
+#
+# Each needs a threshold decision that is the owner's call, not a mechanical
+# fix. Emptying this set is the goal.
+UNGUARDED_KNOWN_GAPS: frozenset[str] = frozenset(
+    {
+        # Retracting flaps at low speed on approach is the hazard; FLAPS_INCR
+        # is ruled for overspeed but its opposite has no floor.
+        "FLAPS_DECR",
+        # Spoiler deployment in flight. Needs a phase/altitude threshold.
+        "SPOILERS_SET",
+        "SPOILERS_TOGGLE",
+        # Propeller feathering. Needs an airborne + RPM condition.
+        "PROP_PITCH_SET",
+        # Tank selection. FUEL_SELECTOR_OFF and _SET(0) are blocked airborne;
+        # selecting a specific tank is far milder but still uncommanded fuel
+        # system reconfiguration with nothing checking fuel quantity per tank.
+        "FUEL_SELECTOR_ALL",
+        "FUEL_SELECTOR_LEFT",
+        "FUEL_SELECTOR_RIGHT",
+    }
+)
+
+
+def _ruled_events() -> set[str]:
+    """Every SimConnect event name some SafetyRule applies to."""
+    ruled: set[str] = set()
+    for rule in DEFAULT_RULES:
+        ruled.update(rule.commands)
+    return ruled
+
+
+def _enum_reachable_events() -> set[str]:
+    """Events Claude can actually cause, via an enum-exposed system."""
+    by_system = _events_by_system()
+    reachable: set[str] = set()
+    for system in _exposed_systems():
+        reachable |= by_system.get(system, set())
+    return reachable
+
+
 def _events_by_system() -> dict[str, set[str]]:
     """Run the branch table through the resolver, grouped by system."""
     events: dict[str, set[str]] = {}
@@ -319,4 +420,59 @@ def test_resolver_branch_table_is_exhaustive() -> None:
         f"RESOLVER_BRANCH_TABLE produces {stale}, which no longer appears as a "
         "literal in _resolve_command. Either the regex needs updating or the table "
         "is stale."
+    )
+
+
+def test_every_reachable_command_is_ruled_or_classified() -> None:
+    """Widening the command surface must force a safety decision.
+
+    This is the guard Gap 2 did not have. Plan 02-02 (CMD-07) made ~20 dead
+    events reachable, including ``FUEL_SELECTOR_OFF``; ``DEFAULT_RULES`` still
+    covered only gear, flaps, autopilot and throttle. Both changes were correct
+    in isolation, they landed in different waves, and nothing compared them --
+    so at the default ``AUTHORITY_LEVEL=full`` an in-flight fuel cutoff had
+    nothing in front of it.
+
+    The fix is not "every event needs a rule" -- most genuinely do not. It is
+    that every event must be *consciously* placed: ruled, exempt with a stated
+    reason, or named as a known gap. Silence is the failure mode.
+    """
+    unclassified = sorted(
+        _enum_reachable_events() - _ruled_events() - SAFETY_EXEMPT_EVENTS - UNGUARDED_KNOWN_GAPS
+    )
+
+    assert not unclassified, (
+        f"these events are reachable through the set_aircraft_control enum but appear "
+        f"in neither DEFAULT_RULES, SAFETY_EXEMPT_EVENTS, nor UNGUARDED_KNOWN_GAPS: "
+        f"{unclassified}. At AUTHORITY_LEVEL=full a command with no rule can never be "
+        "'blocked', so 'execute unless blocked' is vacuous for it. Either add a "
+        "SafetyRule, or classify it in this file with the reason no rule is needed. "
+        "Do not add it to UNGUARDED_KNOWN_GAPS without an owner decision -- that set "
+        "is debt being paid down, not a parking space (Gap 2, 02-VERIFICATION.md)."
+    )
+
+
+def test_safety_classification_tables_are_not_stale() -> None:
+    """Classification entries must still describe reality.
+
+    Without this, an event that gained a rule would linger in the exempt set
+    and an event that stopped being reachable would keep a stale justification
+    -- the tables would slowly stop meaning anything, which is the failure mode
+    they exist to prevent.
+    """
+    reachable = _enum_reachable_events()
+    ruled = _ruled_events()
+
+    unreachable = sorted((SAFETY_EXEMPT_EVENTS | UNGUARDED_KNOWN_GAPS) - reachable)
+    assert not unreachable, (
+        f"these events are classified in this file but are no longer reachable through "
+        f"the enum: {unreachable}. Remove the entries -- a justification for something "
+        "that cannot happen is noise that makes the real entries harder to trust."
+    )
+
+    now_ruled = sorted((SAFETY_EXEMPT_EVENTS | UNGUARDED_KNOWN_GAPS) & ruled)
+    assert not now_ruled, (
+        f"these events now have a SafetyRule but are still listed as exempt or as a "
+        f"known gap: {now_ruled}. Remove them from the classification tables so the "
+        "debt list reflects what is actually still unguarded."
     )
