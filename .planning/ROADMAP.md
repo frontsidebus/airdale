@@ -82,7 +82,7 @@ Full analysis: `.planning/v1.3-RECONCILIATION.md`.
 **Depends on**: Phase 1
 **Requirements**: AUTH-01 through AUTH-08, CMD-07, CMD-08, VARC-06 (CMD-09 deferred)
 **Context**: `.planning/phases/02-authority-safety-layer/02-CONTEXT.md` (21 decisions)
-**Plans**: 10 plans in 6 waves
+**Plans**: 16 plans in 9 waves (10 planned + 6 gap closure)
 
 Plans:
 **Wave 1**
@@ -113,10 +113,33 @@ Plans:
 
 - [x] 02-10-PLAN.md — Browser authority indicator and advisory/withheld rendering, with a human verification checkpoint
 
+**Wave 7** *(gap closure — added 2026-08-01 from `02-VERIFICATION.md`)*
+
+- [ ] 02-11-PLAN.md — Orchestrator false-confirmation paths: transmission predicate, `safety_note` gate, undo ordering, assisted absent-verdict withhold (Gap 1, AUTH-02/03)
+- [ ] 02-12-PLAN.md — Browser false-confirmation path and the turn-probe decode guard (Gap 1 / CR-01, WR-01)
+- [ ] 02-13-PLAN.md — Bounded announcement queue, CLI announcement consumer, authority in `/status` and `/authority` (Gap 3 CLI half, AUTH-06/07)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [ ] 02-14-PLAN.md — Bound the newly-reachable command surface: `parking_brake` refusal and six fuel/mixture/brake safety rules (Gap 2 / CR-04, CR-05)
+- [ ] 02-15-PLAN.md — `authority_event` frames to every chat socket and the browser announcement, with a human verification checkpoint (Gap 3 browser half, AUTH-06)
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [ ] 02-16-PLAN.md — Documentation and requirement-ledger truth-up: measured test counts, decision 26, Phase 2 requirement boxes (IN-01)
+
 Wave structure: wave 1 = 02-01, 02-02, 02-03 (independent); wave 2 = 02-04, 02-05;
 wave 3 = 02-06, 02-07; wave 4 = 02-08; wave 5 = 02-09; wave 6 = 02-10.
 VARC-06 (02-03) is its own lane and neither depends on, nor is depended on by, the
 authority plans.
+
+Gap-closure waves: wave 7 = 02-11, 02-12, 02-13 (no shared files, fully parallel);
+wave 8 = 02-14 (depends on 02-11 for `tools.py`) and 02-15 (depends on 02-12 for
+`web/server.py` and on 02-13 for the bounded queue); wave 9 = 02-16, which must run last
+because its test counts and requirement statuses are not knowable until everything else has
+landed. Verification found three blocking gaps: command outcomes that were not trustworthy
+under failure, an authority surface that CMD-07 widened without widening its rules, and
+AUTH-06's announcement half constructed but never consumed.
 
 Distinct from SAFE-01…08, which decide whether a *specific command* is safe right
 now. This phase decides whether MERLIN may act *at all*.
