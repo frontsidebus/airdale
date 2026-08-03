@@ -224,11 +224,19 @@ Anything that branches on the reason needs a `degraded` arm. A missing branch do
 
 **`assisted` withholds only on a `warning`-severity safety verdict, or on no verdict at all.** If a rule fires with `warning`, or telemetry was unreachable so no rule could be evaluated, the command is withheld. If every rule passes cleanly, the command executes exactly as it would at `full`.
 
-`DEFAULT_RULES` contains **13 rules, covering 8 systems**: gear, flaps, autopilot, throttle, fuel selector, mixture, crossfeed, and parking brake. `_resolve_command` handles **20** commandable systems.
+`DEFAULT_RULES` contains **15 rules, covering 9 systems**: gear, flaps, autopilot, throttle, fuel selector, mixture, crossfeed, parking brake, and spoilers. `_resolve_command` handles **20** commandable systems.
 
-The **12** that remain unruled -- `radio`, `barometer`, `trim`, `spoilers`, `propeller`, `deice`, and the six systems deferred under CMD-09 (`magnetos`, `carb_heat`, `fuel_pump`, `starter`, `primer`, `lights`) -- have no rule of either severity, so **`assisted` behaves identically to `full` for them.** That is the honest shape of the caveat, and it has not gone away; what changed is which systems it applies to.
+The **11** that remain unruled -- `radio`, `barometer`, `trim`, `propeller`, `deice`, and the six systems deferred under CMD-09 (`magnetos`, `carb_heat`, `fuel_pump`, `starter`, `primer`, `lights`) -- have no rule of either severity, so **`assisted` behaves identically to `full` for them.** That is the honest shape of the caveat, and it has not gone away; what changed is which systems it applies to.
 
-Note where the six deferred systems sit in that list: they are unreachable anyway (absent from the tool enum, absent from the adapter's `CommandMap`), so the practical gap at `assisted` is `radio`, `barometer`, `trim`, `spoilers`, `propeller` and `deice`. Of those, `deice` is the one with real consequences.
+Note where the six deferred systems sit in that list: they are unreachable anyway (absent from the tool enum, absent from the adapter's `CommandMap`), so the practical gap at `assisted` is `radio`, `barometer`, `trim`, `propeller` and `deice`. Of those, `deice` is the one with real consequences.
+
+### The coverage guard
+
+Counting rules by hand is what let CMD-07 widen the reachable surface while `DEFAULT_RULES` stood still. `test_every_reachable_command_is_ruled_or_classified` now makes that impossible to do silently: every SimConnect event reachable through the `set_aircraft_control` enum must appear in `DEFAULT_RULES`, in `SAFETY_EXEMPT_EVENTS` with a stated reason, or in `UNGUARDED_KNOWN_GAPS` as declared debt. Widening the surface without making a safety decision fails CI.
+
+All **52** reachable events are currently classified: **20 ruled, 31 exempt, 1 declared**. The single declared gap is `PROP_PITCH_SET` -- which end of its 0-16383 range is coarse pitch is aircraft-dependent, so a rule keyed on a low value would either nuisance-warn through every cruise descent or miss the real case.
+
+`FUEL_SELECTOR_ALL`/`LEFT`/`RIGHT` are exempt rather than ruled, deliberately: this layer cannot see per-tank quantity, so a rule would fire on every tank change and carry no information -- and since a `warning` is *withheld* at `assisted`, it would make MERLIN refuse routine lateral-balance switching.
 
 Read plainly: **`assisted` is now real protection for the systems that can hurt you fastest** -- gear, flaps, autopilot, throttle, and the fuel and brake surface -- **and remains a no-op for the rest.** Use `advisory` if you want MERLIN to touch nothing.
 

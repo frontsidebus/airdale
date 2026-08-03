@@ -127,7 +127,9 @@ territory and already exist.
 > at index 0 airborne (blocked), `MIXTURE_SET` at idle cut-off airborne (blocked), the
 > three `CROSS_FEED_OPEN`/`OFF`/`TOGGLE` events airborne (warning), `PARKING_BRAKES`
 > on the ground above 5 kt (blocked), and `PARKING_BRAKES` airborne (warning).
-> `DEFAULT_RULES` went 7 → 13.
+> `DEFAULT_RULES` went 7 → 13. (Two further rules landed after the phase — a
+> spoiler-deployment and a flap-retraction floor, found by the reachable-surface
+> classification guard — bringing it to 15.)
 >
 > They add **no coverage beyond the surface this phase itself made reachable**.
 > **CMD-07** — Phase 2's own work, in plan 02-02 — registered eight previously-NACKing
