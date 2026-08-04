@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
+
+from .authority import SUPPORTED_AUTHORITY_LEVELS, parse_authority_level
 
 # Find .env from project root regardless of CWD
 _ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -148,6 +150,89 @@ class Settings(BaseSettings):
         description="URL of the local Whisper ASR HTTP service (legacy fallback)",
     )
 
+    # --- Authority & safety --------------------------------------------------
+    authority_level: str = Field(
+        default="full",
+        description=(
+            "How far MERLIN may go with the aircraft. 'advisory' never commands and "
+            "reports what it would have done; 'assisted' executes but withholds "
+            "anything command_safety flags as 'warning'; 'full' executes unless "
+            "command_safety blocks it outright. Defaults to 'full' because that is "
+            "exactly today's behaviour -- restriction is opt-in, so upgrading changes "
+            "nothing. Caveat: 'assisted' keys off 'warning' severity, and only 7 safety "
+            "rules exist, covering gear, flaps, autopilot and throttle -- so for the "
+            "other 16 of the 20 commandable systems 'assisted' behaves identically to "
+            f"'full'. One of {SUPPORTED_AUTHORITY_LEVELS}; an unknown value fails at "
+            "startup rather than degrading silently."
+        ),
+    )
+    authority_override_grace_s: float = Field(
+        default=30.0,
+        gt=0.0,
+        description=(
+            "Seconds after MERLIN issues a command during which a change to that "
+            "command's own telemetry fields is attributed to MERLIN. Without the grace "
+            "window MERLIN's own command reads back as a pilot override and it drops "
+            "its own authority."
+        ),
+    )
+    authority_override_settle_s: float = Field(
+        default=2.0,
+        gt=0.0,
+        description=(
+            "Seconds to wait before re-scrutinising the fields of a command that has no "
+            "verification rule. Surfaces, autopilot and radios broadcast at 1 Hz, so a "
+            "shorter settle reads the pre-command value and calls MERLIN's own change a "
+            "pilot override."
+        ),
+    )
+    authority_override_cooldown_s: float = Field(
+        default=120.0,
+        gt=0.0,
+        description=(
+            "Seconds MERLIN stays advisory after a pilot override. Rolling -- each new "
+            "override pushes the expiry out, so a pilot who keeps flying keeps MERLIN "
+            "deferring. Authority restores automatically when the cooldown lapses."
+        ),
+    )
+    authority_watchdog_max_timeouts: int = Field(
+        default=3,
+        ge=1,
+        description=(
+            "Consecutive command-path timeouts before MERLIN latches to advisory. Three "
+            "tolerates a transient hiccup while still catching a dead adapter. The latch "
+            "is cleared on reconnect, never by a later success -- a latch that stops "
+            "command issuance cannot produce the ack that would clear it."
+        ),
+    )
+    authority_command_timeout_s: float = Field(
+        default=5.0,
+        gt=0.0,
+        description=(
+            "Seconds to wait for a command acknowledgment from the sim adapter. Promotes "
+            "the value previously hardcoded in TelemetryClient.send_command so the "
+            "watchdog and the tool deadline can be reasoned about together."
+        ),
+    )
+    authority_verify_timeout_s: float = Field(
+        default=3.0,
+        gt=0.0,
+        description=(
+            "Seconds CommandVerifier polls telemetry for post-execution confirmation. "
+            "Promotes the value previously hardcoded in CommandVerifier."
+        ),
+    )
+    authority_tool_timeout_s: float = Field(
+        default=12.0,
+        gt=0.0,
+        description=(
+            "Outer deadline on the set_aircraft_control tool call. Must exceed "
+            "authority_command_timeout_s + authority_verify_timeout_s: the outer "
+            "deadline starts first, so an equal budget pre-empts the genuine ack "
+            "timeout and the watchdog never observes it. Enforced at startup."
+        ),
+    )
+
     # --- TTS (Text-to-Speech) ------------------------------------------------
     tts_backend: str = Field(
         default="cartesia",
@@ -220,12 +305,45 @@ class Settings(BaseSettings):
         description="Log level: DEBUG, INFO, WARNING, ERROR",
     )
 
+    @field_validator("authority_level")
+    @classmethod
+    def _normalise_authority_level(cls, value: str) -> str:
+        """Reject an unknown authority level at startup, listing what is supported.
+
+        There is no fallback branch on purpose. A typo that silently resolved to a
+        default would be a typo that granted MERLIN authority nobody asked for.
+        """
+        try:
+            return parse_authority_level(value).value
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
     @model_validator(mode="after")
     def _build_derived(self) -> Settings:
         # Build telemetry service URL from components if not explicitly set
         if not self.telemetry_service_url:
             self.telemetry_service_url = (
                 f"ws://{self.telemetry_service_host}:{self.telemetry_service_port}/ws/telemetry"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_authority_timeout_budget(self) -> Settings:
+        """The tool deadline must outlast the ack wait plus the verification poll.
+
+        ``set_aircraft_control``'s outer ``asyncio.wait_for`` starts first, so if its
+        budget is not strictly larger than what it contains, it fires before the ack
+        timeout does -- the command path looks like a slow tool rather than a dead
+        adapter, and the watchdog never sees the timeout it exists to count.
+        """
+        inner = self.authority_command_timeout_s + self.authority_verify_timeout_s
+        if self.authority_tool_timeout_s <= inner:
+            raise ValueError(
+                f"authority_tool_timeout_s ({self.authority_tool_timeout_s}) must be greater "
+                f"than authority_command_timeout_s ({self.authority_command_timeout_s}) + "
+                f"authority_verify_timeout_s ({self.authority_verify_timeout_s}) = {inner}; "
+                "otherwise the tool deadline pre-empts the ack timeout and the command-path "
+                "watchdog can never observe a genuine timeout."
             )
         return self
 

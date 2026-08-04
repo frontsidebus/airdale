@@ -7,6 +7,7 @@ Source files:
 - `orchestrator/orchestrator/command_safety.py` -- Pre-execution safety interlocks
 - `orchestrator/orchestrator/procedures.py` -- Multi-step procedure definitions and executor
 - `orchestrator/orchestrator/command_history.py` -- Command history and undo logic
+- `orchestrator/orchestrator/authority.py` -- Authority level and the reason it holds (see [Authority](#authority))
 
 ---
 
@@ -106,6 +107,31 @@ Blocked rules short-circuit -- the first matching block stops evaluation. Warnin
 | `flaps_full_at_cruise_speed` | `FLAPS_SET`, `FLAPS_FULL` | Full flaps (value >= 16383) and IAS > 150 kt | warning |
 | `ap_disconnect_low` | `AP_MASTER` | Autopilot is ON and AGL < 500 ft, airborne | warning |
 | `throttle_idle_on_approach` | `THROTTLE_SET` | Throttle < 10% during approach phase, AGL > 100 ft | warning |
+| `fuel_selector_off_in_flight` | `FUEL_SELECTOR_OFF` | Airborne | **blocked** |
+| `fuel_selector_set_to_off_in_flight` | `FUEL_SELECTOR_SET` | Index value is 0 (the OFF position) and airborne | **blocked** |
+| `mixture_cutoff_in_flight` | `MIXTURE_SET` | Value <= 0 (idle cut-off) and airborne | **blocked** |
+| `crossfeed_change_in_flight` | `CROSS_FEED_OPEN`, `CROSS_FEED_OFF`, `CROSS_FEED_TOGGLE` | Airborne | warning |
+| `parking_brake_on_the_roll` | `PARKING_BRAKES` | On the ground above `PARKING_BRAKE_MAX_GROUND_SPEED_KT` (5 kt) | **blocked** |
+| `parking_brake_in_flight` | `PARKING_BRAKES` | Airborne | warning |
+
+The last six were added with Phase 2's authority work and cover the surface that phase itself
+made reachable. CMD-07 registered the `FUEL_SELECTOR_*` and `CROSS_FEED_*` events in the MSFS
+adapter's `CommandMap`; before that they NACKed, after it `TransmitClientEvent` fires for real,
+and both systems were already in the `set_aircraft_control` enum. `MAGNETO_SET` was held back
+from the same treatment precisely because registering it "turns a named tool call into a working
+in-flight engine shutdown with nothing in front of it" -- and fuel selector OFF in flight is that
+same shutdown by another route. The reachable set and the deferred set follow one severity
+rationale; these rules are that rationale applied to the reachable half.
+
+**Why crossfeed warns instead of blocking.** Crossfeed is a legitimate in-flight fuel-balancing
+action, and *closing* it is frequently the corrective move. Blocking `CROSS_FEED_OFF` in flight
+would prevent the safe action along with the unsafe one. A warning does the work: `assisted`
+withholds on it, `full` executes with the concern attached.
+
+**Every new rule is gated on being airborne** (or, for the parking brake, on ground speed), and
+each has an explicit negative test asserting it does not fire on the ground. Mixture to cut-off
+on the ground *is* the normal shutdown; fuel selector OFF on the ground is how you secure the
+aircraft. A rule that refused those would be worse than no rule -- it would get configured away.
 
 ### Aircraft-Specific Limits
 
@@ -153,6 +179,98 @@ checker.add_rule(custom_rule)
 The condition function signature is always `(command: str, value: int, state: SimState, limits: AircraftLimits | None) -> bool`. Return `True` when the unsafe condition is detected.
 
 The `message_template` supports these format variables: `{command}`, `{ias}`, `{agl}`, `{phase}`, `{vfe}`.
+
+---
+
+## Authority
+
+Safety interlocks answer *"is this command safe right now?"*. Authority answers a different question: *"may MERLIN act at all?"* The two compose. The safety check runs first and its verdict is an **input** to the authority decision, which is why the authority gate lives inside `set_aircraft_control` -- the one point where the resolved SimConnect event, live telemetry, and the `SafetyResult` all exist and nothing has been transmitted yet.
+
+Enforcement is a code branch, never prompt text. MERLIN is not asked to respect the authority level; the tool refuses to transmit. A guard that lives in the system prompt is defeated by anything that reaches the conversation.
+
+### Authority Levels
+
+There are exactly three levels, set by `AUTHORITY_LEVEL` (default `full`, so upgrading changes no behaviour -- restriction is opt-in).
+
+| Level | Clean verdict | `warning` verdict | `blocked` verdict |
+|---|---|---|---|
+| `full` | Executes | Executes, with the advisory attached | Refused |
+| `assisted` | Executes | **Withheld** -- MERLIN defers to the pilot | Refused |
+| `advisory` | **Dry run** -- describes the action, sends nothing | Dry run, describing the action and the concern | Refused |
+
+Note the column for `blocked`: **`blocked` wins at every level.** The safety short-circuit runs before the authority gate, so a blocked command reports as blocked regardless of authority. Authority can only ever reduce what gets sent, never widen it.
+
+The two restricted outcomes are reported to Claude as decisions, not failures:
+
+- **Advisory dry run** -- `{"advisory": true, "would_execute": "GEAR_DOWN", ...}`. Carries no `error` key, because it is not an error; the aircraft is simply the pilot's.
+- **Assisted withhold** -- `{"withheld": true, "command": "GEAR_DOWN", ...}`. Also carries no `error` key. The phrasing MERLIN relays makes clear it is deferring, not that the command failed.
+
+### Why Authority Is Restricted -- the Four Reasons
+
+A level travels with the reason it holds that value, because "MERLIN is only advising" means something different to a pilot depending on the cause.
+
+| Reason | Meaning | How it clears |
+|---|---|---|
+| `config` | The level the operator asked for | Change `AUTHORITY_LEVEL` |
+| `override` | The pilot moved a control themselves; MERLIN is standing off | Rolling cooldown (`AUTHORITY_OVERRIDE_COOLDOWN_S`) lapses |
+| `watchdog` | The command path stopped acknowledging -- MERLIN cannot reach the sim | Latched; cleared out of band, e.g. on reconnect |
+| `degraded` | The authority subsystem itself failed to start | Terminal for the process lifetime |
+
+`degraded` is a **reason, not a level.** A composition root that cannot build a real authority state substitutes `AuthorityState.degraded_fallback(...)`, which is permanently advisory. Making it a fourth *level* would have threaded it through the gate, the transport floor, the status endpoint, the UI, and every test; as a reason it threads only through the display. That is also why the level set is deliberately three -- a fourth authority state was considered and rejected.
+
+Anything that branches on the reason needs a `degraded` arm. A missing branch does not error, it renders a failed authority subsystem as a deliberate `advisory` configuration -- the pilot then reads a fault as a setting.
+
+### Coverage Caveat -- `assisted` Is Narrower Than It Sounds
+
+**`assisted` withholds only on a `warning`-severity safety verdict, or on no verdict at all.** If a rule fires with `warning`, or telemetry was unreachable so no rule could be evaluated, the command is withheld. If every rule passes cleanly, the command executes exactly as it would at `full`.
+
+`DEFAULT_RULES` contains **15 rules, covering 9 systems**: gear, flaps, autopilot, throttle, fuel selector, mixture, crossfeed, parking brake, and spoilers. `_resolve_command` handles **20** commandable systems.
+
+The **11** that remain unruled -- `radio`, `barometer`, `trim`, `propeller`, `deice`, and the six systems deferred under CMD-09 (`magnetos`, `carb_heat`, `fuel_pump`, `starter`, `primer`, `lights`) -- have no rule of either severity, so **`assisted` behaves identically to `full` for them.** That is the honest shape of the caveat, and it has not gone away; what changed is which systems it applies to.
+
+Note where the six deferred systems sit in that list: they are unreachable anyway (absent from the tool enum, absent from the adapter's `CommandMap`), so the practical gap at `assisted` is `radio`, `barometer`, `trim`, `propeller` and `deice`. Of those, `deice` is the one with real consequences.
+
+### The coverage guard
+
+Counting rules by hand is what let CMD-07 widen the reachable surface while `DEFAULT_RULES` stood still. `test_every_reachable_command_is_ruled_or_classified` now makes that impossible to do silently: every SimConnect event reachable through the `set_aircraft_control` enum must appear in `DEFAULT_RULES`, in `SAFETY_EXEMPT_EVENTS` with a stated reason, or in `UNGUARDED_KNOWN_GAPS` as declared debt. Widening the surface without making a safety decision fails CI.
+
+All **52** reachable events are currently classified: **20 ruled, 31 exempt, 1 declared**. The single declared gap is `PROP_PITCH_SET` -- which end of its 0-16383 range is coarse pitch is aircraft-dependent, so a rule keyed on a low value would either nuisance-warn through every cruise descent or miss the real case.
+
+`FUEL_SELECTOR_ALL`/`LEFT`/`RIGHT` are exempt rather than ruled, deliberately: this layer cannot see per-tank quantity, so a rule would fire on every tank change and carry no information -- and since a `warning` is *withheld* at `assisted`, it would make MERLIN refuse routine lateral-balance switching.
+
+Read plainly: **`assisted` is now real protection for the systems that can hurt you fastest** -- gear, flaps, autopilot, throttle, and the fuel and brake surface -- **and remains a no-op for the rest.** Use `advisory` if you want MERLIN to touch nothing.
+
+### Commands MERLIN Refuses Outright -- `parking_brake`, `carb_heat` and `fuel_pump`
+
+Independent of authority level, three systems refuse a request for an absolute *position*:
+
+| System | Refused actions | Still works | Reachable today? |
+|---|---|---|---|
+| `parking_brake` | `on`, `off`, `release`, `set`, `apply`, `engage` | `toggle` | **Yes** -- in the tool enum, in `CRITICAL_COMMANDS`, registered in the adapter |
+| `carb_heat` | `on`, `off` | `toggle` | No -- deferred under CMD-09, not exposed, not registered |
+| `fuel_pump` | `on`, `off` | `toggle` | No -- deferred under CMD-09, not exposed, not registered |
+
+```
+set_aircraft_control("parking_brake", "off")
+  -> {"error": "I cannot confirm the current position of the parking brake ...",
+      "system": "parking_brake", "action": "off", "command": null,
+      "unresolvable": true}
+```
+
+**Why.** Each system maps its state words *and* `"toggle"` to the *same* SimConnect toggle event (`PARKING_BRAKES`, `ANTI_ICE_CARB_HEAT_TOGGLE`, `FUEL_PUMP_TOGGLE`). Emitting a toggle in response to "carb heat off" turns carb heat **on** whenever it was already off -- the command does the opposite of what was asked, which in icing conditions is a real hazard.
+
+**`parking_brake` is the one of the three that was actually reachable.** The other two are held back by CMD-09, so their defect is latent; the parking brake is in the `set_aircraft_control` enum, in `CRITICAL_COMMANDS`, and registered in the adapter's `CommandMap`. "Parking brake off" on landing rollout -- with the brake already off, which is the whole point of saying it -- *set* the brake. That is a runway excursion, not a nuisance (CR-04).
+
+The obvious fix -- emit the toggle only when the requested state differs from the current one -- is not implementable. There is no parking-brake, carb-heat or fuel-pump position anywhere in the telemetry chain: not in the SimConnect data definition, the adapter model, the universal schema, `SurfaceState`, or the mock adapter. There is nothing to read. Adding it is a four-layer change that is deliberately deferred, and it should be taken once for all three rather than piecemeal.
+
+The refusal is checked *before* the resolver's result is turned into an error, so a refused action gets the explanation rather than "Unknown control". `command` in the returned dict is `null` when the resolver declines the action outright (`parking_brake`) and carries the toggle event when the resolver still resolves one but the refusal stops it being sent (`carb_heat`, `fuel_pump`) -- read it defensively.
+
+**A blocked safety rule sits behind the surviving `toggle` as well.** `PARKING_BRAKES` is blocked above 5 kt ground speed and warns in flight, so the explicit toggle is bounded too -- refusing the ambiguous verbs and guarding the unambiguous one are separate layers, and this system has both.
+
+**Workaround.** `action="toggle"` works normally and is unaffected. Tell MERLIN what the panel shows if you need a specific position:
+
+> "Parking brake is set, release it."
+> "Carb heat is currently off, toggle it on."
 
 ---
 
@@ -376,32 +494,38 @@ Pilot: "Gear up"
    +--> If warning: proceed with advisory message
     |
     v
-2. STATE SNAPSHOT (command_history.py)
+2. AUTHORITY GATE (authority.py, enforced in tools.py)
+   +--> advisory: return a dry-run description, command NOT sent
+   +--> assisted + warning: withhold, command NOT sent
+   +--> otherwise: proceed
+    |
+    v
+3. STATE SNAPSHOT (command_history.py)
    +--> Capture relevant sim state before execution
     |
     v
-3. EXECUTE (tools.py -> sim_client.py -> telemetry service -> adapter)
+4. EXECUTE (tools.py -> sim_client.py -> telemetry service -> adapter)
    +--> _resolve_command() translates to SimConnect event
    +--> Send via WebSocket to telemetry service
    +--> Adapter executes via SimConnect
    +--> ACK returned
     |
     v
-4. RECORD (command_history.py)
+5. RECORD (command_history.py)
    +--> Store command + pre-state snapshot in history ring buffer
     |
     v
-5. VERIFY (command_verifier.py)
+6. VERIFY (command_verifier.py)
    +--> Poll telemetry for up to 3 seconds
    +--> Compare expected vs actual state
    +--> Return VerificationResult to Claude
     |
     v
-6. REPORT
+7. REPORT
    +--> Claude reports outcome to pilot
    +--> Includes safety warnings, verification status, and any failures
 ```
 
-For multi-step procedures, steps 1-5 execute for each step in sequence, with configurable delays between steps. The full `ProcedureResult` is returned to Claude after all steps complete.
+For multi-step procedures, steps 1-6 execute for each step in sequence, with configurable delays between steps. The full `ProcedureResult` is returned to Claude after all steps complete.
 
-For undo, the history is consulted, a reverse action is generated, and that action goes through the same pipeline (safety check, execute, verify).
+For undo, the history is consulted, a reverse action is generated, and that action goes through the same pipeline (safety check, authority gate, execute, verify). An undo is a command like any other -- at `advisory` it is described, not sent.

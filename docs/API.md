@@ -482,7 +482,7 @@ Control an aircraft system in the simulator. Sends commands through the telemetr
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `system` | string | Yes | Aircraft system: `flaps`, `gear`, `autopilot`, `throttle`, `radio`, `barometer`, `trim`, `parking_brake`, `spoilers`, `mixture`, `propeller` |
+| `system` | string | Yes | Aircraft system: `flaps`, `gear`, `autopilot`, `throttle`, `radio`, `barometer`, `trim`, `parking_brake`, `spoilers`, `mixture`, `propeller`, `fuel_selector`, `crossfeed`, `deice` |
 | `action` | string | Yes | Action to perform (system-dependent, see below) |
 | `value` | number | No | Numeric value when needed (units depend on system) |
 
@@ -497,10 +497,13 @@ Control an aircraft system in the simulator. Sends commands through the telemetr
 | `radio` | `com1`, `com2`, `nav1`, `nav2` | Frequency in MHz (e.g. 121.5) |
 | `barometer` | `set` | inHg (e.g. 29.92) |
 | `trim` | `set` | Raw value (-16383 to +16383) |
-| `parking_brake` | (any) | -- |
+| `parking_brake` | `toggle` | -- |
 | `spoilers` | `toggle`, `set` | Percentage (0-100) for `set` |
 | `mixture` | `set` | Percentage (0-100) |
 | `propeller` | `set` | Percentage (0-100) |
+| `fuel_selector` | `off`, `all`/`both`, `left`, `right`, `set` | Raw selector index for `set` |
+| `crossfeed` | `open`/`on`, `close`/`off`, `toggle` | -- |
+| `deice` | `pitot`/`pitot_heat`, `structural`/`airframe`, `windshield`, `props`/`prop_deice` | -- |
 
 **Returns (success):**
 
@@ -525,6 +528,11 @@ Control an aircraft system in the simulator. Sends commands through the telemetr
 }
 ```
 
+`safety_note` is attached only when the command is critical **and** it actually reached the
+aircraft (`success` truthy with no `error` key). A critical command that was refused, withheld
+by the authority gate, or NACKed by the adapter carries no `safety_note` — the note claims
+something happened, so it must not appear beside an `error` saying nothing was sent (CR-02).
+
 **Returns (error):**
 
 ```json
@@ -532,6 +540,25 @@ Control an aircraft system in the simulator. Sends commands through the telemetr
   "error": "Unknown control: system=invalid, action=foo"
 }
 ```
+
+**Returns (unresolvable position):**
+
+```json
+{
+  "error": "I cannot confirm the current position of the parking brake ...",
+  "system": "parking_brake",
+  "action": "off",
+  "command": null,
+  "unresolvable": true
+}
+```
+
+Returned when an absolute position is requested for a system whose position no telemetry
+reports: `parking_brake` (`on`, `off`, `release`, `set`, `apply`, `engage`) and, once they are
+exposed, `carb_heat` / `fuel_pump` (`on`, `off`). Nothing is transmitted. `command` is `null`
+when the resolver declines the action outright, and carries the toggle event when the resolver
+still resolves one but the refusal stops it being sent — a consumer reading this key must
+tolerate `null`. Use `action: "toggle"` instead.
 
 ---
 

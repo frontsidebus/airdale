@@ -15,8 +15,9 @@ import asyncio
 import base64
 import json
 import logging
+import math
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ import websockets as ws_lib
 from fastapi import (
     Depends,
     FastAPI,
+    Form,
     Request,
     UploadFile,
     WebSocket,
@@ -36,15 +38,33 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from orchestrator.audio_processing import (
     convert_webm_to_wav_normalized,
+    decode_webm_to_samples,
+)
+from orchestrator.authority import (  # noqa: E402
+    AuthorityLevel,
+    AuthorityReason,
+    AuthorityState,
+    parse_authority_level,
 )
 from orchestrator.claude_client import ClaudeClient  # noqa: E402
 from orchestrator.config import load_settings  # noqa: E402
 from orchestrator.context_store import ContextStore  # noqa: E402
 from orchestrator.flight_phase import FlightPhaseDetector  # noqa: E402
-from orchestrator.sim_client import SimState, TelemetryClient  # noqa: E402
+from orchestrator.override_detector import OverrideDetector  # noqa: E402
+from orchestrator.proactive_monitor import ProactiveEvent  # noqa: E402
+from orchestrator.sim_client import (  # noqa: E402
+    HealthMonitor,
+    SimState,
+    TelemetryClient,
+)
 from orchestrator.stt.deepgram import DeepgramSTTClient  # noqa: E402
 from orchestrator.tts.cartesia import CartesiaClient  # noqa: E402
 from orchestrator.tts_preprocessor import preprocess_for_tts  # noqa: E402
+from orchestrator.turn import (  # noqa: E402
+    SilenceTurnDetector,
+    TurnDetector,
+    create_turn_detector,
+)
 from orchestrator.whisper_client import WhisperClient  # noqa: E402
 from pydantic import BaseModel
 
@@ -71,6 +91,25 @@ _MIN_AUDIO_DURATION_SECS = 0.5
 
 # Brief pause (seconds) after MERLIN finishes speaking before accepting input
 _POST_SPEECH_PAUSE_SECS = 0.3
+
+# ---------------------------------------------------------------------------
+# Turn probe limits
+#
+# /api/turn-probe is an unauthenticated local endpoint that spawns an ffmpeg
+# process per request, and the browser calls it from a requestAnimationFrame
+# loop. Both bounds below exist to keep a client bug from becoming a local fork
+# bomb; the browser has matching guards, but the server does not trust them.
+# ---------------------------------------------------------------------------
+
+# Opus at ~24 kbps puts a 15 s utterance near 45 KB, so 2 MiB is several minutes
+# of audio. Anything larger is a bug or abuse, and is rejected before ffmpeg runs.
+_MAX_TURN_PROBE_BYTES = 2 * 1024 * 1024
+
+# Sample rate decode_webm_to_samples emits; turn.features raises on anything else.
+_TURN_PROBE_SAMPLE_RATE = 16000
+
+# Cap on tracked probe clients so the throttle table cannot grow without bound.
+_MAX_TURN_PROBE_CLIENTS = 64
 
 # ---------------------------------------------------------------------------
 # TTS phrase cache -- pre-populated at startup for common MERLIN phrases
@@ -109,10 +148,84 @@ class AppState:
     deepgram_client: DeepgramSTTClient | None = None  # v2 streaming STT
     cartesia_client: CartesiaClient | None = None  # v2 low-latency TTS
     tts_client: httpx.AsyncClient | None = None  # Legacy ElevenLabs HTTP
+    turn_detector: TurnDetector | None = None  # End-of-turn detection for /api/turn-probe
+    #: How much MERLIN may do to the aircraft, and why. The ``None`` default is a
+    #: construction convenience for directly-built test states only -- ``lifespan``
+    #: guarantees a non-``None`` value on every path out of startup, because a
+    #: ``None`` authority reads as FULL to the gate in ``tools.py`` and makes the
+    #: dispatch floor in ``sim_client.py`` inert.
+    authority: AuthorityState | None = None
+    health: HealthMonitor | None = None  # Subsystem health, incl. command_path (D-17)
+    override_detector: OverrideDetector | None = None  # Drops authority on pilot override
+    #: Every currently connected ``/ws/chat`` socket. A fan-out registry for
+    #: server-initiated frames, *not* a session store -- nothing per-client is
+    #: kept here, and two tabs of the same browser are two independent members.
+    #: Membership is owned entirely by ``ws_chat``'s ``accept()`` and its
+    #: ``finally``, plus ``_broadcast_chat`` discarding a socket whose send fails.
+    chat_clients: set[WebSocket] = field(default_factory=set)
+    #: Handle for ``_authority_event_pump``, so shutdown can cancel it. ``None``
+    #: on a directly-built test state, and until ``lifespan`` starts the task.
+    authority_event_task: asyncio.Task[None] | None = None
     tts_cache: dict[str, bytes] = field(default_factory=dict)
+    #: client host -> time.monotonic() of its last accepted turn probe
+    turn_probe_seen: dict[str, float] = field(default_factory=dict)
     sim_connected: bool = False
     bridge_last_seen: float = 0.0
     bridge_connected: bool = False
+
+
+def _int_setting(app_settings: Any, name: str, default: int) -> int:
+    """Read an integer setting defensively.
+
+    Mirrors the ``getattr(settings, ..., default)`` idiom used throughout this
+    module, but coerces the result. Tests inject a ``MagicMock`` settings object
+    where ``getattr`` invents an attribute instead of raising, which would put a
+    non-serialisable value into ``/api/status`` and a non-comparable one into the
+    probe throttle.
+    """
+    try:
+        return int(getattr(app_settings, name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_health_monitor() -> HealthMonitor:
+    """Register the same subsystem set the CLI registers (D-17).
+
+    ``orchestrator/main.py`` registers these five by name. The browser and the CLI
+    must not report different subsystem sets, or a pilot comparing the two would
+    have to work out which absence means "not wired here" and which means "down".
+    """
+    health = HealthMonitor()
+    health.register("simconnect_bridge")
+    health.register("chromadb")
+    health.register("whisper")
+    health.register("claude_api")
+    # Belt and braces -- TelemetryClient registers this too when it is handed a
+    # monitor. Registering here keeps command_path in summary() from process start,
+    # even if some future path builds the client without a monitor.
+    health.register("command_path")
+    return health
+
+
+def _json_safe_subsystems(health: HealthMonitor | None) -> dict[str, dict[str, Any]]:
+    """``HealthMonitor.summary()`` with ``age_seconds`` made JSON-legal.
+
+    A subsystem that has never reported healthy carries ``age_seconds == inf``, and
+    Starlette's ``JSONResponse`` renders with ``allow_nan=False`` -- so returning
+    the summary verbatim turns ``/api/status`` into a 500 the moment any registered
+    subsystem is unseen, which is all of them at startup. ``None`` is the honest
+    wire value for "never seen": a sentinel number would be one the browser could
+    not tell from a real age, and ``Infinity`` is not JSON the browser can parse.
+    """
+    if health is None:
+        return {}
+    summary = health.summary()
+    for entry in summary.values():
+        age = entry.get("age_seconds")
+        if isinstance(age, float) and not math.isfinite(age):
+            entry["age_seconds"] = None
+    return summary
 
 
 def get_app_state(request: Request) -> AppState:
@@ -168,6 +281,138 @@ async def _prepopulate_tts_cache(state: AppState) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Authority announcements -- AUTH-06's "informs the pilot" clause, browser half
+#
+# ``OverrideDetector`` builds two announcements: one when the pilot works a
+# control MERLIN did not command, and one when the cooldown lapses (D-14). Both
+# went onto a queue this module constructed and never read -- the drop to
+# advisory happened and nobody told the pilot (VERIFICATION Gap 3 / WR-06).
+#
+# The badge added by plan 02-10 is not a substitute. It renders on a 10 s
+# ``pollStatus`` interval and carries no words, so it can read FULL (configured)
+# while the gate is already refusing, and it cannot say "you've taken the flaps".
+# ---------------------------------------------------------------------------
+
+
+def _authority_event_frame(
+    event: ProactiveEvent,
+    authority: AuthorityState | None,
+) -> dict[str, Any]:
+    """Build the ``authority_event`` wire frame for one announcement.
+
+    The three authority keys carry the live ``summary()`` so the browser can move
+    the badge from the announcement itself rather than waiting up to ten seconds
+    for the next poll (IN-04). ``renderAuthority`` reads exactly
+    ``authority_level``, ``authority_reason`` and ``authority``, which is why the
+    frame names them that way and not something tidier.
+
+    With no ``AuthorityState`` the three keys are ``None`` -- present, so the
+    browser's ``typeof`` branch still fires, but not filled in. Substituting
+    ``full``/``config`` would report a crashed authority subsystem as an
+    operator's own choice, which is the same rule ``_on_tool_result`` follows for
+    ``command_advisory``, and ``renderAuthority`` already renders an unreported
+    level verbatim rather than laundering it.
+    """
+    data = event.data or {}
+    summary = authority.summary() if authority is not None else None
+    return {
+        "type": "authority_event",
+        "event": data.get("event"),
+        "message": event.message,
+        "priority": event.priority,
+        "fields": data.get("fields", []),
+        "authority_level": summary["level"] if summary is not None else None,
+        "authority_reason": summary["reason"] if summary is not None else None,
+        "authority": summary,
+    }
+
+
+async def _broadcast_chat(state: AppState, frame: dict[str, Any]) -> None:
+    """Send one server-initiated frame to every registered chat socket.
+
+    Iterates a snapshot copy rather than the live set for two reasons that both
+    end the broadcast early: ``discard`` during iteration raises, and a raised
+    exception here would deny the announcement to every client after the one that
+    went away (T-02-15-02). A socket whose send fails is dropped from the registry
+    on the spot, which is also what keeps the registry from growing for the life
+    of the process (T-02-15-03).
+
+    Never raises. The caller is a forever-loop whose death restores Gap 3.
+    """
+    for ws in list(state.chat_clients):
+        try:
+            await ws.send_json(frame)
+        except Exception as exc:
+            state.chat_clients.discard(ws)
+            logger.debug("Dropped a chat client from the announcement fan-out: %s", exc)
+
+
+async def _authority_event_pump(state: AppState) -> None:
+    """Drain ``OverrideDetector.events`` forever, fanning each one out to the browser.
+
+    The browser half of AUTH-06 and the only consumer of that queue in this
+    process; the CLI's sibling is ``orchestrator.main.drain_authority_events``.
+    Exactly one drains per process -- a second would split the stream and each
+    would see only some announcements.
+
+    Read-only with respect to authority: it consumes events, reads ``summary()``
+    and sends frames. No ``AuthorityState`` mutator is reachable from here, and
+    nothing the browser can send reaches this path (T-02-15-07).
+    """
+    if state.override_detector is None:
+        # The degrade-and-continue path in `lifespan` can leave it None, and so
+        # can a telemetry service that never came up. Either way the missing
+        # announcements are a symptom rather than the disease: with no detector
+        # MERLIN also never *drops* to advisory when the pilot takes the controls.
+        logger.info(
+            "No pilot-override detector; authority announcements are not running. "
+            "MERLIN will also not drop to advisory when the pilot takes the controls"
+        )
+        return
+
+    while True:
+        # Deliberately re-read through `state.override_detector` rather than
+        # binding the queue to a local: this is the one blocking consumer in the
+        # process, and grepping for a second occurrence of this exact expression
+        # is how a future edit that adds a competing drain gets caught.
+        event = await state.override_detector.events.get()
+        try:
+            # Logged before the fan-out so a headless deployment with no browser
+            # attached still records that MERLIN told the pilot something.
+            logger.info("Authority announcement: %s", event.message)
+            await _broadcast_chat(state, _authority_event_frame(event, state.authority))
+        except Exception:
+            # `except Exception` does not catch asyncio.CancelledError (a
+            # BaseException since 3.8), which is load-bearing here: shutdown
+            # cancels this task and that cancellation must propagate rather than
+            # be logged and looped over. Everything else is caught deliberately --
+            # this task is the only thing between the detector and the browser,
+            # and a loop that dies on one bad announcement silently restores the
+            # exact gap it exists to close (T-02-15-01).
+            logger.exception("Failed to broadcast authority announcement: %s", event.message)
+
+
+def _on_authority_pump_done(task: asyncio.Task[None]) -> None:
+    """Log the death of the announcement pump.
+
+    ``_authority_event_pump`` loops forever, so anything other than cancellation
+    reaching here means the browser has stopped being told about override drops
+    and restores. The ``cancelled()`` guard is not decoration: ``task.exception()``
+    re-raises ``CancelledError`` on a cancelled task, and shutdown cancels this one
+    on every clean stop.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(
+            "Authority announcement pump failed; the browser is no longer being "
+            "told about authority changes: %s",
+            exc,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Lifespan -- start / stop background services
 # ---------------------------------------------------------------------------
 
@@ -181,8 +426,65 @@ async def lifespan(app: FastAPI):
     # Context store (ChromaDB) -- degrades gracefully if unavailable
     state.context_store = ContextStore(chromadb_url=settings.chromadb_url)
 
-    # Telemetry client
-    state.sim_client = TelemetryClient(url=settings.telemetry_service_url)
+    # --- Authority and subsystem health (fail SAFE, never fail silent) --------
+    #
+    # Deliberately carved out of the degrade-and-continue idiom used below for STT,
+    # TTS and the turn detector. For those, `None` means "this feature is off". For
+    # authority, `None` means *unrestricted*: the gate in tools.py reads a None
+    # authority as FULL, and the floor, the ack watchdog and the override cooldown
+    # in sim_client.py are all guarded on `is not None`. A swallowed exception here
+    # would therefore disable the whole authority layer on the browser path
+    # regardless of AUTHORITY_LEVEL, while /api/status reported it as a deliberate
+    # `full` / `config` setup -- indistinguishable from an operator's own choice.
+    #
+    # Do NOT "make this consistent" with its neighbours. On failure we substitute a
+    # degraded, advisory-only state; if even that cannot be built we let the
+    # exception out and the server does not start, because a web server serving
+    # with no authority object is strictly more dangerous than one that refuses to
+    # serve. The CLI fails CLOSED (orchestrator/main.py lets the exception abort
+    # startup); the browser fails SAFE. Different mechanism, same guarantee: a
+    # construction failure can never *grant* authority. See CLAUDE.md decision 26.
+    try:
+        state.health = _build_health_monitor()
+        state.authority = AuthorityState(
+            parse_authority_level(settings.authority_level),
+            override_cooldown_s=settings.authority_override_cooldown_s,
+            watchdog_max_timeouts=settings.authority_watchdog_max_timeouts,
+        )
+    except Exception as exc:
+        detail = f"authority subsystem failed to start: {exc}"
+        logger.error(
+            "Authority subsystem failed to start (%s); MERLIN is restricting itself "
+            "to advisory for the life of this process",
+            exc,
+            exc_info=True,
+        )
+        # The fallback below is built from enum literals only -- it reads no
+        # Settings and takes no collaborator -- so it is safe to call from inside
+        # the handler for the failure it replaces. If it raises anyway, that
+        # exception propagates and startup aborts: the fail-closed backstop under
+        # the fail-safe default.
+        state.authority = AuthorityState.degraded_fallback(detail)
+        state.health = _build_health_monitor()
+        state.health.update("command_path", False, detail)
+
+    logger.info(
+        "Authority: %s (reason: %s, configured: %s)",
+        state.authority.level.value,
+        state.authority.reason.value,
+        state.authority.configured_level.value,
+    )
+
+    # Telemetry client. One AuthorityState per process, shared by identity: the
+    # client reads it for the dispatch floor, ClaudeClient forwards it to the tool
+    # gate, and the override detector mutates it. A second instance would let the
+    # three disagree about the current level.
+    state.sim_client = TelemetryClient(
+        url=settings.telemetry_service_url,
+        authority=state.authority,
+        health=state.health,
+        command_timeout=settings.authority_command_timeout_s,
+    )
     try:
         await state.sim_client.connect()
         state.sim_connected = True
@@ -211,6 +513,43 @@ async def lifespan(app: FastAPI):
 
         state.sim_client.subscribe(_on_state)
 
+        # Pilot-override detection. This one KEEPS the degrade-and-continue
+        # treatment: without it AUTH-06 never fires, so MERLIN simply never drops
+        # to advisory when the pilot takes the controls -- a capability loss that
+        # leaves the configured level in force. That is the line between the two
+        # treatments: a component whose absence *reduces* what MERLIN may do can
+        # degrade; a component whose absence *increases* it cannot. Logged at
+        # ERROR rather than WARNING because a silently missing detector is a
+        # safety feature that is simply not running.
+        try:
+            state.override_detector = OverrideDetector(
+                state.authority,
+                state.sim_client,
+                grace_s=settings.authority_override_grace_s,
+                settle_s=settings.authority_override_settle_s,
+                verify_timeout_s=settings.authority_verify_timeout_s,
+            )
+            # Its own subscriber, not a call from inside _on_state, so a failure
+            # in one cannot suppress the other (D-11).
+            state.sim_client.subscribe(state.override_detector.on_telemetry_update)
+        except Exception as exc:
+            state.override_detector = None
+            logger.error(
+                "Pilot-override detection unavailable (%s); MERLIN will not drop to "
+                "advisory when the pilot takes the controls",
+                exc,
+                exc_info=True,
+            )
+
+    # The one consumer of the detector's announcement queue on this path.
+    # Started unconditionally, including when telemetry never connected and no
+    # detector was built: the pump logs that absence and returns, so "the pilot
+    # is not being told" is a line in the log rather than a silence. Without it
+    # the queue fills to its 32-slot bound and the detector logs the "no consumer
+    # appears to be draining it" WARNING on every announcement after that.
+    state.authority_event_task = asyncio.create_task(_authority_event_pump(state))
+    state.authority_event_task.add_done_callback(_on_authority_pump_done)
+
     # STT client — route to configured backend
     stt_backend = getattr(settings, "stt_backend", "whisper")
     if stt_backend == "deepgram" and getattr(settings, "deepgram_api_key", ""):
@@ -224,7 +563,30 @@ async def lifespan(app: FastAPI):
         state.whisper_client = WhisperClient(base_url=settings.whisper_url)
         logger.info("STT backend: Whisper (local batch)")
 
-    # Claude client
+    # End-of-turn detector for /api/turn-probe.
+    #
+    # Built through the factory, not SmartTurnDetector directly: the factory
+    # resolves the smart -> silence fallback here at startup and logs the
+    # fetch_turn_model.py hint. Discovering a missing model mid-utterance would
+    # be the worst possible time to find out.
+    try:
+        state.turn_detector = create_turn_detector(settings)
+        logger.info(
+            "Turn detector: %s (available: %s)",
+            state.turn_detector.name,
+            state.turn_detector.available,
+        )
+    except Exception as exc:
+        state.turn_detector = None
+        logger.warning(
+            "Turn detector unavailable (%s); browser will endpoint on fixed silence", exc
+        )
+
+    # Claude client. Handed the same AuthorityState object the telemetry client
+    # holds, so the tool gate and the dispatch floor read one state. The two
+    # timeouts come from settings for the ordering reason RESEARCH B3 names: the
+    # tool-layer deadline must exceed the ack + verify budget or a genuine ack
+    # timeout is cancelled as a tool timeout and the watchdog never sees it.
     state.claude_client = ClaudeClient(
         api_key=settings.anthropic_api_key,
         model=settings.claude_model,
@@ -234,6 +596,9 @@ async def lifespan(app: FastAPI):
         max_tokens_briefing=settings.claude_max_tokens_briefing,
         max_history=settings.claude_max_history,
         temperature=settings.claude_temperature,
+        verify_timeout=settings.authority_verify_timeout_s,
+        command_tool_timeout=settings.authority_tool_timeout_s,
+        authority=state.authority,
     )
 
     # TTS client — route to configured backend
@@ -269,6 +634,16 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down MERLIN web server")
+
+    # Cancelled before the telemetry client disconnects: the detector publishes
+    # from inside the telemetry callback, so stopping the consumer first means no
+    # announcement is built for sockets that are already going away.
+    if state.authority_event_task is not None:
+        state.authority_event_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await state.authority_event_task
+        state.authority_event_task = None
+
     if state.sim_connected and state.sim_client is not None:
         await state.sim_client.disconnect()
 
@@ -317,6 +692,22 @@ class TTSRequest(BaseModel):
     text: str
 
 
+class TurnProbeResponse(BaseModel):
+    """Answer to "has the speaker finished?" for one candidate endpoint.
+
+    ``available`` is separate from ``ended`` on purpose. It tells the browser
+    whether asking is worth doing at all: ``False`` means stop probing for this
+    session and fall back to fixed-silence endpointing, while a transient failure
+    keeps ``available`` true so one bad blob does not permanently degrade
+    responsiveness.
+    """
+
+    ended: bool
+    probability: float
+    detector: str
+    available: bool
+
+
 # ---------------------------------------------------------------------------
 # REST endpoints
 # ---------------------------------------------------------------------------
@@ -358,8 +749,62 @@ async def get_status(state: AppState = Depends(get_app_state)):
         state.bridge_connected and (time.monotonic() - state.bridge_last_seen) < 10.0
     ) or state.sim_connected
 
+    # Feed what this endpoint just measured back into the monitor, so the
+    # subsystems block cannot contradict the top-level fields in the same response
+    # -- a payload saying chromadb_available: true beside chromadb.healthy: false
+    # is worse than no subsystems block at all. The CLI does the same thing
+    # (_update_bridge_health runs before get_health_summary). Nothing here writes
+    # an authority value: the level moves only from configuration at startup,
+    # override detection and the watchdog (T-02-09-03). claude_api is left alone
+    # because this endpoint has no signal for it, and "never observed" is the
+    # honest report.
+    if state.health is not None:
+        state.health.update(
+            "simconnect_bridge",
+            bool(bridge_ok),
+            "Connected" if bridge_ok else "Disconnected",
+        )
+        state.health.update(
+            "chromadb",
+            bool(chromadb_ok),
+            "Connected" if chromadb_ok else "Unavailable; RAG disabled",
+        )
+        state.health.update(
+            "whisper",
+            bool(whisper_ok),
+            "Responding" if whisper_ok else "Unavailable or not the active backend",
+        )
+
     stt_backend = getattr(state.settings, "stt_backend", "whisper")
     tts_backend = getattr(state.settings, "tts_backend", "elevenlabs")
+
+    # Semantic turn probing is only worth the round trip when the detector is a
+    # real model. The silence fallback would just re-derive what the browser can
+    # already time locally, so report it as unavailable and let the browser use
+    # its own vad_silence_ms threshold.
+    turn_probe_available = (
+        state.turn_detector is not None
+        and state.turn_detector.available
+        and not isinstance(state.turn_detector, SilenceTurnDetector)
+    )
+
+    # Authority is read straight out of AuthorityState.summary() rather than
+    # formatted from the enums here, so the CLI and the browser render from one
+    # place. It also removes the branch: AuthorityLevel has three members and
+    # AuthorityReason four, and CLAUDE.md records what a missing branch costs --
+    # tts_configured reported a working Cartesia setup as unconfigured for months
+    # because one arm was absent. There is nothing to keep in sync here.
+    #
+    # An absent authority state reports advisory / degraded, never full / config.
+    # After lifespan this is unreachable in a running server, so this fallback is
+    # for a directly-constructed AppState and for any future path that reaches the
+    # route before startup finished. In both cases the honest answer is "MERLIN
+    # has no working authority state"; rendering that as a deliberate `full`
+    # configuration is the precise ambiguity AUTH-08 exists to remove. Omitting the
+    # keys would be the same ambiguity in a different costume.
+    authority_summary = state.authority.summary() if state.authority is not None else {}
+    authority_level = authority_summary.get("level", AuthorityLevel.ADVISORY.value)
+    authority_reason = authority_summary.get("reason", AuthorityReason.DEGRADED.value)
 
     return {
         "sim_connected": bridge_ok,
@@ -382,6 +827,21 @@ async def get_status(state: AppState = Depends(get_app_state)):
         ),
         "claude_model": state.settings.claude_model,
         "telemetry_service_url": state.settings.telemetry_service_url,
+        # Endpointing: one call tells the browser whether to probe and at what
+        # thresholds, so it never has to guess or hardcode them.
+        "turn_probe_available": turn_probe_available,
+        "turn_probe_silence_ms": _int_setting(state.settings, "turn_probe_silence_ms", 150),
+        "vad_silence_ms": _int_setting(state.settings, "vad_silence_ms", 400),
+        # Authority: how much MERLIN may do to the aircraft, and why (AUTH-08).
+        # The reason is what keeps "deferring to the pilot", "cannot reach the sim"
+        # and "the authority subsystem failed to start" from all rendering as one
+        # undifferentiated advisory badge (D-10).
+        "authority_level": authority_level,
+        "authority_reason": authority_reason,
+        "authority": authority_summary,
+        # Subsystem health, including command_path -- what lets the browser render
+        # "advisory (command path down)" rather than an unexplained badge (D-17).
+        "subsystems": _json_safe_subsystems(state.health),
     }
 
 
@@ -448,6 +908,125 @@ async def transcribe_audio(file: UploadFile, state: AppState = Depends(get_app_s
         )
 
     return result_dict
+
+
+def _turn_probe_result(detector: str, *, available: bool) -> TurnProbeResponse:
+    """A "turn is still going" answer, tagged with why we could not decide."""
+    return TurnProbeResponse(ended=False, probability=0.0, detector=detector, available=available)
+
+
+def _accept_turn_probe(state: AppState, client_host: str, min_interval_ms: float) -> bool:
+    """Record a probe from ``client_host``, or reject it as too soon.
+
+    ``pollVAD`` runs on ``requestAnimationFrame`` at roughly 60 Hz. The browser
+    spaces its own probes, but this endpoint is unauthenticated and spawns an
+    ffmpeg process per call, so it does not take the browser's word for it.
+    """
+    now = time.monotonic()
+    last = state.turn_probe_seen.get(client_host)
+    if last is not None and (now - last) * 1000.0 < min_interval_ms:
+        return False
+
+    if last is None and len(state.turn_probe_seen) >= _MAX_TURN_PROBE_CLIENTS:
+        # Evict the least recently seen client; the table must not grow forever.
+        oldest = min(state.turn_probe_seen, key=lambda host: state.turn_probe_seen[host])
+        del state.turn_probe_seen[oldest]
+
+    state.turn_probe_seen[client_host] = now
+    return True
+
+
+@app.post("/api/turn-probe", response_model=TurnProbeResponse)
+async def turn_probe(
+    request: Request,
+    file: UploadFile,
+    silence_ms: int = Form(...),
+    state: AppState = Depends(get_app_state),
+) -> TurnProbeResponse:
+    """Judge whether the speaker has finished, given the utterance so far.
+
+    The browser keeps the cheap acoustic gate and decides *when* to ask; this
+    endpoint runs the semantic detector and decides *whether* the turn is over.
+    No turn model, feature extraction, or ONNX runtime lives in the browser.
+
+    ``file`` is the whole accumulated MediaRecorder blob, not a trailing slice:
+    webm chunks after the first carry no EBML header and will not decode on
+    their own. Truncation to the model's 8 s window happens inside the detector.
+
+    Never raises. Every failure path returns a not-ended answer, because the
+    browser's fixed-silence fallback is what keeps voice input working and a
+    5xx here would only add latency to reaching it. That claim is enforced
+    rather than asserted: the decode spawns ffmpeg, so it raises
+    ``FileNotFoundError`` when ffmpeg is not on ``PATH`` and ``ValueError`` from
+    ``np.frombuffer`` on a truncated ffmpeg buffer -- both are caught here, and
+    the detector call carries its own guard (WR-01).
+    """
+    detector = state.turn_detector
+    if detector is None or not detector.available:
+        # Permanent for this session: tell the browser to stop asking.
+        return _turn_probe_result("unavailable", available=False)
+
+    client_host = request.client.host if request.client else "unknown"
+    probe_interval_ms = _int_setting(state.settings, "turn_probe_silence_ms", 150)
+    if not _accept_turn_probe(state, client_host, probe_interval_ms / 2):
+        return _turn_probe_result("throttled", available=True)
+
+    declared_size = getattr(file, "size", None)
+    if declared_size is not None and declared_size > _MAX_TURN_PROBE_BYTES:
+        logger.warning(
+            "Rejecting %d-byte turn probe from %s (limit %d)",
+            declared_size,
+            client_host,
+            _MAX_TURN_PROBE_BYTES,
+        )
+        return _turn_probe_result("too_large", available=True)
+
+    audio_bytes = await file.read()
+    if len(audio_bytes) > _MAX_TURN_PROBE_BYTES:
+        logger.warning(
+            "Rejecting %d-byte turn probe from %s (limit %d)",
+            len(audio_bytes),
+            client_host,
+            _MAX_TURN_PROBE_BYTES,
+        )
+        return _turn_probe_result("too_large", available=True)
+
+    # The decode is guarded, not merely checked for None: it raises
+    # FileNotFoundError when ffmpeg is not on PATH and ValueError from
+    # np.frombuffer on a truncated ffmpeg buffer. Unguarded, a browser probing at
+    # roughly 7 Hz during speech takes a 500 per probe (WR-01).
+    try:
+        samples = await decode_webm_to_samples(audio_bytes)
+    except Exception as exc:
+        logger.error("Turn probe decode failed: %s", exc)
+        samples = None
+
+    if samples is None:
+        # Transient: one undecodable blob should not disable probing for good.
+        # `available=True` is deliberate. A raise and a None are the same event
+        # from the browser's point of view, so they share one tag; reporting
+        # available=False would permanently stop the browser probing for the rest
+        # of the session over what may be a single bad blob. A missing ffmpeg is
+        # not transient, but it is already covered -- the fixed-silence fallback
+        # keeps voice input working, which is what this contract exists to protect.
+        return _turn_probe_result("decode_failed", available=True)
+
+    try:
+        # Inference is sub-20ms but synchronous; keep it off the event loop so a
+        # probe cannot stutter concurrent TTS streaming.
+        decision = await asyncio.to_thread(
+            detector.evaluate, samples, _TURN_PROBE_SAMPLE_RATE, silence_ms
+        )
+    except Exception as exc:
+        logger.error("Turn probe evaluation failed: %s", exc)
+        return _turn_probe_result("error", available=True)
+
+    return TurnProbeResponse(
+        ended=decision.ended,
+        probability=decision.probability,
+        detector=decision.detector,
+        available=True,
+    )
 
 
 @app.post("/api/tts")
@@ -628,6 +1207,11 @@ async def ws_chat(ws: WebSocket, state: AppState = Depends(get_ws_app_state)):
       {"type": "listening"}                   -- MERLIN is ready for input
     """
     await ws.accept()
+    # Registered only after accept() succeeds, so a connection the server rejected
+    # never enters the fan-out registry. The matching discard is in the `finally`
+    # below -- the two together are the whole of this socket's membership, and a
+    # return path that skipped the finally would leak a dead socket per client.
+    state.chat_clients.add(ws)
     logger.info("Chat WebSocket client connected")
 
     pending_audio_mime: str | None = None
@@ -757,6 +1341,11 @@ async def ws_chat(ws: WebSocket, state: AppState = Depends(get_ws_app_state)):
     except Exception as exc:
         logger.warning("Chat WebSocket error: %s", exc)
         await _cancel_active_response()
+    finally:
+        # Both `except` arms above already return through here, and so would any
+        # future one -- which is the point of putting the removal in a `finally`
+        # rather than duplicating it into each arm.
+        state.chat_clients.discard(ws)
 
 
 # ---------------------------------------------------------------------------
@@ -1084,15 +1673,79 @@ async def _stream_response(
         command_status_queue: list[dict[str, Any]] = []
 
         def _on_tool_result(tool_name: str, tool_input: dict[str, Any], tool_result: Any) -> None:
+            """Classify a command outcome for the browser: advisory, withheld, failed, done.
+
+            The three-way split is explicit rather than inferred from the absence of
+            an ``"error"`` key, because the advisory dry run and the assisted
+            withhold both carry no ``"error"`` by design (plan 02-04). The previous
+            ``success = "error" not in tool_result`` therefore reported a command
+            that was never transmitted as executed -- the pilot saw "GEAR DOWN" for
+            a gear that never moved (RESEARCH B8, threat T-02-09-01).
+
+            The fall-through classifies on ``result["success"]`` as reported by the
+            adapter, not on the absence of an ``"error"`` key. The absence heuristic
+            survived here after 02-09 fixed the two arms above it, and it is wrong
+            for the commonest failure of all: ``SimConnectManager.ExecuteCommand``
+            answers any unmapped command name or ``COMException`` with
+            ``{"success": False, "message": "Unknown command"}`` and no ``"error"``
+            at all -- a shape ``sim_client.send_command`` documents as routine. A
+            gear the adapter refused therefore rendered as a green "GEAR DOWN"
+            (VERIFICATION Gap 1 / CR-01).
+
+            ``orchestrator/orchestrator/tools.py::_was_transmitted`` is the mirror of
+            this expression on the orchestrator side; the two must stay identical, or
+            the browser and Claude will disagree about whether the aircraft moved.
+            """
             if tool_name != "set_aircraft_control":
                 return
             system = tool_input.get("system", "unknown")
             action = tool_input.get("action", "unknown")
-            success = not (isinstance(tool_result, dict) and "error" in tool_result)
-            if success:
-                message = f"{system.upper()} {action.upper()}"
-            else:
-                message = f"{system.upper()} {action.upper()} failed"
+            result = tool_result if isinstance(tool_result, dict) else {}
+            label = f"{system.upper()} {action.upper()}"
+
+            # authority_level / authority_reason are copied through verbatim, never
+            # mapped or defaulted. AuthorityReason has four members and the browser
+            # renders an unrecognised one as-is; substituting "config" for a missing
+            # reason would report a crashed subsystem as a deliberate configuration.
+            if result.get("advisory"):
+                command_status_queue.append(
+                    {
+                        "type": "command_advisory",
+                        "system": system,
+                        "action": action,
+                        "message": f"{label} -- advisory, not sent",
+                        "would_execute": result.get("would_execute"),
+                        "authority_level": result.get("authority_level"),
+                        "authority_reason": result.get("authority_reason"),
+                    }
+                )
+                return
+
+            if result.get("withheld"):
+                safety = result.get("safety") or {}
+                command_status_queue.append(
+                    {
+                        "type": "command_withheld",
+                        "system": system,
+                        "action": action,
+                        "message": f"{label} -- withheld, yours to make",
+                        "authority_level": result.get("authority_level"),
+                        "authority_reason": result.get("authority_reason"),
+                        "safety_reason": safety.get("reason"),
+                    }
+                )
+                return
+
+            # Both halves are required. `result.get("success")` alone reads the
+            # adapter's own verdict -- it catches the NACK, the ack timeout and the
+            # authority-floor refusal -- but it is absent entirely from a blocked or
+            # unresolvable result, which carry only an "error". `"error" not in
+            # result` alone lets the NACK through as a success, which is the CR-01
+            # defect. A result carrying neither key is not a success: the default is
+            # False, so an unrecognised shape fails closed rather than claiming the
+            # aircraft moved (threat T-02-12-02).
+            success = bool(result.get("success", False)) and "error" not in result
+            message = label if success else f"{label} failed"
             command_status_queue.append(
                 {
                     "type": "command_status",

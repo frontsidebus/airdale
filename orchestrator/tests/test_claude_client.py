@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from orchestrator.authority import AuthorityLevel, AuthorityState
 from orchestrator.claude_client import (
     STOP_SEQUENCES,
     TOOL_DEFINITIONS,
@@ -13,6 +14,7 @@ from orchestrator.claude_client import (
     classify_query,
     max_tokens_for_query,
 )
+from orchestrator.config import Settings
 from orchestrator.sim_client import (
     AutopilotState,
     Environment,
@@ -619,3 +621,135 @@ class TestToolExecution:
             )
             mock_fn.assert_awaited_once()
             assert result["status"] == "draft"
+
+
+# ---------------------------------------------------------------------------
+# Authority thread-through and the command-path tool deadline
+# ---------------------------------------------------------------------------
+
+
+def _authority_settings(**overrides: object) -> Settings:
+    """Build Settings with the real authority defaults, without reading a .env file."""
+    base: dict[str, object] = {"anthropic_api_key": "sk-test", "_env_file": None}
+    base.update(overrides)
+    return Settings(**base)  # type: ignore[arg-type]
+
+
+def _client_from(
+    settings: Settings,
+    authority: AuthorityState | None = None,
+) -> ClaudeClient:
+    """A ClaudeClient seeded from settings exactly as main.py seeds it."""
+    with patch("orchestrator.claude_client.anthropic.AsyncAnthropic"):
+        return ClaudeClient(
+            api_key="sk-ant-test",
+            model="claude-sonnet-4-20250514",
+            sim_client=MagicMock(),
+            context_store=MagicMock(),
+            verify_timeout=settings.authority_verify_timeout_s,
+            command_tool_timeout=settings.authority_tool_timeout_s,
+            authority=authority,
+        )
+
+
+#: The argument every failure message in the ordering guard has to carry, because
+#: the symptom of getting it wrong is silence rather than an error.
+_B3_RATIONALE = (
+    "RESEARCH B3: the outer asyncio.wait_for in _execute_tool starts BEFORE "
+    "send_command's own deadline. If the outer deadline is not strictly greater than "
+    "authority_command_timeout_s + authority_verify_timeout_s, the tool layer cancels "
+    "the dispatch first, send_command's `except TimeoutError` never runs, and the "
+    "watchdog counter never increments -- so a dead command path stays invisible and "
+    "MERLIN keeps issuing commands into it."
+)
+
+
+class TestCommandPathToolTimeoutOrdering:
+    """Structural guard on the B3 arithmetic, mirroring Settings' startup invariant."""
+
+    @pytest.mark.parametrize("tool", ["set_aircraft_control", "undo_last_command"])
+    def test_tool_deadline_exceeds_command_plus_verify(self, tool: str) -> None:
+        settings = _authority_settings()
+        client = _client_from(settings)
+        outer = client.tool_timeout_for(tool)
+        inner = settings.authority_command_timeout_s + settings.authority_verify_timeout_s
+        assert outer > inner, (
+            f"{tool} resolves an outer deadline of {outer}s against an inner budget of "
+            f"{inner}s; it must be strictly greater. {_B3_RATIONALE}"
+        )
+
+    @pytest.mark.parametrize("tool", ["set_aircraft_control", "undo_last_command"])
+    def test_deadline_comes_from_configuration_not_the_class_table(self, tool: str) -> None:
+        assert tool not in ClaudeClient._TOOL_TIMEOUTS, (
+            f"{tool} is back in the hardcoded class timeout table. Its deadline must "
+            f"come from authority_tool_timeout_s so it can be tuned against the two "
+            f"inner timeouts it has to exceed. {_B3_RATIONALE}"
+        )
+        client = _client_from(_authority_settings(authority_tool_timeout_s=20.0))
+        assert client.tool_timeout_for(tool) == 20.0
+
+    def test_default_settings_resolve_twelve_seconds(self) -> None:
+        client = _client_from(_authority_settings())
+        assert client.tool_timeout_for("set_aircraft_control") == 12.0
+        assert client.tool_timeout_for("undo_last_command") == 12.0
+
+    def test_other_tools_still_resolve_through_the_class_table(self) -> None:
+        client = _client_from(_authority_settings())
+        assert client.tool_timeout_for("get_sim_state") == 2.0
+        assert client.tool_timeout_for("nonexistent") == ClaudeClient._DEFAULT_TOOL_TIMEOUT
+
+
+class TestAuthorityThreadThrough:
+    """The gate only exists in a running process if the shared state reaches it."""
+
+    @pytest.mark.asyncio
+    async def test_set_aircraft_control_receives_the_same_instance(self) -> None:
+        authority = AuthorityState(AuthorityLevel.FULL)
+        client = _client_from(_authority_settings(), authority=authority)
+        with patch(
+            "orchestrator.claude_client.set_aircraft_control",
+            new_callable=AsyncMock,
+            return_value={"success": True},
+        ) as mock_fn:
+            await client._execute_tool(
+                "set_aircraft_control",
+                {"system": "gear", "action": "down"},
+                SimState(),
+            )
+        assert mock_fn.call_args.kwargs["authority"] is authority, (
+            "ClaudeClient must forward the process-wide AuthorityState by identity. A "
+            "copy would let the tool gate and the send_command floor disagree about the "
+            "current level, which is the whole point of there being one object (D-09)."
+        )
+
+    @pytest.mark.asyncio
+    async def test_undo_last_command_receives_the_same_instance(self) -> None:
+        authority = AuthorityState(AuthorityLevel.FULL)
+        client = _client_from(_authority_settings(), authority=authority)
+        with patch(
+            "orchestrator.claude_client.undo_last_command",
+            new_callable=AsyncMock,
+            return_value={"success": True},
+        ) as mock_fn:
+            await client._execute_tool("undo_last_command", {}, SimState())
+        assert mock_fn.call_args.kwargs["authority"] is authority, (
+            "An undo is a command, so it goes through the same gate (D-09)."
+        )
+
+    def test_procedure_executor_receives_the_same_instance(self) -> None:
+        authority = AuthorityState(AuthorityLevel.FULL)
+        client = _client_from(_authority_settings(), authority=authority)
+        assert client._procedure_executor._authority is authority, (
+            "Procedure steps route through set_aircraft_control, so an unauthorised "
+            "ProcedureExecutor would run every compound procedure at full authority."
+        )
+
+    def test_authority_is_accepted_never_constructed(self) -> None:
+        """No authority in means no authority held -- this class must not build one."""
+        client = _client_from(_authority_settings())
+        assert client._authority is None
+
+    def test_verifier_timeout_comes_from_settings(self) -> None:
+        settings = _authority_settings(authority_verify_timeout_s=1.5)
+        client = _client_from(settings)
+        assert client._command_verifier._timeout == 1.5

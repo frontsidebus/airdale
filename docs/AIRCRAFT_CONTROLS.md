@@ -1,6 +1,22 @@
 # Aircraft Controls Reference
 
-Complete reference for every system, action, and value MERLIN can control via the `set_aircraft_control` tool. **20 systems, 72+ actions.**
+Reference for every system, action, and value MERLIN can control via the `set_aircraft_control` tool.
+
+**14 systems are reachable. They resolve to 52 distinct SimConnect events, and the MSFS adapter registers a handler for every one of them.**
+
+Reachable means all three of these agree:
+
+1. the system appears in the `set_aircraft_control` `system` enum in `orchestrator/orchestrator/claude_client.py`, so Claude can name it;
+2. `_resolve_command` in `orchestrator/orchestrator/tools.py` maps it to a SimConnect event name;
+3. `CommandMap` in `adapters/msfs/SimConnectManager.cs` has an entry for that event name, so `ExecuteCommand` reaches `TransmitClientEvent`.
+
+Six further systems satisfy (2) only — see [Deferred systems](#deferred-systems-cmd-09).
+
+> **This document is pinned by tests.** `orchestrator/tests/test_command_coverage.py` fails
+> in CI if any enum-exposed system resolves to an event the adapter cannot execute, or if a
+> deferred system is registered early. `adapters/msfs/SimConnectBridge.Tests/CommandMapTests.cs`
+> pins the adapter side of the same contract. The counts above were drifting fiction before
+> those guards existed; do not update this file without them passing.
 
 Voice command examples shown for each — MERLIN executes immediately on unambiguous direct orders.
 
@@ -11,14 +27,18 @@ Voice command examples shown for each — MERLIN executes immediately on unambig
 ### Flaps
 | Action | Voice Example | SimConnect Event | Value |
 |---|---|---|---|
-| `up` / `retract` | "Flaps up" | FLAPS_UP | — |
-| `full` / `down` | "Give me full flaps" | FLAPS_FULL | — |
+| `up` / `retract` | "Flaps up" | FLAPS_SET | 0 |
+| `full` / `down` | "Give me full flaps" | FLAPS_SET | 16383 |
 | `1` / `10` | "Flaps one" | FLAPS_1 | — |
 | `2` / `20` | "Flaps two" | FLAPS_2 | — |
 | `3` / `30` | "Flaps three" | FLAPS_3 | — |
 | `incr` / `increase` | "More flaps" | FLAPS_INCR | — |
 | `decr` / `decrease` | "Less flaps" | FLAPS_DECR | — |
 | `set` | "Set flaps to 25 percent" | FLAPS_SET | 0-100% or notch 0-4 |
+
+> `up` and `full` deliberately resolve to `FLAPS_SET` at the rail rather than to `FLAPS_UP` /
+> `FLAPS_FULL`. `FLAPS_FULL` is not honoured by every aircraft; `FLAPS_SET` is. Both discrete
+> events remain registered in the adapter for compatibility but the resolver never emits them.
 
 ### Trim
 | Action | Voice Example | SimConnect Event | Value |
@@ -49,7 +69,10 @@ Voice command examples shown for each — MERLIN executes immediately on unambig
 | `down` / `extend` | "Gear down" | GEAR_DOWN | **YES** |
 | `toggle` | "Toggle gear" | GEAR_TOGGLE | **YES** |
 
-> Critical commands are flagged with a `safety_note` in the tool result.
+> Critical commands are flagged with a `safety_note` in the tool result **when the adapter
+> acknowledges them**. The note reads "Critical system change executed", which is a claim about
+> something that happened, so it is attached only to a command that actually reached the
+> aircraft — a refused, withheld or NACKed command carries no note (CR-02).
 
 ---
 
@@ -60,6 +83,9 @@ Voice command examples shown for each — MERLIN executes immediately on unambig
 |---|---|---|---|
 | `set` | "Throttle to 80 percent" | THROTTLE_SET | 0-100% |
 
+> `THROTTLE1_SET` and `THROTTLE2_SET` are registered in the adapter for per-engine control but
+> the resolver has no action that emits them; all throttle commands are currently all-engine.
+
 ### Mixture
 | Action | Voice Example | SimConnect Event | Value |
 |---|---|---|---|
@@ -69,35 +95,6 @@ Voice command examples shown for each — MERLIN executes immediately on unambig
 | Action | Voice Example | SimConnect Event | Value |
 |---|---|---|---|
 | `set` | "Prop full forward" / "Set prop to 100" | PROP_PITCH_SET | 0-100% |
-
-### Magnetos
-| Action | Voice Example | SimConnect Event | Value |
-|---|---|---|---|
-| `off` | "Magnetos off" | MAGNETO_SET | 0 |
-| `right` | "Magnetos right" | MAGNETO_SET | 1 |
-| `left` | "Magnetos left" | MAGNETO_SET | 2 |
-| `both` | "Magnetos both" | MAGNETO_SET | 3 |
-| `start` | "Magnetos start" | MAGNETO_SET | 4 |
-
-### Carburetor Heat
-| Action | Voice Example | SimConnect Event |
-|---|---|---|
-| `on` / `off` / `toggle` | "Carb heat on" | ANTI_ICE_CARB_HEAT_TOGGLE |
-
-### Fuel Pump
-| Action | Voice Example | SimConnect Event |
-|---|---|---|
-| `on` / `off` / `toggle` | "Fuel pump on" | FUEL_PUMP_TOGGLE |
-
-### Starter
-| Action | Voice Example | SimConnect Event |
-|---|---|---|
-| `engage` / `start` | "Engage starter" | TOGGLE_STARTER1 |
-
-### Primer
-| Action | Voice Example | SimConnect Event |
-|---|---|---|
-| `prime` / `pump` | "Prime the engine" | TOGGLE_PRIMER |
 
 ---
 
@@ -154,19 +151,6 @@ Voice command examples shown for each — MERLIN executes immediately on unambig
 
 ---
 
-## Lights
-
-| Action | Voice Example | SimConnect Event |
-|---|---|---|
-| `landing` | "Landing lights on" | LANDING_LIGHTS_TOGGLE |
-| `taxi` | "Taxi lights on" | TOGGLE_TAXI_LIGHTS |
-| `nav` / `navigation` | "Nav lights on" | TOGGLE_NAV_LIGHTS |
-| `beacon` | "Beacon on" | TOGGLE_BEACON_LIGHTS |
-| `strobe` | "Strobes on" | STROBES_TOGGLE |
-| `panel` | "Panel lights" | PANEL_LIGHTS_TOGGLE |
-
----
-
 ## Environmental
 
 ### Deice / Anti-ice
@@ -189,7 +173,46 @@ Voice command examples shown for each — MERLIN executes immediately on unambig
 ### Parking Brake
 | Action | Voice Example | SimConnect Event |
 |---|---|---|
-| *(any)* | "Parking brake" | PARKING_BRAKES |
+| `toggle` | "Parking brake" | PARKING_BRAKES |
+
+`on`, `off`, `release`, `set`, `apply` and `engage` are **refused** — they return
+`{"unresolvable": true}` and nothing is transmitted. `PARKING_BRAKES` is a toggle, and no
+telemetry anywhere in the chain reports brake position, so "parking brake off" could only ever
+be a blind toggle: on landing rollout, with the brake already off, it *set* the brake. Refusing
+is the fix that does not require adding brake position to the SimConnect struct, the adapter
+model, the universal schema and the mock adapter (CR-04, and see the `carb_heat` / `fuel_pump`
+note under Deferred systems — the same four-layer change covers all three).
+
+**Workaround.** Use `toggle`, and tell MERLIN what the panel shows if you need a specific
+position: *"Parking brake is set, release it."*
+
+---
+
+## Deferred systems (CMD-09)
+
+These six systems are **not reachable**. `_resolve_command` handles them, so the code below
+looks live, but they are absent from the `set_aircraft_control` enum — Claude cannot name
+them — and absent from the adapter's `CommandMap` — the adapter could not execute them if it
+were asked. Both absences are deliberate and are asserted by tests in both languages.
+
+| System | Actions | SimConnect Event | Status |
+|---|---|---|---|
+| `magnetos` | `off`, `right`, `left`, `both`, `start` | MAGNETO_SET | not exposed, not registered |
+| `carb_heat` | `on`, `off`, `toggle` | ANTI_ICE_CARB_HEAT_TOGGLE | not exposed, not registered |
+| `fuel_pump` | `on`, `off`, `toggle` | FUEL_PUMP_TOGGLE | not exposed, not registered |
+| `starter` | `engage`, `start` | TOGGLE_STARTER1 | not exposed, not registered |
+| `primer` | `prime`, `pump` | TOGGLE_PRIMER | not exposed, not registered |
+| `lights` | `landing`, `taxi`, `nav`, `beacon`, `strobe`, `panel` | LANDING_LIGHTS_TOGGLE, TOGGLE_TAXI_LIGHTS, TOGGLE_NAV_LIGHTS, TOGGLE_BEACON_LIGHTS, STROBES_TOGGLE, PANEL_LIGHTS_TOGGLE | not exposed, not registered |
+
+**Why they are held back.** `execute_procedure` bypasses the `set_aircraft_control` enum
+entirely, and `PROCEDURES["shutdown"]` contains a `magnetos` step. Registering `MAGNETO_SET`
+in the adapter before the authority gate and the procedure re-route are in place would turn a
+named tool call into a working in-flight engine shutdown with nothing in front of it.
+
+Two of them also carry a latent defect that becomes live the moment they are exposed:
+`carb_heat` and `fuel_pump` map `on`, `off` and `toggle` to the *same* toggle event, so
+"carb heat off" turns it **on** when it was already off. That needs state-aware resolution
+against telemetry before either system ships.
 
 ---
 
@@ -216,3 +239,32 @@ These commands trigger a `safety_note` in the tool result:
 - `PARKING_BRAKES`
 
 Claude is instructed to execute direct orders immediately but may confirm ambiguous or phase-inappropriate commands (e.g., gear up at very low altitude).
+
+> The `safety_note` list is separate from, and much narrower than, the pre-execution rules in
+> `command_safety.py`. It is an *advisory marker on a command that succeeded*; the rules are
+> what decide whether the command is sent at all.
+
+### Pre-execution rules on the highest-severity commands
+
+That gap is now closed for the fuel and brake surface. `command_safety.py` carries thirteen
+rules; six of them cover the commands Phase 2's own CMD-07 work made executable in the adapter:
+
+| Command | Condition | Verdict |
+|---|---|---|
+| `FUEL_SELECTOR_OFF` | airborne | **blocked** |
+| `FUEL_SELECTOR_SET` value `0` | airborne | **blocked** |
+| `MIXTURE_SET` value `<= 0` | airborne | **blocked** |
+| `CROSS_FEED_OPEN` / `CROSS_FEED_OFF` / `CROSS_FEED_TOGGLE` | airborne | warning |
+| `PARKING_BRAKES` | on the ground above 5 kt ground speed | **blocked** |
+| `PARKING_BRAKES` | airborne | warning |
+
+`blocked` wins at every authority level -- the safety short-circuit runs before the authority
+gate. A `warning` is what makes `assisted` withhold and `full` execute with the concern
+attached. `parking_brake` is therefore doubly bounded: it is in `CRITICAL_COMMANDS`, its
+ambiguous verbs are refused outright (see above), and the surviving `toggle` has rules behind
+it. Crossfeed warns rather than blocks on purpose — closing crossfeed in flight is often the
+*corrective* action, and blocking it would prevent the safe move along with the unsafe one.
+
+`deice` remains unruled. It is reachable and it is the one remaining system in the enum where
+`assisted` behaves identically to `full` with real consequences. See the coverage caveat in
+`SMART_CONTROLS.md`.

@@ -139,7 +139,11 @@ Pilot (voice or text)
 Supported control systems: flaps, gear, autopilot (heading/altitude/VS/speed/nav/approach),
 throttle, radios (COM1/COM2/NAV1/NAV2), barometer, trim, parking brake, spoilers, mixture, propeller.
 
-Safety: Critical commands (gear, AP master) trigger a `safety_note` in the tool result.
+Safety: Critical commands (gear, AP master) trigger a `safety_note` in the tool result —
+but only when the command actually reached the adapter and was acknowledged. A critical
+command refused by the authority gate, NACKed by the adapter, or timed out carries no
+`safety_note`, because the note asserts an executed change and would otherwise confirm
+something that never happened.
 The tool description instructs Claude to confirm critical actions with the pilot.
 
 ---

@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from .authority import AuthorityLevel, AuthorityReason, AuthorityState
 from .command_history import CommandHistory
 from .command_safety import CommandSafetyCheck
 from .command_verifier import CommandVerifier
@@ -18,6 +19,13 @@ logger = logging.getLogger(__name__)
 
 # Shared safety checker instance (uses default rules)
 _safety_check = CommandSafetyCheck()
+
+# Log-dedupe for the missing-authority warning below. This is a *bool*, not an
+# authority object: D-09 rejects a module-level authority singleton (the
+# ``checker = safety_check or _safety_check`` shape above is exactly what it
+# rejects), and this flag never holds, caches or stands in for authority. It
+# exists only so a hot command path does not spam the log with the same warning.
+_warned_missing_authority = False
 
 # ---------------------------------------------------------------------------
 # Aircraft control commands
@@ -30,6 +38,48 @@ CRITICAL_COMMANDS = {
     "GEAR_TOGGLE",
     "AP_MASTER",
     "PARKING_BRAKES",
+}
+
+# CMD-08 / D-02: systems whose absolute on/off cannot be resolved, mapped to the
+# label used in the refusal. Each maps its state words *and* "toggle" to the same
+# toggle event, so "carb heat off" turns it ON whenever it was already off — the
+# command does the opposite of what was asked.
+#
+# Resolving it properly ("emit the toggle only when the requested state differs")
+# is not implementable: there is no carb-heat, fuel-pump or parking-brake position
+# in the SimConnect data definition, the adapter model, the universal schema,
+# ``SurfaceState`` or the mock adapter. There is nothing to read. Refusing removes
+# the defect's teeth without the four-layer telemetry work, which is deliberately
+# deferred — and should be taken once for all three rather than piecemeal.
+#
+# ``parking_brake`` is the third entry and the reason this table stopped being a
+# theoretical concern (CR-04). ``carb_heat`` and ``fuel_pump`` are deferred under
+# CMD-09: absent from the tool enum and absent from the adapter's ``CommandMap``,
+# so their defect is latent. ``parking_brake`` is in the enum, in
+# ``CRITICAL_COMMANDS`` and registered in the adapter's ``CommandMap`` — it was the
+# one blind toggle a pilot could actually reach, and "parking brake off" on landing
+# rollout SET the brake.
+#
+# Do NOT "fix" this back into a toggle — restoring it reintroduces the defect.
+UNCONFIRMABLE_POSITION_SYSTEMS: dict[str, str] = {
+    "carb_heat": "carb heat",
+    "fuel_pump": "fuel pump",
+    "parking_brake": "parking brake",
+}
+
+# The actions each unconfirmable system refuses, keyed identically to the table
+# above (``set_aircraft_control`` looks the action up here and then reads the label
+# out of there, so a key in one and not the other is a ``KeyError`` in the command
+# path; a test in test_tools.py pins them together).
+#
+# ``parking_brake`` carries more verbs than the other two because they are what a
+# pilot actually says. A verb that reaches the resolver and finds no branch must
+# still produce the actionable refusal below rather than a bare "unknown control" —
+# "release the parking brake" deserves an explanation, not a typo message.
+UNCONFIRMABLE_REFUSED_ACTIONS: dict[str, frozenset[str]] = {
+    "carb_heat": frozenset({"on", "off"}),
+    "fuel_pump": frozenset({"on", "off"}),
+    "parking_brake": frozenset({"on", "off", "release", "set", "apply", "engage"}),
 }
 
 
@@ -140,7 +190,14 @@ def _resolve_command(system: str, action: str, value: float | None) -> tuple[str
             return "TOGGLE_PROPELLER_DEICE", 0
 
     elif system == "parking_brake":
-        return "PARKING_BRAKES", 0
+        # Only an explicit toggle resolves. "on" / "off" / "release" / "set" fall
+        # through to the terminal ``return None, 0`` below, so the resolver is now
+        # incapable of emitting a blind parking-brake toggle at all. That is defence
+        # in depth *under* the refusal in set_aircraft_control, not a substitute for
+        # it: today that function is the only caller, and this branch is what keeps
+        # the guarantee if a second one ever appears (CR-04).
+        if action == "toggle":
+            return "PARKING_BRAKES", 0
 
     elif system == "spoilers":
         if action == "toggle":
@@ -214,6 +271,74 @@ def _resolve_command(system: str, action: str, value: float | None) -> tuple[str
     return None, 0
 
 
+def _resolve_authority(
+    authority: AuthorityState | None,
+) -> tuple[AuthorityLevel, AuthorityReason]:
+    """Read the effective authority level and reason, once, at the decision point.
+
+    ``authority is None`` resolves to ``FULL`` / ``CONFIG`` -- today's behaviour,
+    preserved for backward compatibility with the collaborator-injection signature.
+    It is deliberately *loud*: in a wired process ``None`` is unreachable (both
+    composition roots guarantee a real ``AuthorityState``), so observing it means a
+    caller failed to inject and the only remaining guard is the level floor inside
+    ``TelemetryClient.send_command``. The warning is emitted once per process.
+
+    The values are returned rather than stashed: the floor performs its own,
+    independent read at dispatch, and that second fresh read is what makes the
+    two-layer design safe against a level that changes between check and dispatch.
+    """
+    global _warned_missing_authority
+
+    if authority is not None:
+        return authority.level, authority.reason
+
+    if not _warned_missing_authority:
+        _warned_missing_authority = True
+        logger.warning(
+            "set_aircraft_control was called without an injected AuthorityState; "
+            "proceeding at %s. This is a wiring bug -- the caller must pass "
+            "authority=. Until it is fixed, the only remaining guard on this "
+            "command path is the level floor in TelemetryClient.send_command.",
+            AuthorityLevel.FULL.value,
+        )
+    return AuthorityLevel.FULL, AuthorityReason.CONFIG
+
+
+def _was_transmitted(result: dict[str, Any]) -> bool:
+    """Did this command actually reach the aircraft?
+
+    The one predicate every "say it happened" decision on this path reads. Both
+    halves are load-bearing:
+
+    - ``bool(result.get("success"))`` alone is not enough: the authority floor
+      refusal and the ack timeout both set ``success: False`` *and* an ``error``,
+      and reading only ``error`` would be the same heuristic that made the browser
+      render a refused command as a green success (CR-01).
+    - ``"error" not in result`` alone is not enough either: a negative adapter ack
+      is ``{"success": False, "message": "Unknown command"}`` with **no** ``error``
+      key. ``sim_client.send_command`` documents that shape as routine —
+      unregistered events return exactly it — and it is the shape every heuristic
+      in this codebase has got wrong.
+
+    A dict carrying neither key is not evidence of a transmission, so it fails
+    closed. So does a contradictory dict carrying both.
+
+    ``web/server.py::_on_tool_result`` mirrors this exact expression for the
+    browser, because the same tool result crosses both surfaces. The two must not
+    drift: a divergence recreates precisely the false-confirmation class of bug
+    this predicate exists to close (threat T-02-11-05).
+    """
+    return bool(result.get("success")) and "error" not in result
+
+
+def _describe_intent(system: str, action: str, value: float | None) -> str:
+    """Render a requested command as a short human-readable phrase."""
+    phrase = f"set {system} {action}"
+    if value is not None:
+        phrase += f" to {value:g}"
+    return phrase
+
+
 async def set_aircraft_control(
     sim_client: TelemetryClient,
     system: str,
@@ -222,6 +347,7 @@ async def set_aircraft_control(
     verifier: CommandVerifier | None = None,
     safety_check: CommandSafetyCheck | None = None,
     command_history: CommandHistory | None = None,
+    authority: AuthorityState | None = None,
 ) -> dict[str, Any]:
     """Execute a sim control command via the telemetry service.
 
@@ -230,13 +356,86 @@ async def set_aircraft_control(
     returns ``warning``, the command executes but the warning is included
     in the result for Claude to relay to the pilot.
 
+    The *authority* gate then decides whether the command is transmitted at all:
+
+    - ``advisory`` -- nothing is sent. A dry-run dict describing the intended
+      action is returned instead, carrying the safety verdict so Claude can
+      describe both what it would do and any concern.
+    - ``assisted`` -- a ``warning``-severity verdict withholds the command; a
+      clean verdict executes it; an *absent* verdict (telemetry unreachable, so
+      ``command_safety`` never ran) also withholds. Missing evidence is not
+      evidence of safety, and ``assisted`` is the level whose whole job is to be
+      conservative — treating "I could not check" as "it checked out" is a
+      fail-open at exactly the wrong level (WR-10). The discriminator is the
+      ``None``-ness of the verdict, never its severity string: a *clean* verdict
+      also carries ``severity == ""``.
+    - ``full`` -- unchanged behaviour: execute unless safety says ``blocked``.
+      That deliberately includes executing when telemetry is unavailable and there
+      is therefore no verdict at all (AUTH-04).
+
+    ``blocked`` always wins: the safety short-circuit runs before the gate, so a
+    blocked command reports as blocked at every authority level.
+
     If a *verifier* is provided, captures the sim state before execution
     and polls telemetry afterward to confirm the command took effect.
 
     If a *command_history* is provided, the command is recorded with a
     pre-execution state snapshot so it can be undone later.
+
+    ``authority=None`` behaves exactly as ``full``. That default exists for
+    backward compatibility with this function's collaborator-injection signature,
+    **not** as a security position. In a wired process it is unreachable: the CLI
+    composition root lets a construction failure propagate and abort startup, and
+    the web ``lifespan`` substitutes ``AuthorityState.degraded_fallback(...)``. If
+    it is ever observed in a log it is a wiring bug, and the structural level floor
+    in ``TelemetryClient.send_command`` is what contains it in the meantime. There
+    is deliberately no module-level authority singleton to fall back to.
     """
     command, sim_value = _resolve_command(system, action, value)
+
+    # --- CMD-08 / D-02: refuse an absolute position we cannot resolve ---
+    # Lives here rather than in _resolve_command so the resolver stays a pure lookup
+    # with a single failure channel, and so procedures inherit the check for free
+    # once ProcedureExecutor is re-routed through this function (D-04) —
+    # PROCEDURES["takeoff_config"] contains a fuel_pump step.
+    #
+    # This runs BEFORE the ``command is None`` return, and that order is load-bearing
+    # rather than cosmetic. The resolver no longer resolves a parking-brake "off" to
+    # anything, so with the two swapped the pilot would get "Unknown control:
+    # system=parking_brake, action=off" — a typo message for a well-formed request —
+    # instead of the sentence explaining why MERLIN will not guess (T-02-14-06). The
+    # lookup is on (system_key, action_key) and needs no resolved command, so it
+    # moves cleanly. Anything neither refused here nor resolvable still falls through
+    # to the unknown-control error below.
+    system_key = system.lower().strip()
+    action_key = action.lower().strip()
+    if action_key in UNCONFIRMABLE_REFUSED_ACTIONS.get(system_key, frozenset()):
+        label = UNCONFIRMABLE_POSITION_SYSTEMS[system_key]
+        logger.warning(
+            "Refusing %s/%s: no telemetry reports %s position, so any event resolved "
+            "for it would be a blind toggle",
+            system,
+            action,
+            label,
+        )
+        return {
+            "error": (
+                f"I cannot confirm the current position of the {label} — no telemetry "
+                f"reports it. Sending {system}/{action} would emit a blind toggle, which "
+                f"does the opposite of what you asked whenever the {label} is already "
+                f"where you want it. Use action='toggle' to change it, and tell me what "
+                f"the panel shows if you need it in a specific position."
+            ),
+            "system": system,
+            "action": action,
+            # Still five keys, but ``command`` is now **None** for a refused
+            # parking-brake action (the resolver declines it) and remains the resolved
+            # toggle event for carb_heat / fuel_pump (the resolver still returns one,
+            # and the refusal is what stops it being sent). A consumer reading this key
+            # must tolerate None.
+            "command": command,
+            "unresolvable": True,
+        }
 
     if command is None:
         return {"error": f"Unknown control: system={system}, action={action}"}
@@ -261,6 +460,104 @@ async def set_aircraft_control(
                 "blocked": True,
                 "severity": "blocked",
             }
+
+    # --- Authority gate (D-03) ---
+    # This is the single point where the resolved command, the live SimState and the
+    # safety verdict all exist and nothing has been transmitted yet, which is why the
+    # policy decision lives here rather than at a call site. Enforcement is a code
+    # branch and only a code branch (D-08): no authority text is added to the tool
+    # definitions or the system prompt, and set_aircraft_control stays in
+    # TOOL_DEFINITIONS at every level (D-07) so the cached persona block survives.
+    level, reason = _resolve_authority(authority)
+    # A CLEAN verdict and an ABSENT verdict both render as severity "", so the
+    # severity string cannot tell them apart. Keep the distinction in its own
+    # local and branch on that -- see the assisted arm below (WR-10).
+    has_safety_verdict = safety_result is not None
+    safety_severity = safety_result.severity if safety_result is not None else ""
+    safety_detail = safety_result.reason if safety_result is not None else ""
+
+    if level == AuthorityLevel.ADVISORY:
+        logger.info(
+            "Authority %s (%s): describing %s instead of executing it",
+            level.value,
+            reason.value,
+            command,
+        )
+        message = (
+            f"Advisory authority -- I would {_describe_intent(system, action, value)} "
+            f"({command}), but nothing was sent. The aircraft is yours."
+        )
+        if safety_severity == "warning":
+            message += f" Safety note: {safety_detail}"
+        return {
+            "advisory": True,
+            "would_execute": command,
+            "sim_value": sim_value,
+            "system": system,
+            "action": action,
+            "command": command,
+            "authority_level": level.value,
+            "authority_reason": reason.value,
+            "safety": {"severity": safety_severity, "reason": safety_detail},
+            "message": message,
+        }
+
+    # ``not has_safety_verdict`` is deliberately NOT a test for an empty severity
+    # string: a clean verdict also carries one, so widening the severity tuple would
+    # withhold every command at assisted, including the ones that checked out. The
+    # discriminator is whether a verdict exists at all (02-REVIEW.md proposed the
+    # broken form; a structural test in test_tools.py keeps it out).
+    if level == AuthorityLevel.ASSISTED and (
+        safety_severity == "warning" or not has_safety_verdict
+    ):
+        if has_safety_verdict:
+            logger.info(
+                "Authority %s (%s): withholding %s -- %s",
+                level.value,
+                reason.value,
+                command,
+                safety_detail,
+            )
+            safety_payload = {"severity": "warning", "reason": safety_detail}
+            message = (
+                f"Holding {command} -- {safety_detail}. At assisted authority I don't "
+                f"act on a flagged command, so this one is yours to make. Say the word "
+                f"and I'll send it."
+            )
+        else:
+            logger.info(
+                "Authority %s (%s): withholding %s -- no safety verdict "
+                "(telemetry unavailable, so command_safety never ran)",
+                level.value,
+                reason.value,
+                command,
+            )
+            safety_payload = {
+                "severity": "",
+                "reason": "telemetry unavailable -- no safety verdict",
+            }
+            message = (
+                f"Holding {command} -- I can't see the aircraft's state right now, so I "
+                f"have no verdict on this command. Nothing was sent. At assisted authority "
+                f"I don't act on a command I couldn't check; tell me to go ahead and I'll "
+                f"send it."
+            )
+        withheld: dict[str, Any] = {
+            "withheld": True,
+            "command": command,
+            "sim_value": sim_value,
+            "system": system,
+            "action": action,
+            "authority_level": level.value,
+            "authority_reason": reason.value,
+            "safety": safety_payload,
+            "message": message,
+        }
+        if not has_safety_verdict:
+            # Its own marker so a reader -- Claude, web/server.py, app.js -- never
+            # mistakes "I couldn't check" for "a safety rule fired".
+            withheld["no_verdict"] = True
+        return withheld
 
     # Capture pre-command state for verification and undo
     state_before = sim_state
@@ -287,7 +584,11 @@ async def set_aircraft_control(
             state_before=state_before or SimState(),
         )
 
-    if command in CRITICAL_COMMANDS:
+    # "executed" is a claim, and it is only true of a command the adapter
+    # acknowledged. This dict goes to Claude verbatim on both the CLI and the
+    # browser path, so an ungated attach told the pilot a critical system had
+    # changed in the same dict whose ``error`` said nothing was sent (CR-02).
+    if command in CRITICAL_COMMANDS and _was_transmitted(result):
         result["safety_note"] = "Critical system change executed"
 
     # Verify the command took effect if verifier is available and command succeeded
@@ -592,11 +893,31 @@ async def undo_last_command(
     command_history: CommandHistory,
     verifier: CommandVerifier | None = None,
     safety_check: CommandSafetyCheck | None = None,
+    authority: AuthorityState | None = None,
 ) -> dict[str, Any]:
     """Reverse the last aircraft control command.
 
-    Looks up the most recent command in the history, determines the undo
-    action, executes it, and removes the command from the history stack.
+    Looks up the most recent command in the history, determines the undo action,
+    and attempts it. The record is removed from the history stack **only once the
+    reversal is confirmed on the wire** — ``_was_transmitted(result)``.
+
+    The undo goes through the same authority gate as any other command: an undo
+    is a command, so at ``advisory`` it is described rather than sent.
+
+    That ordering is the fix for CR-03, and the old order is worth stating because
+    it was the worse of two failures at once. ``pop_last()`` used to run *before*
+    the gate, and the past-tense ``"Reversed <cmd>"`` description was written
+    unconditionally afterwards. So at ``advisory``, on an ``assisted`` withhold, on
+    a safety block, on an adapter NACK or on an authority-floor refusal, the record
+    that would have let the pilot try again was destroyed while the returned dict —
+    which Claude relays verbatim — claimed the command had been reversed. The pilot
+    could then neither undo that command later nor tell that the undo had not
+    happened, on the very path they reach for when something has already gone wrong.
+
+    On the not-transmitted branch the result carries ``undo_target`` and a
+    conditional ``"Would reverse ..."`` description, and deliberately **no**
+    ``undone_command`` key: the presence of that key is what tells a reader the
+    reversal actually happened.
 
     Returns a dict describing what was undone (or an error if nothing to undo).
     """
@@ -610,10 +931,15 @@ async def undo_last_command(
         return {"error": f"Cannot undo {cmd_name} — command is not reversible"}
 
     system, action, value = undo_action
-    last = command_history.pop_last()
-    original_command = last.command if last else "unknown"
+    # Peek, do not mutate: whether this record survives depends on what the gate
+    # and the adapter do with the reversal below.
+    target = command_history.last_command
+    original_command = target.command if target else "unknown"
+    suffix = f" {value}" if value is not None else ""
 
-    logger.info("Undoing command %s -> %s/%s/%s", original_command, system, action, value)
+    logger.info(
+        "Attempting to undo command %s -> %s/%s/%s", original_command, system, action, value
+    )
 
     result = await set_aircraft_control(
         sim_client,
@@ -622,13 +948,27 @@ async def undo_last_command(
         value=value,
         verifier=verifier,
         safety_check=safety_check,
-        # Do not record the undo itself in history
+        # Do not record the undo itself in history — override_detector.py's module
+        # docstring depends on an undo never appearing as a MERLIN dispatch here.
         command_history=None,
+        authority=authority,
     )
 
-    result["undone_command"] = original_command
-    result["undo_description"] = f"Reversed {original_command}: {system} {action}"
-    if value is not None:
-        result["undo_description"] += f" {value}"
+    if not _was_transmitted(result):
+        # Nothing reached the aircraft, so the command is still undoable. Leave the
+        # record where it is and describe the reversal in the conditional.
+        logger.info(
+            "Undo of %s was not transmitted; leaving it on the history stack so the "
+            "pilot can still reverse it",
+            original_command,
+        )
+        result["undo_target"] = original_command
+        result["undo_description"] = f"Would reverse {original_command}: {system} {action}{suffix}"
+        return result
+
+    popped = command_history.pop_last()
+    undone_command = popped.command if popped else original_command
+    result["undone_command"] = undone_command
+    result["undo_description"] = f"Reversed {undone_command}: {system} {action}{suffix}"
 
     return result

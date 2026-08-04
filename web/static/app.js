@@ -33,6 +33,9 @@
     statusWhisper:    document.querySelector('#status-whisper .led'),
     statusChroma:     document.querySelector('#status-chromadb .led'),
     statusClaude:     document.querySelector('#status-claude .led'),
+    statusAuthority:     document.getElementById('status-authority'),
+    statusAuthorityLed:  document.querySelector('#status-authority .led'),
+    statusAuthorityText: document.getElementById('status-authority-text'),
     ttsVolume:        document.getElementById('tts-volume'),
     volumePct:        document.getElementById('volume-pct'),
     connQuality:      document.getElementById('conn-quality'),
@@ -80,6 +83,10 @@
     wsBufferProcessing: false,
     thinkingMsgEl: null,            // "MERLIN is thinking..." indicator
     _acquiringMic: false,           // mutex for async mic acquisition
+    // Last authority state rendered, as "level|reason" (or the unknown marker).
+    // null until the first render, so page load does not announce a transition
+    // that never happened -- only a genuine change between polls raises a toast.
+    lastAuthorityKey: null,
   };
 
   // ═══════════════════════════════════════════════════════
@@ -96,6 +103,7 @@
     el.className = 'led';
     if (status === 'green')  el.classList.add('led-green');
     else if (status === 'amber') el.classList.add('led-amber');
+    else if (status === 'cyan') el.classList.add('led-cyan');
     else el.classList.add('led-red');
   }
 
@@ -495,11 +503,143 @@
     showCommandToast(icon + ' ' + label, success);
   }
 
-  function showCommandToast(text, success) {
+  // ── Advisory / withheld command results ───────────────
+  //
+  // Executed, failed, advisory and withheld are four outcomes, not two plus
+  // shading. Advisory and withheld arrive as their own message types and are
+  // rendered from them directly — never inferred from a boolean. The heuristic
+  // they replace ("no error key, therefore it worked") is what put a green
+  // GEAR DOWN on screen for a gear that never moved, because a command MERLIN
+  // deliberately declined to transmit reports no error either.
+
+  function spanWithText(cls, text) {
+    var span = document.createElement('span');
+    span.className = cls;
+    span.textContent = text;
+    return span;
+  }
+
+  function commandLabel(msg) {
+    if (typeof msg.message === 'string' && msg.message) return msg.message;
+    return String(msg.system || '?').toUpperCase() + ' ' + String(msg.action || '?').toUpperCase();
+  }
+
+  // Server-supplied strings are attached as text nodes throughout: they embed
+  // command values, aircraft state and safety prose, none of which is markup.
+  function appendCommandOutcome(cls, icon, label, details) {
+    var el = document.createElement('div');
+    el.className = 'chat-msg command-status-msg ' + cls;
+    el.appendChild(spanWithText('timestamp', '[' + timestamp() + ']'));
+    el.appendChild(spanWithText('cmd-icon', icon));
+    el.appendChild(spanWithText('cmd-label', label));
+    details.forEach(function(detail) {
+      if (detail) el.appendChild(spanWithText('cmd-detail', detail));
+    });
+    if (dom.chatMessages) dom.chatMessages.appendChild(el);
+    scrollChatIfNeeded();
+    return el;
+  }
+
+  function showCommandAdvisory(msg) {
+    // An open circle, deliberately not a tick: nothing was transmitted. Naming
+    // what would have gone is what makes the dry run readable as a dry run.
+    var label = commandLabel(msg);
+    var would = (typeof msg.would_execute === 'string' && msg.would_execute)
+      ? 'WOULD SEND: ' + msg.would_execute
+      : 'NOTHING SENT';
+    appendCommandOutcome('cmd-advisory', '○', label, [
+      would,
+      authorityPhrase(msg.authority_level, msg.authority_reason),
+    ]);
+    showCommandToast('○ ' + label, 'advisory');
+  }
+
+  function showCommandWithheld(msg) {
+    // MERLIN standing back, not failing — the safety reason says why it did.
+    var label = commandLabel(msg);
+    var safety = (typeof msg.safety_reason === 'string' && msg.safety_reason)
+      ? 'HELD: ' + msg.safety_reason
+      : 'HELD — yours to make';
+    appendCommandOutcome('cmd-withheld', '⊘', label, [
+      safety,
+      authorityPhrase(msg.authority_level, msg.authority_reason),
+    ]);
+    showCommandToast('⊘ ' + label, 'caution');
+  }
+
+  // ── Authority announcements ───────────────────────────
+  //
+  // AUTH-06's "informs the pilot" half. The override detector raises these when
+  // it sees the pilot working a control MERLIN did not command, and again when
+  // the cooldown lapses and the configured level comes back (D-14).
+  //
+  // Deliberately not a command outcome, and deliberately not styled as one:
+  // nothing was asked for and nothing was sent. A drop in authority read as a
+  // command that failed would be the same class of confusion the four-outcome
+  // split above exists to prevent.
+
+  function authorityEventKind(event) {
+    if (event === 'override' || event === 'restore') return event;
+    return 'other';
+  }
+
+  function showAuthorityEvent(msg) {
+    var kind = authorityEventKind(msg.event);
+    var text = (typeof msg.message === 'string' && msg.message)
+      ? msg.message
+      : 'MERLIN authority changed.';
+
+    // Text nodes throughout, like appendCommandOutcome: `message` is assembled
+    // server-side and embeds field labels derived from telemetry, so it is a
+    // server-supplied string and is attached as text, never interpolated.
+    var el = document.createElement('div');
+    el.className = 'chat-msg authority-event-msg auth-event-' + kind;
+    el.appendChild(spanWithText('timestamp', '[' + timestamp() + ']'));
+    el.appendChild(spanWithText('auth-event-tag', 'AUTHORITY'));
+    el.appendChild(spanWithText('auth-event-text', text));
+    if (dom.chatMessages) dom.chatMessages.appendChild(el);
+    scrollChatIfNeeded();
+
+    // Prefixed the same way applyAuthority prefixes its badge-transition toast,
+    // so the announcement and the badge read as one voice rather than two
+    // subsystems that happen to agree. Anything other than the two known events
+    // falls through to 'info', which toastToneClass already handles.
+    var tone = kind === 'override' ? 'caution' : (kind === 'restore' ? 'advisory' : 'info');
+    showCommandToast('AUTHORITY: ' + text, tone);
+
+    // IN-04: move the badge now instead of up to ten seconds from now on the
+    // next pollStatus, which is how it could read FULL (configured) while the
+    // gate was already refusing. renderAuthority reads exactly
+    // `authority_level`, `authority_reason` and `authority` — the three keys the
+    // frame carries — so no second reason-to-text mapping is written here. The
+    // badge's reason map is deliberately declared exactly once (see the authority
+    // rendering section below) so the badge and these messages cannot describe
+    // the same state two different ways; a copy here would be that second way.
+    //
+    // applyAuthority suppresses its own transition toast when `level|reason` is
+    // unchanged, so an announcement whose state matches the last poll raises the
+    // one toast above rather than two.
+    if (typeof msg.authority_level === 'string') {
+      renderAuthority(msg);
+    }
+  }
+
+  // `tone` accepts the original booleans (true = executed, false = failed) as
+  // well as the named tones the authority states use, so every pre-existing
+  // caller keeps its meaning unchanged.
+  function toastToneClass(tone) {
+    if (tone === true) return 'toast-success';
+    if (tone === false) return 'toast-failure';
+    if (tone === 'advisory') return 'toast-advisory';
+    if (tone === 'caution') return 'toast-caution';
+    return 'toast-info';
+  }
+
+  function showCommandToast(text, tone) {
     var container = document.getElementById('command-toast-container');
     if (!container) return;
     var toast = document.createElement('div');
-    toast.className = 'command-toast ' + (success ? 'toast-success' : 'toast-failure');
+    toast.className = 'command-toast ' + toastToneClass(tone);
     toast.textContent = text;
     container.appendChild(toast);
     // Auto-remove after animation
@@ -846,6 +986,23 @@
       case 'command_status':
         // Aircraft control command executed — show inline status + toast
         showCommandStatus(msg);
+        break;
+
+      case 'command_advisory':
+        // Advisory authority: MERLIN described the command instead of sending it.
+        showCommandAdvisory(msg);
+        break;
+
+      case 'command_withheld':
+        // Assisted authority + a flagged command: MERLIN deferred to the pilot.
+        showCommandWithheld(msg);
+        break;
+
+      case 'authority_event':
+        // AUTH-06: MERLIN announcing a change in what it may do — a pilot
+        // override, or the auto-restore when the cooldown lapses. Arrives the
+        // moment it happens rather than on the next 10 s status poll.
+        showAuthorityEvent(msg);
         break;
 
       default:
@@ -1426,13 +1583,30 @@
   //
   // When enabled, the mic stays open and MERLIN listens continuously.
   // Speech detection uses RMS energy — when you talk, it starts recording.
-  // When you stop talking (silence for VAD_SILENCE_MS), it sends the audio.
   // While MERLIN is speaking (TTS playing), the mic is muted to prevent
   // feedback loops.
+  //
+  // Endpointing is split: this cheap acoustic gate decides *when* to ask, and
+  // the server's turn model decides *whether* the turn is actually over. No
+  // turn model, feature extraction, or ONNX runtime lives in the browser.
+  //
+  //   silence >= _turnProbeSilenceMs  → ask the server (POST /api/turn-probe)
+  //   silence >= _vadFallbackSilenceMs → end the turn ourselves
+  //
+  // The fallback is independent of every probe, so voice input keeps working
+  // when the endpoint is missing, disabled, slow, or wrong.
 
   const VAD_SPEECH_THRESHOLD = 0.015;  // RMS level to detect speech
-  const VAD_SILENCE_MS = 1200;         // Silence duration before sending
   const VAD_MIN_SPEECH_MS = 300;       // Minimum speech duration to send
+
+  // Defaults match the server's; the live values arrive from /api/status so the
+  // browser never has to guess or duplicate the configuration.
+  let _turnProbeSilenceMs = 150;
+  let _vadFallbackSilenceMs = 400;
+  let _turnProbeAvailable = false;   // Server advertises a semantic detector
+  let _turnProbeDisabled = false;    // Server answered available:false — stop asking
+  let _lastProbeAt = 0;              // performance.now() of the last probe sent
+  let _probeInFlight = false;        // At most one outstanding probe
 
   // Don't auto-start VAD from localStorage — require explicit click each session
   // (AudioContext needs user gesture to start on most browsers)
@@ -1547,17 +1721,90 @@
     } else if (_vadIsSpeaking) {
       // Silence detected while speaking
       if (_vadSilenceStart === 0) _vadSilenceStart = now;
+      const silenceMs = now - _vadSilenceStart;
 
-      if (now - _vadSilenceStart >= VAD_SILENCE_MS) {
-        // Enough silence — stop recording and send
-        if (_vadRecorder && _vadRecorder.state === 'recording') {
-          _vadRecorder.stop();
-        }
+      // Candidate endpoint — ask the server whether the turn is really over.
+      // Guarded three ways because this loop runs on requestAnimationFrame at
+      // roughly 60 Hz and each accepted probe spawns ffmpeg server-side:
+      // one probe in flight at a time, at most one per _turnProbeSilenceMs,
+      // and nothing at all once the server has said it cannot help.
+      if (_turnProbeAvailable && !_turnProbeDisabled &&
+          silenceMs >= _turnProbeSilenceMs &&
+          !_probeInFlight &&
+          (performance.now() - _lastProbeAt) >= _turnProbeSilenceMs) {
+        probeTurnEnd(silenceMs);
+      }
+
+      // Fallback endpointing, independent of every probe. This is what keeps
+      // voice input working when the probe is unavailable, hung, or wrong.
+      if (silenceMs >= _vadFallbackSilenceMs) {
+        stopVadRecording();
         _vadSilenceStart = 0;
       }
     }
 
     _vadPollId = requestAnimationFrame(pollVAD);
+  }
+
+  function stopVadRecording() {
+    if (_vadRecorder && _vadRecorder.state === 'recording') {
+      _vadRecorder.stop();
+    }
+  }
+
+  // Ask the server whether the utterance is complete.
+  //
+  // Fire-and-forget by design: pollVAD does not await this, so a slow probe
+  // never stalls the audio loop, and the fallback threshold still fires on
+  // schedule if the answer arrives late or not at all.
+  async function probeTurnEnd(silenceMs) {
+    if (_probeInFlight) return;
+    if (!_vadRecorder || _vadChunks.length === 0) return;
+
+    _probeInFlight = true;
+    _lastProbeAt = performance.now();
+
+    // The WHOLE accumulated array — never a trailing slice. MediaRecorder webm
+    // chunks after the first are bare clusters with no EBML header or codec
+    // private data, so a tail on its own will not decode. Sending everything is
+    // free anyway: the server's feature window already keeps only the last 8s.
+    // Recording deliberately continues; we do not stop it to take a probe.
+    const blob = new Blob(_vadChunks, { type: _vadRecorder.mimeType });
+    const form = new FormData();
+    form.append('file', blob, 'turn.webm');
+    form.append('silence_ms', String(Math.round(silenceMs)));
+
+    // A hung probe must not block the next one.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), _turnProbeSilenceMs * 2);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/turn-probe`, {
+        method: 'POST',
+        body: form,
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      if (data.available === false) {
+        // No detector server-side. Stop asking for the rest of the session and
+        // let the fallback threshold carry endpointing from here.
+        _turnProbeDisabled = true;
+        return;
+      }
+
+      if (data.ended === true && _vadIsSpeaking) {
+        stopVadRecording();
+        _vadSilenceStart = 0;
+      }
+    } catch {
+      // Degrade silently, the way pollStatus does. A probe must never break
+      // voice input; the fallback threshold handles this turn.
+    } finally {
+      clearTimeout(timer);
+      _probeInFlight = false;
+    }
   }
 
   // ── Configurable PTT (keyboard + gamepad/joystick) ────
@@ -1938,6 +2185,143 @@
   }
 
   // ═══════════════════════════════════════════════════════
+  //  AUTHORITY INDICATOR  (AUTH-08)
+  // ═══════════════════════════════════════════════════════
+  //
+  // The level says how much MERLIN may do to the aircraft. The reason says why
+  // it holds that level, and it is rendered as text because four different
+  // situations produce the same `advisory` while calling for entirely different
+  // responses from the pilot.
+  //
+  // Neither map below has a default arm, and none should be added. An
+  // unrecognised value renders verbatim so that it looks wrong, instead of being
+  // laundered into a plausible known one. CLAUDE.md records a config property
+  // whose missing branch quietly misreported a working setup for months; a badge
+  // has the same failure mode with worse consequences, because the thing it
+  // misreports is whether MERLIN may touch the aircraft.
+
+  const AUTHORITY_REASON_TEXT = {
+    'config':   'configured',
+    'override': 'pilot override',
+    'watchdog': 'command path down',
+    'degraded': 'authority subsystem degraded',
+  };
+
+  // Advisory is cyan, not red: it is restricted, not faulted. Amber is already
+  // spoken for by assisted, where a flagged command is handed back to the pilot.
+  const AUTHORITY_LEVEL_STYLE = {
+    'advisory': { cls: 'auth-advisory', led: 'cyan',  tone: 'advisory' },
+    'assisted': { cls: 'auth-assisted', led: 'amber', tone: 'caution' },
+    'full':     { cls: 'auth-full',     led: 'green', tone: true },
+  };
+
+  function hasOwn(obj, key) {
+    return Object.prototype.hasOwnProperty.call(obj, key);
+  }
+
+  function authorityReasonText(reason) {
+    if (typeof reason !== 'string' || reason === '') return 'reason not reported';
+    return hasOwn(AUTHORITY_REASON_TEXT, reason) ? AUTHORITY_REASON_TEXT[reason] : reason;
+  }
+
+  function authorityLevelText(level) {
+    if (typeof level !== 'string' || level === '') return 'UNREPORTED';
+    return hasOwn(AUTHORITY_LEVEL_STYLE, level) ? level.toUpperCase() : level;
+  }
+
+  // "ADVISORY (pilot override)", with an optional qualifier appended inside the
+  // parentheses. One phrasing, built here and used by the badge and by the
+  // command result messages alike, so the same state is never described two
+  // different ways in two places on screen.
+  function authorityPhrase(level, reason, qualifier) {
+    const reasonText = authorityReasonText(reason) + (qualifier ? ', ' + qualifier : '');
+    return authorityLevelText(level) + ' (' + reasonText + ')';
+  }
+
+  function applyAuthority(view) {
+    if (dom.statusAuthority) {
+      dom.statusAuthority.className = 'status-indicator status-authority ' + view.cls;
+      dom.statusAuthority.setAttribute('aria-label', 'MERLIN authority: ' + view.text);
+      // Assigned as properties, never concatenated into markup: these strings
+      // carry command values and exception text that originate in telemetry and
+      // in arbitrary runtime failures.
+      dom.statusAuthority.title = view.detail
+        ? 'MERLIN authority: ' + view.text + ' — ' + view.detail
+        : 'MERLIN authority: ' + view.text;
+    }
+    setLed(dom.statusAuthorityLed, view.led);
+    if (dom.statusAuthorityText) dom.statusAuthorityText.textContent = view.text;
+
+    // AUTH-06: a drop and its later restore are announced as they happen rather
+    // than waiting to be noticed on the badge. Suppressed on the first render,
+    // which is not a transition.
+    if (state.lastAuthorityKey !== null && state.lastAuthorityKey !== view.key) {
+      showCommandToast(
+        'AUTHORITY: ' + view.text + (view.detail ? ' — ' + view.detail : ''),
+        view.tone
+      );
+    }
+    state.lastAuthorityKey = view.key;
+  }
+
+  function renderAuthority(data) {
+    const level  = typeof data.authority_level  === 'string' ? data.authority_level  : '';
+    const reason = typeof data.authority_reason === 'string' ? data.authority_reason : '';
+    const summary = (data.authority && typeof data.authority === 'object') ? data.authority : {};
+    const style = hasOwn(AUTHORITY_LEVEL_STYLE, level)
+      ? AUTHORITY_LEVEL_STYLE[level]
+      : { cls: 'auth-unrecognised', led: 'red', tone: false };
+
+    // A pilot override lapses on a rolling cooldown. The remaining seconds are
+    // what tell the pilot this one is temporary rather than a setting.
+    const cooldown = Number(summary.cooldown_remaining_s);
+    const qualifier = (reason === 'override' && Number.isFinite(cooldown) && cooldown > 0)
+      ? Math.ceil(cooldown) + 's left'
+      : '';
+
+    // Why MERLIN restricted itself, recoverable without opening the server log.
+    const detail = typeof summary.degraded_detail === 'string' ? summary.degraded_detail : '';
+
+    // A degraded authority state is MERLIN reporting a failure in itself, so it
+    // carries a fault colour on top of its level class. The wording alone would
+    // technically distinguish it, but the transition toast fades after a few
+    // seconds and the badge is what remains: without this, a subsystem that
+    // failed to start looks exactly as calm as a deliberate configuration.
+    const faulted = reason === 'degraded';
+
+    applyAuthority({
+      // Cooldown is deliberately out of the key: it ticks down every poll, and
+      // including it would re-announce the same override once per poll.
+      key: level + '|' + reason,
+      cls: style.cls + (faulted ? ' auth-degraded' : ''),
+      led: faulted ? 'red' : style.led,
+      // Announced in the failure tone regardless of the level that failure
+      // produced, for the same reason.
+      tone: faulted ? false : style.tone,
+      text: authorityPhrase(level, reason, qualifier),
+      detail: detail,
+    });
+  }
+
+  // The browser could not reach /api/status at all. This is a client-side
+  // inference and is kept distinct from the server-reported degraded state:
+  // "I cannot reach MERLIN" and "MERLIN is running and says its authority
+  // subsystem failed" are different facts. Leaving the previous value on screen
+  // would be worse than either — a stale FULL badge asserts MERLIN is armed when
+  // nothing on the page knows whether it still is.
+  function renderAuthorityUnknown() {
+    applyAuthority({
+      // No '|' — a server-derived key always contains one, so these cannot collide.
+      key: 'client:unreachable',
+      cls: 'auth-unknown',
+      led: 'red',
+      tone: false,
+      text: 'UNKNOWN (MERLIN unreachable)',
+      detail: 'The browser could not reach /api/status.',
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════
   //  STATUS POLLING
   // ═══════════════════════════════════════════════════════
 
@@ -1955,12 +2339,28 @@
       // Claude is available if we got a valid status response (API key is loaded)
       setLed(dom.statusClaude,   data.claude_model        ? 'green' : 'amber');
 
+      // Endpointing thresholds — learned here rather than per-probe, and only
+      // adopted when the server sends usable numbers so a partial/legacy status
+      // response cannot zero them out.
+      if (typeof data.turn_probe_silence_ms === 'number' && data.turn_probe_silence_ms > 0) {
+        _turnProbeSilenceMs = data.turn_probe_silence_ms;
+      }
+      if (typeof data.vad_silence_ms === 'number' && data.vad_silence_ms > 0) {
+        _vadFallbackSilenceMs = data.vad_silence_ms;
+      }
+      _turnProbeAvailable = data.turn_probe_available === true;
+
+      // How much MERLIN may do to the aircraft, and why (AUTH-08).
+      renderAuthority(data);
+
       updateConnectionQuality();
     } catch {
       setLed(dom.statusSim,     'red');
       setLed(dom.statusWhisper,  'red');
       setLed(dom.statusChroma,   'red');
       setLed(dom.statusClaude,   'red');
+      // Explicit unknown, never a stale level.
+      renderAuthorityUnknown();
       updateConnectionQuality();
     }
   }

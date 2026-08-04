@@ -91,6 +91,8 @@ Deepgram's endpointing replaces the standalone Silero VAD for end-of-turn detect
 
 The 300ms endpointing threshold is tuned for cockpit communication, where pilots speak in short, deliberate phrases. The `utterance_end_ms` at 1000ms provides a longer window for detecting true end-of-turn versus a brief pause.
 
+Both are still duration thresholds, with the structural weakness that implies. The `TurnDetector` layer described under [End-of-Turn Detection](#end-of-turn-detection) decides on content instead, and applies to this path and the Whisper path alike.
+
 #### Batch Fallback
 
 `DeepgramSTTClient.transcribe()` provides a synchronous batch transcription mode via the Deepgram REST API. This is used when streaming is not needed (e.g., pre-recorded audio uploads).
@@ -148,6 +150,73 @@ class TranscriptionResult:
     speech_final: bool = False  # End-of-turn detected by STT
     duration_secs: float = 0.0
 ```
+
+---
+
+## End-of-Turn Detection
+
+Voice activity detection asks "is there speech in this chunk". End-of-turn detection asks the narrower question: "has the pilot finished, and does he expect a reply". A pause is speech-absent but not turn-complete, and aviation phraseology is full of pauses -- "descend and maintain... one zero thousand".
+
+So a fixed silence timer is structurally wrong, not merely mistuned: short enough to feel responsive means cutting people off mid-sentence, long enough to tolerate pauses means feeling sluggish. The architecture separates the two questions. A cheap acoustic gate finds *candidate* endpoints and decides **when** to ask; the `TurnDetector` (`orchestrator/orchestrator/turn/`) reads the waveform and decides **whether** the turn is over.
+
+### Two paths, one detector
+
+| | Acoustic gate (when to ask) | Decision (whether it ended) |
+|---|---|---|
+| Local / CLI (`voice.py`) | Silero VAD (neural) | `TurnDetector`, in-process |
+| Web / browser (`app.js`) | JavaScript RMS energy gate | `TurnDetector`, over `POST /api/turn-probe` |
+
+Only the gate differs. The browser has no turn model, no feature extraction, and no ONNX runtime -- it uploads audio and reads a verdict. Smart Turn v3 reads the waveform rather than a transcript, so the same detector serves the local Whisper path and the Deepgram streaming path identically.
+
+### Browser endpointing thresholds
+
+Both thresholds are served by `GET /api/status`, so the browser never hardcodes or duplicates configuration:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `turn_probe_available` | -- | Whether a semantic detector is loaded. False for the silence fallback, which would only re-derive what the browser already times locally. |
+| `turn_probe_silence_ms` | 150 | Silence at which the browser first asks the server, and the minimum spacing between probes. |
+| `vad_silence_ms` | 400 | Silence at which the browser ends the turn on its own. |
+
+This replaces a hardcoded 1200 ms RMS silence timer. Endpointing now happens on a semantic decision at ~150 ms, or at 400 ms when degraded -- three times more responsive than the old fixed wait even in the fully degraded case.
+
+The fallback stop is independent of every probe. If the endpoint is missing, the model is absent, the request hangs, or the answer is wrong, voice input still works; it just waits the full 400 ms. A probe can only make endpointing *sooner*, never later.
+
+### Two constraints that shaped the design
+
+**1. The browser uploads the whole accumulated blob, not a trailing slice.** `MediaRecorder` emits webm chunks where only the first carries the EBML header and codec-private data; every subsequent chunk is a bare cluster. A trailing slice will not decode at all. Sending everything costs nothing, because `turn.features.truncate_or_pad` already keeps only the last 8 seconds server-side. Recording is not stopped to take a probe -- `_vadChunks` is read while capture continues.
+
+**2. The probe has its own decode path that does not preprocess.** `decode_webm_to_samples` in `orchestrator/orchestrator/audio_processing.py` runs ffmpeg to 16 kHz mono float32 and stops there. It deliberately does *not* call `preprocess_audio`, which the transcription path uses: that pipeline trims trailing silence, and trailing silence is precisely the signal the turn model judges. Its high-pass filter and normalisation also alter the waveform, while the feature path in `turn/features.py` is pinned against golden vectors captured from unmodified audio. Neither divergence would raise -- it would just make turn predictions quietly wrong. A structural test asserts `preprocess_audio` never appears in that function, and a behavioural test asserts a silent tail survives the decode.
+
+### `POST /api/turn-probe`
+
+Multipart request: `file` (the accumulated webm blob) and `silence_ms` (silence observed so far).
+
+```json
+{ "ended": true, "probability": 0.93, "detector": "smart_turn", "available": true }
+```
+
+`available` is separate from `ended` on purpose. `available: false` means stop asking for the rest of the session; a transient failure keeps it true so one bad blob does not permanently degrade responsiveness. The `detector` field names the outcome: `smart_turn`, `unavailable`, `decode_failed`, `throttled`, `too_large`, or `error`.
+
+The endpoint never raises. Every failure returns a not-ended answer with HTTP 200, because the browser's fallback is what keeps voice input working and a 5xx would only add latency to reaching it.
+
+It is also throttled and size-bounded, since `pollVAD` calls it from a `requestAnimationFrame` loop at roughly 60 Hz and each accepted probe spawns an ffmpeg process:
+
+- **Server:** per-client minimum interval of `turn_probe_silence_ms / 2`, and a 2 MiB body cap rejected before ffmpeg runs (Opus at ~24 kbps puts a 15 s utterance near 45 KB).
+- **Browser:** at most one probe in flight, at most one per `turn_probe_silence_ms`, and an `AbortController` timeout at twice that so a hung probe cannot block the next one.
+
+The server does not take the browser's word for any of it.
+
+### Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `TURN_DETECTOR` | `smart` | `smart` (Smart Turn v3 ONNX) or `silence` (fixed threshold). `smart` falls back to `silence` at startup if onnxruntime or the model file is missing. |
+| `TURN_THRESHOLD` | `0.5` | Probability above which the turn is called complete. Raise it to make MERLIN wait through longer pauses. |
+| `TURN_PROBE_SILENCE_MS` | `150` | Silence before consulting the semantic detector. |
+| `VAD_SILENCE_MS` | `400` | Fixed-silence threshold and RMS fallback. |
+
+The model is not vendored. Fetch it with `python3 tools/fetch_turn_model.py`; without it the system degrades to fixed-silence endpointing and logs the hint at startup, rather than failing.
 
 ---
 
@@ -344,7 +413,7 @@ Claude is instructed to execute commands immediately when the pilot's order is u
 5. The confirmation text passes through the TTS preprocessor (ICAO digit pronunciation, markdown stripping)
 6. Cartesia Sonic-3 synthesizes the audio and streams it to the browser
 
-Critical system commands (gear, autopilot master, parking brake) are flagged with a `safety_note` in the tool result, which Claude can use to add appropriate emphasis or caution to the confirmation.
+Critical system commands (gear, autopilot master, parking brake) are flagged with a `safety_note` in the tool result, which Claude can use to add appropriate emphasis or caution to the confirmation. The note is attached only when the command was actually transmitted and acknowledged — one refused by the authority gate, NACKed by the adapter, or timed out carries no `safety_note`, so the confirmation never claims a critical change that did not reach the aircraft.
 
 ---
 
@@ -411,6 +480,8 @@ All voice pipeline settings are configured via environment variables loaded by `
 ### Audio Preprocessing Configuration
 
 Audio preprocessing (high-pass filter, silence trimming, normalization) applies to all STT backends. The Silero VAD is used only when `STT_BACKEND=whisper` (Deepgram handles VAD internally).
+
+It does **not** apply to the turn-probe path, which decodes through `decode_webm_to_samples` instead. See "Two constraints that shaped the design" under End-of-Turn Detection: silence trimming would remove the exact signal the turn model reads.
 
 ---
 

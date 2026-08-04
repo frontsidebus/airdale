@@ -4,6 +4,8 @@ Covers:
 - WTST-01: Chat round-trip (text message -> streamed response -> done)
 - WTST-02: Barge-in (second message cancels active response)
 - WTST-03: TTS audio chunks streamed alongside text
+- AUTH-02: advisory, withheld, blocked and executed are four distinguishable
+  outcomes on the wire; a dry run is never reported as a success (RESEARCH B8)
 
 Uses ``httpx-ws`` (``aconnect_ws``) over an ASGI transport so the tests
 run entirely in-process without a real uvicorn server.
@@ -254,3 +256,283 @@ async def test_chat_with_tts_streaming(test_app, mock_app_state):
     # And the response ultimately completes
     assert any(isinstance(m, dict) and m.get("type") == "done" for m in messages)
     mock_app_state.tts_client.post.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# AUTH-02 / RESEARCH B8: a restrained command is not a successful one
+# ---------------------------------------------------------------------------
+
+_B8_REGRESSION = (
+    "REGRESSION (RESEARCH B8, threat T-02-09-01): the authority gate's advisory "
+    "and withheld result dicts carry no `error` key by design (plan 02-04), so a "
+    '`success = "error" not in tool_result` heuristic renders a command MERLIN '
+    "deliberately did not transmit as `{'success': true}`. The pilot is then told "
+    "GEAR DOWN for a gear that never moved. Classify on the `advisory` / "
+    "`withheld` markers, not on the absence of an error."
+)
+
+#: The command-outcome message types the chat socket can emit.
+_OUTCOME_TYPES = {"command_status", "command_advisory", "command_withheld"}
+
+# The dict shapes below are the ones plan 02-04 froze in
+# orchestrator/orchestrator/tools.py -- copied from the source, not paraphrased.
+_ADVISORY_RESULT = {
+    "advisory": True,
+    "would_execute": "GEAR_DOWN",
+    "sim_value": 0,
+    "system": "gear",
+    "action": "down",
+    "command": "GEAR_DOWN",
+    "authority_level": "advisory",
+    "authority_reason": "config",
+    "safety": {"severity": "", "reason": ""},
+    "message": "Advisory authority -- I would lower the gear (GEAR_DOWN), nothing was sent.",
+}
+
+_WITHHELD_RESULT = {
+    "withheld": True,
+    "command": "GEAR_UP",
+    "sim_value": 0,
+    "system": "gear",
+    "action": "up",
+    "authority_level": "assisted",
+    "authority_reason": "config",
+    "safety": {"severity": "warning", "reason": "Gear up while on the ground"},
+    "message": "Holding GEAR_UP -- Gear up while on the ground.",
+}
+
+_BLOCKED_RESULT = {
+    "error": "Gear up while on the ground",
+    "blocked": True,
+    "severity": "blocked",
+}
+
+_EXECUTED_RESULT = {
+    "success": True,
+    "command": "GEAR_DOWN",
+    "sim_value": 0,
+}
+
+_CR01_REGRESSION = (
+    "REGRESSION (VERIFICATION Gap 1 / CR-01): `TelemetryClient.send_command` "
+    "returns a negative adapter ack as `{'success': False, 'message': ...}` with "
+    "no `error` key -- sim_client.py documents that shape as routine, because "
+    "`SimConnectManager.ExecuteCommand` answers any unmapped command name or "
+    'COMException with it. Under `success = "error" not in result` the browser '
+    "painted a green GEAR DOWN on a gear the adapter refused to move. Classify on "
+    "the reported `result['success']`, not on the absence of an error key."
+)
+
+# The exact ack shape sim_client.py returns for a command the adapter refused:
+# `success` is False and there is no `error` key at all. This is CR-01.
+_NACKED_RESULT = {
+    "success": False,
+    "message": "Unknown command",
+    "command": "GEAR_DOWN",
+    "sim_value": 0,
+}
+
+# The ack-timeout shape: the future never resolved, so nothing confirmed.
+_TIMED_OUT_RESULT = {
+    "success": False,
+    "error": "Command timed out",
+}
+
+# The `send_command` authority-floor refusal (sim_client.py), verbatim.
+_REFUSED_RESULT = {
+    "success": False,
+    "error": (
+        "Refused: MERLIN holds advisory authority only (config); nothing was sent to the aircraft."
+    ),
+    "refused": True,
+    "authority_level": "advisory",
+    "authority_reason": "config",
+}
+
+# Neither marker present: an unrecognised shape must fail closed, never succeed.
+_SHAPELESS_RESULT = {"command": "GEAR_DOWN"}
+
+
+def _chat_emitting(tool_result, *, tool_input=None, tool_name="set_aircraft_control"):
+    """Build a fake ``ClaudeClient.chat`` that fires one tool result, then a chunk."""
+    payload = tool_input or {"system": "gear", "action": "down"}
+
+    async def fake_chat(text, sim_state=None, on_tool_result=None):
+        if on_tool_result is not None:
+            on_tool_result(tool_name, payload, tool_result)
+        yield "Understood."
+
+    return fake_chat
+
+
+async def _outcome_messages(test_app, mock_app_state, tool_result, **kwargs):
+    """Run one chat turn that produces ``tool_result`` and return its outcome frames."""
+    mock_app_state.claude_client.chat = _chat_emitting(tool_result, **kwargs)
+    # Text-only round trip: TTS would just add frames to sift through.
+    mock_app_state.settings.elevenlabs_api_key = ""
+    mock_app_state.cartesia_client = None
+
+    transport = ASGIWebSocketTransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with aconnect_ws("http://test/ws/chat", client) as ws:
+            await ws.send_json({"text": "gear down"})
+            messages = await _recv_all(ws, stop_types={"done", "error"}, min_dones=1, timeout=5.0)
+
+    return [m for m in messages if isinstance(m, dict) and m.get("type") in _OUTCOME_TYPES]
+
+
+async def test_advisory_result_is_not_reported_as_a_successful_command(test_app, mock_app_state):
+    """The B8 regression, stated as an assertion: a dry run must never read as done."""
+    outcomes = await _outcome_messages(test_app, mock_app_state, _ADVISORY_RESULT)
+
+    assert not [m for m in outcomes if m.get("success") is True], _B8_REGRESSION
+    assert not [m for m in outcomes if m.get("type") == "command_status"], _B8_REGRESSION
+
+
+async def test_advisory_result_produces_exactly_one_command_advisory(test_app, mock_app_state):
+    """An advisory dry run yields one command_advisory frame and nothing else."""
+    outcomes = await _outcome_messages(test_app, mock_app_state, _ADVISORY_RESULT)
+
+    assert len(outcomes) == 1, f"expected one outcome frame, got {outcomes}"
+    assert outcomes[0]["type"] == "command_advisory"
+    assert "success" not in outcomes[0], _B8_REGRESSION
+
+
+async def test_advisory_frame_carries_intent_and_authority(test_app, mock_app_state):
+    """The browser can label the state without a second /api/status round trip."""
+    outcomes = await _outcome_messages(test_app, mock_app_state, _ADVISORY_RESULT)
+
+    frame = outcomes[0]
+    assert frame["system"] == "gear"
+    assert frame["action"] == "down"
+    assert frame["would_execute"] == "GEAR_DOWN"
+    assert frame["authority_level"] == "advisory"
+    assert frame["authority_reason"] == "config"
+    # Describes what MERLIN would do, not what it did.
+    assert "not sent" in frame["message"].lower()
+
+
+async def test_withheld_result_produces_a_command_withheld_frame(test_app, mock_app_state):
+    """An assisted withhold is distinguishable from both success and failure."""
+    outcomes = await _outcome_messages(test_app, mock_app_state, _WITHHELD_RESULT)
+
+    assert len(outcomes) == 1, f"expected one outcome frame, got {outcomes}"
+    frame = outcomes[0]
+    assert frame["type"] == "command_withheld"
+    assert "success" not in frame, _B8_REGRESSION
+    assert frame["authority_level"] == "assisted"
+    assert frame["authority_reason"] == "config"
+    # Why MERLIN deferred, so the pilot is not left guessing.
+    assert frame["safety_reason"] == "Gear up while on the ground"
+
+
+async def test_advisory_forwards_a_degraded_reason_verbatim(test_app, mock_app_state):
+    """`degraded` is one of four reasons and must survive the trip unmapped."""
+    degraded = dict(_ADVISORY_RESULT, authority_reason="degraded")
+
+    outcomes = await _outcome_messages(test_app, mock_app_state, degraded)
+
+    assert outcomes[0]["authority_reason"] == "degraded", (
+        "authority_reason must be copied through verbatim. Substituting `config` "
+        "for anything unexpected would report a failed authority subsystem as a "
+        "deliberate configuration (threat T-02-09-07)."
+    )
+
+
+async def test_withheld_forwards_an_override_reason_verbatim(test_app, mock_app_state):
+    """A withhold under a pilot-override cooldown keeps its reason."""
+    overridden = dict(_WITHHELD_RESULT, authority_reason="override")
+
+    outcomes = await _outcome_messages(test_app, mock_app_state, overridden)
+
+    assert outcomes[0]["authority_reason"] == "override"
+
+
+async def test_blocked_result_still_reports_a_failed_command_status(test_app, mock_app_state):
+    """The pre-plan failure path is unchanged: blocked is a failed command_status."""
+    outcomes = await _outcome_messages(
+        test_app,
+        mock_app_state,
+        _BLOCKED_RESULT,
+        tool_input={"system": "gear", "action": "up"},
+    )
+
+    assert len(outcomes) == 1
+    frame = outcomes[0]
+    assert frame["type"] == "command_status"
+    assert frame["success"] is False
+    assert frame["message"] == "GEAR UP failed"
+
+
+async def test_executed_result_still_reports_a_successful_command_status(test_app, mock_app_state):
+    """The pre-plan success path is unchanged: an executed command still succeeds."""
+    outcomes = await _outcome_messages(test_app, mock_app_state, _EXECUTED_RESULT)
+
+    assert len(outcomes) == 1
+    frame = outcomes[0]
+    assert frame["type"] == "command_status"
+    assert frame["success"] is True
+    assert frame["message"] == "GEAR DOWN"
+
+
+async def test_nacked_result_reports_a_failed_command_status(test_app, mock_app_state):
+    """CR-01: an adapter NACK carries no `error` key and must still read as failed."""
+    outcomes = await _outcome_messages(test_app, mock_app_state, _NACKED_RESULT)
+
+    assert len(outcomes) == 1, f"expected one outcome frame, got {outcomes}"
+    frame = outcomes[0]
+    assert frame["type"] == "command_status", _CR01_REGRESSION
+    assert frame["success"] is False, _CR01_REGRESSION
+    assert frame["message"] == "GEAR DOWN failed", _CR01_REGRESSION
+
+
+async def test_timed_out_result_reports_a_failed_command_status(test_app, mock_app_state):
+    """An ack that never arrived is not a command that executed."""
+    outcomes = await _outcome_messages(test_app, mock_app_state, _TIMED_OUT_RESULT)
+
+    assert len(outcomes) == 1
+    frame = outcomes[0]
+    assert frame["type"] == "command_status"
+    assert frame["success"] is False, (
+        "A dispatch whose ack timed out proves nothing about the aircraft; the "
+        "watchdog counts it as a dead command path (CR-01)."
+    )
+
+
+async def test_authority_floor_refusal_reports_a_failed_command_status(test_app, mock_app_state):
+    """The `send_command` floor refusal states nothing was sent -- render it as failed."""
+    outcomes = await _outcome_messages(test_app, mock_app_state, _REFUSED_RESULT)
+
+    assert len(outcomes) == 1
+    frame = outcomes[0]
+    assert frame["type"] == "command_status"
+    assert frame["success"] is False, (
+        "The floor refusal says in its own error text that nothing reached the "
+        "aircraft; a green tick here is the CR-01 false confirmation exactly."
+    )
+
+
+async def test_result_with_neither_marker_fails_closed(test_app, mock_app_state):
+    """An unrecognised result shape renders as failed, not as done (T-02-12-02)."""
+    outcomes = await _outcome_messages(test_app, mock_app_state, _SHAPELESS_RESULT)
+
+    assert len(outcomes) == 1
+    frame = outcomes[0]
+    assert frame["type"] == "command_status"
+    assert frame["success"] is False, (
+        "A result carrying neither `success` nor `error` is not evidence the "
+        "aircraft moved. The browser fails closed: `result.get('success', False)` "
+        "defaults to False (CR-01, threat T-02-12-02)."
+    )
+
+
+async def test_non_command_tool_results_are_ignored(test_app, mock_app_state):
+    """Only set_aircraft_control produces an outcome frame; other tools do not."""
+    outcomes = await _outcome_messages(
+        test_app,
+        mock_app_state,
+        {"metar": "KSFO 251456Z 28012KT 10SM CLR 18/09 A3001"},
+        tool_name="get_weather",
+    )
+
+    assert outcomes == []
